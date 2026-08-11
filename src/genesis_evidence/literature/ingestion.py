@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..core.store.papers import ObjectStore, PaperStore
+from .ai_extraction import PaperAnalyzer
 from .connectors.base import LiteratureConnector
 from .downloader import FullTextDownloader
-from .evidence import HeuristicPicoEvidenceExtractor
 from .integrity import IntegrityStatus, PublicationIntegrityChecker
 from .jats import JatsParser
 from .models import FullTextCandidate, FullTextFormat, PaperRecord, RightsStatus
@@ -32,13 +32,14 @@ class LiteratureIngestionService:
         objects: ObjectStore,
         downloader: FullTextDownloader,
         integrity: PublicationIntegrityChecker,
+        analyzer: PaperAnalyzer,
     ) -> None:
         self._store = store
         self._objects = objects
         self._downloader = downloader
         self._integrity = integrity
+        self._analyzer = analyzer
         self._jats = JatsParser()
-        self._extractor = HeuristicPicoEvidenceExtractor()
 
     def collect(
         self,
@@ -98,7 +99,7 @@ class LiteratureIngestionService:
                         continue
                     for candidate in record.full_text_candidates:
                         try:
-                            claims = self._ingest_candidate(paper_id, candidate)
+                            claims = self._ingest_candidate(paper_id, record, candidate)
                         except Exception as exc:
                             counts["failed_full_texts"] += 1
                             self._store.record_event(
@@ -130,7 +131,9 @@ class LiteratureIngestionService:
         self._store.finish_collection(run_id, status="completed", detail=counts)
         return IngestionSummary(run_id=run_id, **counts)
 
-    def _ingest_candidate(self, paper_id: str, candidate: FullTextCandidate) -> int | None:
+    def _ingest_candidate(
+        self, paper_id: str, paper: PaperRecord, candidate: FullTextCandidate
+    ) -> int | None:
         if candidate.format != FullTextFormat.JATS_XML:
             return None
         artifact = self._downloader.download(candidate)
@@ -144,8 +147,8 @@ class LiteratureIngestionService:
             media_type=artifact.media_type or "application/xml",
             rights_status=document.license.rights_status.value,
         )
-        extraction = self._extractor.extract(document.to_dict())
-        return self._store.save_candidate_claims(paper_id, extraction)
+        checked = self._analyzer.analyze(paper, document.to_dict())
+        return self._store.save_ai_extraction(paper_id, checked)
 
 
 def _source_url(record: PaperRecord) -> str:

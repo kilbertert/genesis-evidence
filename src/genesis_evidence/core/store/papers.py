@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ...literature.evidence import EvidenceExtraction
+from ...literature.ai_extraction import CheckedPaperExtraction
 from ...literature.models import PaperRecord
 from .database import Database
 
@@ -209,8 +209,9 @@ class PaperStore:
                 (paper_id, stored.key, stored.sha256, media_type, rights_status),
             )
 
-    def save_candidate_claims(self, paper_id: str, extraction: EvidenceExtraction) -> int:
+    def save_ai_extraction(self, paper_id: str, checked: CheckedPaperExtraction) -> int:
         now = _now()
+        extraction_id = str(uuid.uuid4())
         with self.database.transaction() as connection:
             paper = connection.execute(
                 "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
@@ -221,30 +222,55 @@ class PaperStore:
                 raise ValueError("Candidate claims cannot be stored for a retracted paper")
             connection.execute(
                 "UPDATE papers SET study_design_candidate = ? WHERE id = ?",
-                (extraction.pico.study_design, paper_id),
+                (checked.extraction.study_design, paper_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO paper_extractions(
+                    id, paper_id, model, extraction_run_id, extraction_json,
+                    check_model, check_run_id, consistency_status, consistency_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    extraction_id,
+                    paper_id,
+                    checked.model,
+                    checked.extraction_run_id,
+                    checked.extraction.model_dump_json(),
+                    checked.check_model,
+                    checked.check_run_id,
+                    checked.consistency.verdict,
+                    checked.consistency.model_dump_json(),
+                    now,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM claims WHERE paper_id = ? AND status = 'candidate'",
+                (paper_id,),
             )
             inserted = 0
-            for claim in extraction.claims:
+            for claim in checked.extraction.claims:
                 claim_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
-                        f"{paper_id}\n{claim.source_section}\n{claim.source_excerpt}\n{claim.claim_text}",
+                        f"{extraction_id}\n{claim.locator}\n{claim.evidence}\n{claim.text}",
                     )
                 )
                 inserted += connection.execute(
                     """
                     INSERT OR IGNORE INTO claims(
-                        id, paper_id, candidate_text, evidence_text, locator,
+                        id, paper_id, extraction_id, candidate_text, evidence_text, locator,
                         candidate_study_design, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         claim_id,
                         paper_id,
-                        claim.claim_text,
-                        claim.source_excerpt,
-                        claim.source_section,
-                        extraction.pico.study_design,
+                        extraction_id,
+                        claim.text,
+                        claim.evidence,
+                        claim.locator,
+                        checked.extraction.study_design,
                         now,
                     ),
                 ).rowcount
@@ -264,7 +290,11 @@ class PaperStore:
                 "paper",
                 paper_id,
                 "candidate_claims_extracted",
-                {"extractor": extraction.extractor_name, "inserted": inserted},
+                {
+                    "model": checked.model,
+                    "consistency": checked.consistency.verdict,
+                    "inserted": inserted,
+                },
             )
         return inserted
 
@@ -280,6 +310,17 @@ class PaperStore:
                 (paper_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_latest_extraction(self, paper_id: str) -> dict[str, object] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM paper_extractions
+                WHERE paper_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (paper_id,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def record_event(
         self, entity_type: str, entity_id: str, action: str, detail: dict[str, object]
