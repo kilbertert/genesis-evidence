@@ -145,6 +145,7 @@ class PendingReportExtraction:
     model: str
     run_id: str
     status: Literal["pending_confirmation"]
+    subject_consistency: Literal["same", "uncertain"]
     files: tuple[str, ...]
     observations: tuple[PendingObservation, ...]
     warnings: tuple[str, ...] = ()
@@ -444,6 +445,7 @@ def _pending_report(
         model=model,
         run_id=run_id,
         status="pending_confirmation",
+        subject_consistency=extracted.subject_consistency,
         files=tuple(item.filename for item in files),
         observations=tuple(observations),
         warnings=tuple(dict.fromkeys(warnings)),
@@ -456,7 +458,7 @@ def _validation_issues(item: ModelObservation) -> tuple[str, ...]:
     issues: list[str] = []
     if item.extraction_status == "ambiguous":
         issues.append("模型标记为待核对")
-    if not math.isfinite(item.value) or not _evidence_contains_value(item.evidence, item.value):
+    if not math.isfinite(item.value) or not evidence_contains_value(item.evidence, item.value):
         issues.append("指标数值缺少原文佐证")
     bounds = tuple(
         bound for bound in (item.reference_low, item.reference_high) if bound is not None
@@ -465,12 +467,12 @@ def _validation_issues(item: ModelObservation) -> tuple[str, ...]:
         len(bounds) == 2 and bounds[0] > bounds[1]
     ):
         issues.append("指标参考范围无效")
-    elif any(not _evidence_contains_value(item.evidence, bound) for bound in bounds):
+    elif any(not evidence_contains_value(item.evidence, bound) for bound in bounds):
         issues.append("指标参考范围缺少原文佐证")
     return tuple(issues)
 
 
-def _evidence_contains_value(evidence: str, value: float) -> bool:
+def evidence_contains_value(evidence: str, value: float) -> bool:
     normalized = unicodedata.normalize("NFKC", evidence)
     for match in re.finditer(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])", normalized):
         if math.isclose(float(match.group()), value, rel_tol=1e-9, abs_tol=1e-12):
