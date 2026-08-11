@@ -29,8 +29,10 @@ CREATE TABLE IF NOT EXISTS papers (
     pmcid TEXT,
     year INTEGER,
     study_design_candidate TEXT,
-    integrity_status TEXT NOT NULL DEFAULT 'clear'
-        CHECK (integrity_status IN ('clear', 'corrected', 'retracted', 'unknown')),
+    integrity_status TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (integrity_status IN (
+            'clear', 'updated', 'corrected', 'expression_of_concern', 'retracted', 'unknown'
+        )),
     created_at TEXT NOT NULL
 );
 
@@ -52,6 +54,9 @@ CREATE TABLE IF NOT EXISTS paper_sources (
     PRIMARY KEY (paper_id, source, source_id)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS paper_sources_identity_unique
+ON paper_sources(source, source_id);
+
 CREATE TABLE IF NOT EXISTS collection_papers (
     run_id TEXT NOT NULL REFERENCES collection_runs(id) ON DELETE CASCADE,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -64,7 +69,10 @@ CREATE TABLE IF NOT EXISTS full_texts (
     object_key TEXT NOT NULL,
     sha256 TEXT NOT NULL,
     media_type TEXT NOT NULL,
-    rights_status TEXT NOT NULL,
+    rights_status TEXT NOT NULL
+        CHECK (rights_status IN (
+            'redistributable', 'internal_tdm_only', 'metadata_only', 'unknown'
+        )),
     processed_at TEXT
 );
 

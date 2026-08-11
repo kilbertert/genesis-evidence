@@ -162,7 +162,7 @@ class HeuristicPicoEvidenceExtractor:
 
 def _sections(document: dict[str, Any]) -> list[tuple[str, str]]:
     raw = document.get("sections")
-    if not isinstance(raw, list):
+    if not isinstance(raw, (list, tuple)):
         return []
     sections: list[tuple[str, str]] = []
     for item in raw:
