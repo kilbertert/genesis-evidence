@@ -163,3 +163,19 @@ def test_report_endpoints_do_not_accept_missing_or_wrong_token(tmp_path) -> None
     path = f"/api/reports/{uploaded['report_id']}"
     assert client.get(path).status_code == 404
     assert client.get(path, headers={"X-Report-Token": "wrong"}).status_code == 404
+
+
+def test_public_upload_endpoint_has_a_global_model_budget(tmp_path) -> None:
+    path = tmp_path / "evidence.sqlite3"
+    app = create_app(
+        database_path=path,
+        object_path=tmp_path / "objects",
+        extractor=HealthReportExtractor(max_bytes=1024, provider=FakeProvider()),
+        max_file_bytes=1024,
+        upload_limit=1,
+    )
+    client = TestClient(app)
+    assert _upload(client).status_code == 200
+    limited = _upload(client)
+    assert limited.status_code == 429
+    assert "请稍后再试" in limited.json()["detail"]

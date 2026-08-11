@@ -160,12 +160,18 @@ def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
 def main() -> None:
     app = create_app(
         database_path=Path(os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3")),
-        api_key=os.getenv("GENESIS_EVIDENCE_REVIEW_API_KEY", ""),
+        api_key=_review_api_key(),
     )
     uvicorn.run(
         app,
         host=os.getenv("GENESIS_EVIDENCE_REVIEW_HOST", "127.0.0.1"),
         port=int(os.getenv("GENESIS_EVIDENCE_REVIEW_PORT", "8090")),
+    )
+
+
+def _review_api_key() -> str:
+    return os.getenv("GENESIS_EVIDENCE_REVIEW_API_KEY") or os.getenv(
+        "GENESIS_REVIEW_API_KEY", ""
     )
 
 

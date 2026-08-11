@@ -1,0 +1,13 @@
+[Unit]
+Description=Genesis Evidence FRP HTTPS Tunnels
+After=network-online.target genesis-evidence-portal.service genesis-evidence-review.service
+
+[Service]
+Type=simple
+EnvironmentFile=/home/claude/.config/frp/credentials
+ExecStart=/home/claude/App/frp/frpc -c /home/claude/Projects/genesis-evidence/ops/frp/genesis-evidence.toml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
