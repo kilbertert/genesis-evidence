@@ -272,6 +272,101 @@ class ReviewStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_review_queue(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.id, p.title, p.doi, p.pmid, p.pmcid, p.year,
+                    p.integrity_status, p.study_design_candidate,
+                    COALESCE(pa.status, 'pending') AS admission_status,
+                    pe.consistency_status,
+                    count(c.id) AS claim_count,
+                    sum(CASE WHEN c.status = 'candidate' THEN 1 ELSE 0 END) AS pending_claims
+                FROM papers p
+                LEFT JOIN paper_admissions pa ON pa.paper_id = p.id
+                LEFT JOIN paper_extractions pe ON pe.id = (
+                    SELECT id FROM paper_extractions
+                    WHERE paper_id = p.id ORDER BY created_at DESC, id DESC LIMIT 1
+                )
+                LEFT JOIN claims c ON c.paper_id = p.id
+                GROUP BY p.id, pa.status, pe.consistency_status
+                ORDER BY p.created_at DESC, p.id DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_review_item(self, paper_id: str) -> dict[str, object] | None:
+        with self.database.connect() as connection:
+            paper = connection.execute(
+                "SELECT * FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+            if paper is None:
+                return None
+            extraction = connection.execute(
+                """
+                SELECT * FROM paper_extractions WHERE paper_id = ?
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (paper_id,),
+            ).fetchone()
+            admission = connection.execute(
+                "SELECT * FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            sources = connection.execute(
+                """
+                SELECT source, source_id, source_url, license
+                FROM paper_sources WHERE paper_id = ?
+                """,
+                (paper_id,),
+            ).fetchall()
+            claims = connection.execute(
+                """
+                SELECT c.*, cr.decision, cr.corrected_text, cr.corrected_study_design,
+                    cr.inference, cr.grade, cr.condition_code, cr.reviewer, cr.reviewed_at
+                FROM claims c LEFT JOIN claim_reviews cr ON cr.claim_id = c.id
+                WHERE c.paper_id = ? ORDER BY c.created_at, c.id
+                """,
+                (paper_id,),
+            ).fetchall()
+        return {
+            "paper": dict(paper),
+            "extraction": json.loads(extraction["extraction_json"]) if extraction else None,
+            "consistency": json.loads(extraction["consistency_json"]) if extraction else None,
+            "admission": (
+                {
+                    **dict(admission),
+                    "condition_codes": json.loads(admission["condition_codes_json"]),
+                }
+                if admission
+                else None
+            ),
+            "sources": [dict(row) for row in sources],
+            "claims": [dict(row) for row in claims],
+        }
+
+    def list_cards(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT kc.id, kc.condition_code, kc.version, kc.status, kc.grade,
+                    kc.reviewer, kc.reviewed_at, kc.published_at, kc.patient_visible_body,
+                    count(cc.claim_id) AS claim_count,
+                    group_concat(cc.claim_id) AS claim_ids,
+                    group_concat(DISTINCT c.paper_id) AS paper_ids
+                FROM knowledge_cards kc
+                LEFT JOIN card_claims cc ON cc.card_id = kc.id
+                LEFT JOIN claims c ON c.id = cc.claim_id
+                GROUP BY kc.id ORDER BY kc.created_at DESC, kc.id DESC
+                """
+            ).fetchall()
+        cards = []
+        for row in rows:
+            card = dict(row)
+            card["claim_ids"] = str(card["claim_ids"] or "").split(",") if card["claim_ids"] else []
+            card["paper_ids"] = str(card["paper_ids"] or "").split(",") if card["paper_ids"] else []
+            cards.append(card)
+        return cards
+
     @staticmethod
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
