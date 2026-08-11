@@ -1,0 +1,1 @@
+{"case_id":"synthetic-glucose","files":["page-1.png"],"subject_consistency":"same","observations":[{"source_file_index":1,"source_page":1,"name":"空腹血糖","model_value":6.8,"model_unit":"mmol/L","model_reference_low":3.9,"model_reference_high":6.1,"evidence":"空腹血糖 6.8 mmol/L 3.9-6.1 H","extraction_status":"clear","default_decision":"pending","validation_issues":[]}]}

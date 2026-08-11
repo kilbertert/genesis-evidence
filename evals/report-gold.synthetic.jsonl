@@ -1,0 +1,1 @@
+{"case_id":"synthetic-glucose","files":["page-1.png"],"subject_consistency":"same","observations":[{"source_file_index":1,"source_page":1,"name":"空腹血糖","value":6.8,"unit":"mmol/L","reference_low":3.9,"reference_high":6.1,"flag":"high"}]}
