@@ -5,6 +5,12 @@ from dataclasses import dataclass
 import pytest
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore
+from genesis_evidence.literature.ai_extraction import (
+    CheckedPaperExtraction,
+    ConsistencyReport,
+    PaperClaimCandidate,
+    PaperExtraction,
+)
 from genesis_evidence.literature.downloader import DownloadedArtifact
 from genesis_evidence.literature.ingestion import LiteratureIngestionService
 from genesis_evidence.literature.integrity import (
@@ -52,6 +58,42 @@ class FakeIntegrityChecker:
     def check(self, paper: dict[str, object]) -> IntegrityAssessment:
         del paper
         return IntegrityAssessment(self.status, (), ("fake",), {"fake": {}})
+
+
+class FakeAnalyzer:
+    def analyze(
+        self, paper: PaperRecord, document: dict[str, object]
+    ) -> CheckedPaperExtraction:
+        del paper, document
+        extraction = PaperExtraction(
+            summary="The paper reports an intervention effect.",
+            research_question="Does protein improve muscle strength?",
+            study_design="randomized_controlled_trial",
+            population=["Older adults"],
+            condition_candidates=[],
+            directly_reported_symptoms=[],
+            studied_approach=["Protein supplementation"],
+            comparator=["Placebo"],
+            outcomes=["Muscle strength"],
+            limitations=[],
+            claims=[
+                PaperClaimCandidate(
+                    text="Protein significantly improved muscle strength.",
+                    evidence="Protein significantly improved muscle strength.",
+                    locator="Results",
+                    claim_type="intervention_effect",
+                    inference="causal",
+                )
+            ],
+        )
+        return CheckedPaperExtraction(
+            model="fake-extractor",
+            extraction_run_id="extract-1",
+            extraction=extraction,
+            check_model="fake-checker",
+            check_run_id="check-1",
+            consistency=ConsistencyReport(verdict="consistent", issues=[]),
+        )
 
 
 def _record(*, source: SourceName = SourceName.EUROPE_PMC, source_id: str = "MED:123"):
@@ -112,6 +154,7 @@ def test_collection_persists_full_text_and_pending_candidate_claims(tmp_path) ->
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+        analyzer=FakeAnalyzer(),
     )
     summary = service.collect(
         condition_code="COND_SARCOPENIA_FRAILTY",
@@ -139,6 +182,7 @@ def test_retracted_paper_never_enters_full_text_or_claim_processing(tmp_path) ->
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(IntegrityStatus.RETRACTED),  # type: ignore[arg-type]
+        analyzer=FakeAnalyzer(),
     )
     summary = service.collect(
         condition_code="COND_SARCOPENIA_FRAILTY",
@@ -164,6 +208,7 @@ def test_expression_of_concern_is_preserved_for_human_review(tmp_path) -> None:
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(IntegrityStatus.EXPRESSION_OF_CONCERN),  # type: ignore[arg-type]
+        analyzer=FakeAnalyzer(),
     )
     service.collect(
         condition_code="COND_SARCOPENIA_FRAILTY",

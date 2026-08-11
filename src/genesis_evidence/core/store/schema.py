@@ -83,9 +83,25 @@ CREATE TABLE IF NOT EXISTS paper_admissions (
     reviewed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS paper_extractions (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    extraction_run_id TEXT NOT NULL,
+    extraction_json TEXT NOT NULL,
+    check_model TEXT NOT NULL,
+    check_run_id TEXT NOT NULL,
+    consistency_status TEXT NOT NULL
+        CHECK (consistency_status IN ('consistent', 'needs_review')),
+    consistency_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (paper_id, extraction_run_id)
+);
+
 CREATE TABLE IF NOT EXISTS claims (
     id TEXT PRIMARY KEY,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    extraction_id TEXT NOT NULL REFERENCES paper_extractions(id) ON DELETE CASCADE,
     candidate_text TEXT NOT NULL,
     evidence_text TEXT NOT NULL,
     locator TEXT NOT NULL,
