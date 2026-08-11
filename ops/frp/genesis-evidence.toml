@@ -8,12 +8,12 @@ loginFailExit = false
 name = "genesis-evidence"
 type = "http"
 localIP = "127.0.0.1"
-localPort = 8100
+localPort = 8125
 subdomain = "genesis-evidence"
 
 [[proxies]]
 name = "genesis-evidence-review"
 type = "http"
 localIP = "127.0.0.1"
-localPort = 8101
+localPort = 8126
 subdomain = "genesis-evidence-review"
