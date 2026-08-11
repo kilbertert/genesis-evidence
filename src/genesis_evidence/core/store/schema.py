@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS full_texts (
 
 CREATE TABLE IF NOT EXISTS paper_admissions (
     paper_id TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'admitted', 'rejected')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'internally_admitted', 'rejected')),
+    condition_codes_json TEXT NOT NULL DEFAULT '[]',
     reviewer TEXT,
     reviewed_at TEXT
 );
@@ -114,12 +115,22 @@ CREATE TABLE IF NOT EXISTS claims (
 CREATE TABLE IF NOT EXISTS claim_reviews (
     claim_id TEXT PRIMARY KEY REFERENCES claims(id) ON DELETE CASCADE,
     decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected')),
-    corrected_text TEXT NOT NULL,
-    corrected_study_design TEXT NOT NULL,
-    grade TEXT NOT NULL CHECK (grade IN ('high', 'moderate', 'low', 'very_low')),
-    condition_code TEXT NOT NULL REFERENCES conditions(code),
+    corrected_text TEXT,
+    corrected_study_design TEXT CHECK (corrected_study_design IN (
+        'randomized_controlled_trial', 'systematic_review_meta_analysis',
+        'cohort_study', 'case_control_study', 'cross_sectional_study',
+        'case_series', 'case_report', 'guideline', 'other', 'uncertain'
+    )),
+    inference TEXT CHECK (inference IN ('causal', 'associational', 'descriptive')),
+    grade TEXT CHECK (grade IN ('high', 'moderate', 'low', 'very_low')),
+    condition_code TEXT REFERENCES conditions(code),
     reviewer TEXT NOT NULL,
-    reviewed_at TEXT NOT NULL
+    reviewed_at TEXT NOT NULL,
+    CHECK (decision = 'rejected' OR (
+        corrected_text IS NOT NULL AND corrected_study_design IS NOT NULL
+        AND trim(corrected_text) <> '' AND trim(corrected_study_design) <> ''
+        AND inference IS NOT NULL AND grade IS NOT NULL AND condition_code IS NOT NULL
+    ))
 );
 
 CREATE TABLE IF NOT EXISTS knowledge_cards (
