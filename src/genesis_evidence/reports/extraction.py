@@ -164,6 +164,7 @@ class HealthReportExtractor:
         *,
         api_key: str = "",
         base_url: str = DEFAULT_OPENAI_BASE_URL,
+        responses_url: str = "",
         model: str = DEFAULT_REPORT_MODEL,
         max_bytes: int,
         max_files: int = 20,
@@ -178,6 +179,7 @@ class HealthReportExtractor:
         self._provider = provider or OpenAIReportUnderstandingProvider(
             api_key=api_key,
             base_url=base_url,
+            responses_url=responses_url,
             model=model,
             timeout_seconds=timeout_seconds,
             transport=transport,
@@ -240,13 +242,14 @@ class OpenAIReportUnderstandingProvider:
         *,
         api_key: str,
         base_url: str = DEFAULT_OPENAI_BASE_URL,
+        responses_url: str = "",
         model: str = DEFAULT_REPORT_MODEL,
         timeout_seconds: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key.strip()
         normalized_base_url = base_url.strip().rstrip("/") or DEFAULT_OPENAI_BASE_URL
-        self._responses_url = f"{normalized_base_url}/responses"
+        self._responses_url = responses_url.strip() or f"{normalized_base_url}/responses"
         self._model = model.strip() or DEFAULT_REPORT_MODEL
         self._timeout_seconds = max(5.0, timeout_seconds)
         self._transport = transport

@@ -135,6 +135,26 @@ def test_responses_request_preserves_file_order_and_stops_at_confirmation() -> N
     assert set(extracted.to_dict()).isdisjoint({"assessment", "findings", "diagnosis"})
 
 
+def test_exact_responses_endpoint_can_be_configured_for_a_proxy() -> None:
+    captured = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured
+        captured = str(request.url)
+        return _response(_report([_observation()]), request)
+
+    asyncio.run(
+        HealthReportExtractor(
+            api_key="test-key",
+            base_url="https://ignored.example/v1",
+            responses_url="https://proxy.example/custom/v1/responses",
+            max_bytes=1024,
+            transport=httpx.MockTransport(handler),
+        ).extract_bytes(b"plain", filename="report.txt")
+    )
+    assert captured == "https://proxy.example/custom/v1/responses"
+
+
 def test_ambiguous_and_unverified_rows_remain_visible_but_default_to_excluded() -> None:
     class Provider:
         async def understand(self, files):

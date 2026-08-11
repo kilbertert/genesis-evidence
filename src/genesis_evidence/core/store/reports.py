@@ -190,7 +190,7 @@ class ReportStore:
                 UPDATE reports SET
                     status = 'pending_confirmation', subject_consistency = ?,
                     extraction_provider = ?, extraction_model = ?, extraction_run_id = ?,
-                    inferred_age = ?, inferred_sex = ?, updated_at = ?
+                    extraction_warnings_json = ?, inferred_age = ?, inferred_sex = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -198,6 +198,7 @@ class ReportStore:
                     extracted.provider,
                     extracted.model,
                     extracted.run_id,
+                    json.dumps(extracted.warnings, ensure_ascii=False),
                     extracted.inferred_age,
                     extracted.inferred_sex,
                     now,
@@ -235,6 +236,7 @@ class ReportStore:
             ).fetchall()
         payload = dict(report)
         payload.pop("access_token_hash", None)
+        payload["warnings"] = json.loads(payload.pop("extraction_warnings_json"))
         payload["files"] = [dict(row) for row in files]
         payload["observations"] = [
             {**dict(row), "validation_issues": json.loads(row["validation_issues_json"])}

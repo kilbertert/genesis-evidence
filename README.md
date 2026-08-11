@@ -21,3 +21,17 @@ uv run python scripts/check_scope.py
 uv run python scripts/check_schema.py
 uv run python scripts/check_patient_copy.py
 ```
+
+## Local services
+
+The report portal reads its model configuration from server environment variables:
+
+```bash
+OPENAI_API_KEY=...
+OPENAI_RESPONSES_URL=https://your-provider.example/v1/responses
+OPENAI_REPORT_MODEL=gpt-5.6-sol
+uv run genesis-evidence-portal
+```
+
+Use `OPENAI_RESPONSES_URL` when a proxy has a non-default path. `OPENAI_BASE_URL`
+remains available for providers whose Responses endpoint is simply `<base>/responses`.
