@@ -170,6 +170,11 @@ CREATE TABLE IF NOT EXISTS reports (
         )),
     subject_consistency TEXT
         CHECK (subject_consistency IN ('same', 'uncertain', 'different')),
+    extraction_provider TEXT,
+    extraction_model TEXT,
+    extraction_run_id TEXT,
+    inferred_age INTEGER,
+    inferred_sex TEXT CHECK (inferred_sex IN ('male', 'female', 'unknown')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -180,6 +185,7 @@ CREATE TABLE IF NOT EXISTS report_files (
     original_name TEXT NOT NULL,
     object_key TEXT NOT NULL,
     sha256 TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT '',
     page_count INTEGER,
     PRIMARY KEY (report_id, file_index)
 );
@@ -188,15 +194,17 @@ CREATE TABLE IF NOT EXISTS report_observations (
     id TEXT PRIMARY KEY,
     report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
     source_file_index INTEGER NOT NULL,
-    source_page INTEGER,
-    metric_code TEXT NOT NULL,
+    source_page INTEGER NOT NULL CHECK (source_page >= 1),
     original_name TEXT NOT NULL,
     model_value REAL NOT NULL,
     model_unit TEXT NOT NULL,
     reference_low REAL,
     reference_high REAL,
+    model_flag TEXT NOT NULL CHECK (model_flag IN ('high', 'low', 'normal', 'unknown')),
     evidence_text TEXT NOT NULL,
     extraction_status TEXT NOT NULL CHECK (extraction_status IN ('clear', 'ambiguous')),
+    default_decision TEXT NOT NULL CHECK (default_decision IN ('pending', 'excluded')),
+    validation_issues_json TEXT NOT NULL DEFAULT '[]',
     FOREIGN KEY (report_id, source_file_index)
         REFERENCES report_files(report_id, file_index)
 );
@@ -204,11 +212,20 @@ CREATE TABLE IF NOT EXISTS report_observations (
 CREATE TABLE IF NOT EXISTS observation_confirmations (
     observation_id TEXT PRIMARY KEY REFERENCES report_observations(id) ON DELETE CASCADE,
     decision TEXT NOT NULL CHECK (decision IN ('confirmed', 'corrected', 'excluded')),
+    final_metric_code TEXT,
     final_value REAL,
     final_unit TEXT,
     final_reference_low REAL,
     final_reference_high REAL,
-    confirmed_at TEXT NOT NULL
+    confirmed_at TEXT NOT NULL,
+    CHECK (
+        (decision = 'excluded' AND final_metric_code IS NULL AND final_value IS NULL
+            AND final_unit IS NULL AND final_reference_low IS NULL
+            AND final_reference_high IS NULL)
+        OR
+        (decision <> 'excluded' AND final_metric_code IS NOT NULL
+            AND final_value IS NOT NULL AND final_unit IS NOT NULL)
+    )
 );
 
 CREATE TABLE IF NOT EXISTS assessments (
