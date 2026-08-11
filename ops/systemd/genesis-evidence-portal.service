@@ -6,7 +6,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/claude/Projects/genesis-evidence
 EnvironmentFile=/home/claude/Projects/genesis-evidence/var/portal.env
-ExecStart=/home/claude/.local/bin/uv run --no-sync genesis-evidence-portal
+ExecStart=/home/claude/.local/bin/uv run --no-sync python -m genesis_evidence.portal.api
 Restart=on-failure
 RestartSec=3
 

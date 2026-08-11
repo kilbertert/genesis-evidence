@@ -2,8 +2,8 @@
 
 The new project runs beside the frozen `genesis-health` services:
 
-- portal: `127.0.0.1:8100` → `genesis-evidence.ranlei.work`
-- review: `127.0.0.1:8101` → `genesis-evidence-review.ranlei.work`
+- portal: `127.0.0.1:8125` → `genesis-evidence.ranlei.work`
+- review: `127.0.0.1:8126` → `genesis-evidence-review.ranlei.work`
 
 Create private `var/portal.env` and `var/review.env` from the examples, sync the
 canonical environment, then symlink the three unit files into
