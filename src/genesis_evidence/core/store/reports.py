@@ -26,6 +26,12 @@ from .database import Database
 from .papers import ObjectStore
 
 METRIC_CODES = frozenset(metric for condition in CONDITIONS for metric in condition.metrics)
+CONDITIONS_BY_METRIC = {
+    metric: tuple(condition for condition in CONDITIONS if metric in condition.metrics)
+    for metric in METRIC_CODES
+}
+EVIDENCE_RANK = {"high": 0, "moderate": 1, "low": 2, "very_low": 3}
+ASSESSMENT_SORTING_VERSION = "published-card-reference-range-v1"
 
 
 class ReportAccessDenied(PermissionError):
@@ -309,6 +315,168 @@ class ReportStore:
                 },
             )
 
+    def assess(self, report_id: str, access_token: str) -> dict[str, object]:
+        now = _now()
+        with self.database.transaction() as connection:
+            report = self._authorized_report(connection, report_id, access_token)
+            if report["status"] not in {"confirmed", "assessed"}:
+                raise ValueError("only confirmed reports can be assessed")
+            observations = connection.execute(
+                """
+                SELECT ro.id, oc.final_metric_code, oc.final_value,
+                    oc.final_reference_low, oc.final_reference_high
+                FROM report_observations ro
+                JOIN observation_confirmations oc ON oc.observation_id = ro.id
+                WHERE ro.report_id = ? AND oc.decision <> 'excluded'
+                ORDER BY ro.rowid
+                """,
+                (report_id,),
+            ).fetchall()
+            cards = {}
+            for row in connection.execute(
+                """
+                SELECT id, condition_code, version, grade, published_at
+                FROM knowledge_cards WHERE status = 'published'
+                ORDER BY published_at DESC, version DESC
+                """
+            ).fetchall():
+                cards.setdefault(row["condition_code"], row)
+
+            finding_by_condition = {}
+            unmatched = []
+            for observation in observations:
+                if not _is_abnormal(observation):
+                    continue
+                conditions = CONDITIONS_BY_METRIC.get(observation["final_metric_code"], ())
+                missing = []
+                for condition in conditions:
+                    card = cards.get(condition.code)
+                    if card is None:
+                        missing.append(condition.code)
+                        continue
+                    # ponytail: generic reference-range deviations stay level 1/routine until
+                    # reviewed metric-specific thresholds are published with the knowledge card.
+                    finding = finding_by_condition.setdefault(
+                        condition.code,
+                        {
+                            "condition": condition,
+                            "card": card,
+                            "observation_ids": [],
+                            "urgency": "routine",
+                            "severity": 1,
+                            "needs_recheck": True,
+                            "epidemiology": "",
+                        },
+                    )
+                    finding["observation_ids"].append(observation["id"])
+                if missing:
+                    unmatched.append(
+                        {
+                            "observation_id": observation["id"],
+                            "condition_codes": missing,
+                        }
+                    )
+            findings = sorted(finding_by_condition.values(), key=_finding_sort_key)
+            old_assessment = connection.execute(
+                "SELECT id FROM assessments WHERE report_id = ?", (report_id,)
+            ).fetchone()
+            if old_assessment:
+                connection.execute(
+                    "DELETE FROM assessment_findings WHERE assessment_id = ?",
+                    (old_assessment["id"],),
+                )
+                connection.execute("DELETE FROM assessments WHERE id = ?", (old_assessment["id"],))
+            assessment_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                INSERT INTO assessments(id, report_id, sorting_version, unmatched_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    assessment_id,
+                    report_id,
+                    ASSESSMENT_SORTING_VERSION,
+                    json.dumps(unmatched, ensure_ascii=False),
+                    now,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO assessment_findings(
+                    id, assessment_id, condition_code, card_id, card_version,
+                    source_observation_ids_json, urgency, abnormality_severity,
+                    evidence_strength, needs_recheck, department, epidemiology_background,
+                    sort_position, sorting_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(uuid.uuid4()),
+                        assessment_id,
+                        item["condition"].code,
+                        item["card"]["id"],
+                        item["card"]["version"],
+                        json.dumps(item["observation_ids"]),
+                        item["urgency"],
+                        item["severity"],
+                        item["card"]["grade"],
+                        int(item["needs_recheck"]),
+                        item["condition"].department,
+                        item["epidemiology"],
+                        position,
+                        json.dumps(_sorting_dimensions(item), ensure_ascii=False),
+                    )
+                    for position, item in enumerate(findings)
+                ],
+            )
+            connection.execute(
+                "UPDATE reports SET status = 'assessed', updated_at = ? WHERE id = ?",
+                (now, report_id),
+            )
+            self._audit(
+                connection,
+                report_id,
+                "assessed",
+                {"findings": len(findings), "unmatched": len(unmatched)},
+                actor="system",
+            )
+        return self.get_assessment(report_id, access_token)
+
+    def get_assessment(self, report_id: str, access_token: str) -> dict[str, object]:
+        with self.database.connect() as connection:
+            report = self._authorized_report(connection, report_id, access_token)
+            assessment = connection.execute(
+                "SELECT * FROM assessments WHERE report_id = ?", (report_id,)
+            ).fetchone()
+            if assessment is None:
+                raise ValueError("report has not been assessed")
+            findings = connection.execute(
+                """
+                SELECT af.*, c.name AS condition_name, c.recheck_direction,
+                    kc.patient_visible_body
+                FROM assessment_findings af
+                JOIN knowledge_cards kc ON kc.id = af.card_id AND kc.status = 'published'
+                JOIN conditions c ON c.code = af.condition_code
+                WHERE af.assessment_id = ? ORDER BY af.sort_position
+                """,
+                (assessment["id"],),
+            ).fetchall()
+        visible = []
+        for row in findings:
+            item = dict(row)
+            item["source_observation_ids"] = json.loads(item.pop("source_observation_ids_json"))
+            item["sorting"] = json.loads(item.pop("sorting_json"))
+            item["needs_recheck"] = bool(item["needs_recheck"])
+            visible.append(item)
+        return {
+            "report_id": report_id,
+            "status": report["status"],
+            "sorting_version": assessment["sorting_version"],
+            "findings": visible,
+            "unmatched": json.loads(assessment["unmatched_json"]),
+            "message": "" if visible else "暂无已审核内容",
+        }
+
     @staticmethod
     def _authorized_report(connection, report_id: str, access_token: str):
         report = connection.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
@@ -351,6 +519,36 @@ def _validate_final_values(
         raise ValueError("confirmed reference range is invalid")
     if any(not evidence_contains_value(evidence, bound) for bound in bounds):
         raise ValueError("confirmed reference range lacks source evidence")
+
+
+def _is_abnormal(observation) -> bool:
+    value = observation["final_value"]
+    low = observation["final_reference_low"]
+    high = observation["final_reference_high"]
+    return (low is not None and value < low) or (high is not None and value > high)
+
+
+def _finding_sort_key(item: dict[str, object]) -> tuple[object, ...]:
+    urgency_rank = {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}
+    return (
+        urgency_rank[item["urgency"]],
+        -int(item["severity"]),
+        EVIDENCE_RANK[item["card"]["grade"]],  # type: ignore[index]
+        not bool(item["needs_recheck"]),
+        item["condition"].department,  # type: ignore[union-attr]
+        not bool(item["epidemiology"]),
+    )
+
+
+def _sorting_dimensions(item: dict[str, object]) -> dict[str, object]:
+    return {
+        "urgency": item["urgency"],
+        "abnormality_severity": item["severity"],
+        "evidence_strength": item["card"]["grade"],  # type: ignore[index]
+        "needs_recheck": item["needs_recheck"],
+        "department": item["condition"].department,  # type: ignore[union-attr]
+        "epidemiology_background": item["epidemiology"],
+    }
 
 
 def _token_hash(token: str) -> str:

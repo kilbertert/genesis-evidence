@@ -232,6 +232,7 @@ CREATE TABLE IF NOT EXISTS assessments (
     id TEXT PRIMARY KEY,
     report_id TEXT NOT NULL UNIQUE REFERENCES reports(id) ON DELETE CASCADE,
     sorting_version TEXT NOT NULL,
+    unmatched_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
 
@@ -248,6 +249,7 @@ CREATE TABLE IF NOT EXISTS assessment_findings (
     needs_recheck INTEGER NOT NULL,
     department TEXT NOT NULL,
     epidemiology_background TEXT NOT NULL DEFAULT '',
+    sort_position INTEGER NOT NULL,
     sorting_json TEXT NOT NULL
 );
 
