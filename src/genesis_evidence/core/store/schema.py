@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS reports (
     extraction_provider TEXT,
     extraction_model TEXT,
     extraction_run_id TEXT,
+    extraction_warnings_json TEXT NOT NULL DEFAULT '[]',
     inferred_age INTEGER,
     inferred_sex TEXT CHECK (inferred_sex IN ('male', 'female', 'unknown')),
     created_at TEXT NOT NULL,

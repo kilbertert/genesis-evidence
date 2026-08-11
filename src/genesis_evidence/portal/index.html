@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>体检报告解读与健康风险提示</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f7f3; color: #183026; }
+    header { padding: 30px max(20px, calc((100vw - 1100px) / 2)); background: #164b3a; color: white; }
+    h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 36px); }
+    header p { margin: 0; color: #d5ebe2; }
+    main { width: min(1100px, calc(100% - 32px)); margin: 24px auto 64px; }
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+    .step { padding: 10px; border-radius: 10px; background: #e1e9e3; color: #5b6d64; text-align: center; }
+    .step.active { background: #26745a; color: white; }
+    .panel { background: white; border: 1px solid #d4ded7; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(28,64,48,.05); }
+    .panel h2, .panel h3 { margin-top: 0; }
+    input, select, button { font: inherit; }
+    input, select { width: 100%; border: 1px solid #b8c9be; border-radius: 8px; padding: 9px 10px; background: white; }
+    input[type=file] { padding: 14px; border-style: dashed; }
+    button { border: 0; border-radius: 9px; padding: 10px 16px; background: #26745a; color: white; cursor: pointer; }
+    button.secondary { background: #697a71; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .files { margin: 12px 0; padding-left: 24px; }
+    .muted { color: #66786e; font-size: 13px; }
+    .error { color: #a52b23; }
+    .warning { background: #fff6da; border-color: #e7cd77; }
+    .observation { border-top: 1px solid #e1e7e3; padding-top: 16px; margin-top: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; }
+    .grid label { font-size: 13px; color: #56685e; }
+    .evidence { padding: 10px 12px; background: #f4f7f4; border-left: 3px solid #6b9a84; white-space: pre-wrap; }
+    .tag { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e4eee8; margin: 2px; font-size: 12px; }
+    .result { border-top: 4px solid #26745a; }
+    .source { margin: 8px 0; padding: 9px; border-radius: 8px; background: #f5f7f5; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .steps { font-size: 13px; } }
+  </style>
+</head>
+<body>
+<header><h1>体检报告解读与健康风险提示</h1><p>先核对报告指标，再查看有正式知识卡支持的健康提示。</p></header>
+<main>
+  <div class="steps"><div id="step1" class="step active">1. 上传报告</div><div id="step2" class="step">2. 确认指标</div><div id="step3" class="step">3. 查看提示</div></div>
+  <section id="uploadPanel" class="panel">
+    <h2>上传多份报告文件</h2>
+    <p>支持图片、PDF 和常见文档。系统严格按下方顺序处理；请只选择同一人的同一组报告。</p>
+    <input id="files" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.json,.html,.xml,.rtf,.odt">
+    <ol id="fileOrder" class="files muted"><li>尚未选择文件</li></ol>
+    <div class="actions"><button id="upload">开始识别指标</button></div>
+    <p id="uploadStatus" class="muted">模型只抽取原文信息，不会直接生成健康结论。</p>
+  </section>
+  <section id="confirmPanel" class="panel" hidden>
+    <h2>请逐条确认或修正</h2>
+    <p>核对名称、数值、单位、参考范围和原文证据。待核对项目默认剔除，不会进入后续匹配。</p>
+    <div id="warnings"></div><div id="observations"></div>
+    <div class="actions"><button id="confirm">确认并生成健康提示</button><button id="restart" class="secondary">重新上传</button></div>
+    <p id="confirmStatus" class="muted"></p>
+  </section>
+  <section id="resultPanel" hidden>
+    <div class="panel"><h2>结果说明</h2><p>以下内容仅用于健康信息整理与风险提示。若有明显不适或数值显著异常，请及时就医。</p></div>
+    <div id="results"></div>
+    <div class="actions"><button id="newReport" class="secondary">解读另一份报告</button></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+let metrics = [], report = null, reportId = '', token = '', assessment = null;
+
+async function jsonApi(path, options = {}) {
+  const response = await fetch(path, {...options, headers:{'Content-Type':'application/json','X-Report-Token':token,...(options.headers || {})}});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+  return body;
+}
+function setStep(number) { [1,2,3].forEach(n => $(`step${n}`).classList.toggle('active', n === number)); }
+function setBusy(button, busy) { button.disabled = busy; }
+function metricOptions(selected = '') { return `<option value="">请选择指标</option>` + metrics.map(m => `<option value="${esc(m.code)}" ${m.code === selected ? 'selected' : ''}>${esc(m.label)}</option>`).join(''); }
+function suggestedMetric(name) { const normalized = String(name).replace(/[\s\-_/（）()]/g,'').toLowerCase(); return metrics.find(m => m.label.replace(/[\s\-_/（）()]/g,'').toLowerCase() === normalized)?.code || ''; }
+
+$('files').onchange = () => { const files = [...$('files').files]; $('fileOrder').innerHTML = files.length ? files.map((f,i) => `<li>${i + 1}. ${esc(f.name)}</li>`).join('') : '<li>尚未选择文件</li>'; };
+$('upload').onclick = async () => {
+  const files = [...$('files').files]; if (!files.length) return setMessage('uploadStatus','请先选择报告文件。',true);
+  setBusy($('upload'), true); setMessage('uploadStatus','正在读取并提取指标，请稍候…');
+  try {
+    const data = new FormData(); files.forEach(file => data.append('files', file));
+    const response = await fetch('/api/reports', {method:'POST', body:data});
+    const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    report = body; reportId = body.report_id; token = body.access_token; metrics = metrics.length ? metrics : await jsonApi('/api/metrics'); renderConfirmation();
+  } catch (error) { setMessage('uploadStatus', error.message, true); } finally { setBusy($('upload'), false); }
+};
+
+function renderConfirmation() {
+  $('uploadPanel').hidden = true; $('confirmPanel').hidden = false; setStep(2);
+  $('warnings').innerHTML = (report.warnings || []).map(w => `<div class="panel warning">${esc(w)}</div>`).join('');
+  $('observations').innerHTML = report.observations.map((item,index) => {
+    const suggested = suggestedMetric(item.original_name);
+    const decision = item.default_decision === 'excluded' ? 'excluded' : 'confirmed';
+    return `<div class="observation" data-id="${esc(item.id)}"><h3>${index + 1}. ${esc(item.original_name)} <span class="tag">文件 ${item.source_file_index} · 第 ${item.source_page} 页</span></h3><p class="evidence">${esc(item.evidence_text)}</p>${(item.validation_issues || []).map(issue => `<span class="tag">${esc(issue)}</span>`).join('')}<div class="grid"><label>处理方式<select name="decision"><option value="confirmed" ${decision === 'confirmed' ? 'selected' : ''}>确认原结果</option><option value="corrected">我已修正</option><option value="excluded" ${decision === 'excluded' ? 'selected' : ''}>剔除</option></select></label><label>指标<select name="metric">${metricOptions(suggested)}</select></label><label>数值<input name="value" type="number" step="any" value="${esc(item.model_value)}"></label><label>单位<input name="unit" value="${esc(item.model_unit)}"></label><label>参考下限<input name="low" type="number" step="any" value="${esc(item.reference_low ?? '')}"></label><label>参考上限<input name="high" type="number" step="any" value="${esc(item.reference_high ?? '')}"></label></div></div>`;
+  }).join('');
+  document.querySelectorAll('.observation input').forEach(input => input.oninput = () => { input.closest('.observation').querySelector('[name=decision]').value = 'corrected'; });
+}
+
+$('confirm').onclick = async () => {
+  setBusy($('confirm'), true); setMessage('confirmStatus','正在校验并匹配正式知识卡…');
+  try {
+    const observations = [...document.querySelectorAll('.observation')].map(root => {
+      const decision = root.querySelector('[name=decision]').value;
+      const payload = {observation_id:root.dataset.id,decision};
+      if (decision !== 'excluded') payload.metric_code = root.querySelector('[name=metric]').value;
+      if (decision === 'corrected') Object.assign(payload,{value:numberValue(root,'value'),unit:root.querySelector('[name=unit]').value,reference_low:numberValue(root,'low'),reference_high:numberValue(root,'high')});
+      return payload;
+    });
+    if (report.status === 'pending_confirmation') report = await jsonApi(`/api/reports/${reportId}/confirm`, {method:'POST',body:JSON.stringify({observations})});
+    assessment = await jsonApi(`/api/reports/${reportId}/assess`, {method:'POST'}); renderResults();
+  } catch (error) { setMessage('confirmStatus',error.message,true); } finally { setBusy($('confirm'), false); }
+};
+
+function numberValue(root,name) { const value = root.querySelector(`[name=${name}]`).value; return value === '' ? null : Number(value); }
+function renderResults() {
+  $('confirmPanel').hidden = true; $('resultPanel').hidden = false; setStep(3);
+  const byId = Object.fromEntries(report.observations.map(item => [item.id,item]));
+  $('results').innerHTML = assessment.findings.length ? assessment.findings.map(item => `<article class="panel result"><h2>${esc(item.condition_name)}</h2><p><span class="tag">紧急程度：${esc({routine:'常规',soon:'尽快',urgent:'紧急',emergency:'立即处理'}[item.urgency] || item.urgency)}</span><span class="tag">异常程度：${esc(item.abnormality_severity)} 级</span><span class="tag">证据强度：${esc(item.evidence_strength)}</span></p><h3>相关异常项与原文证据</h3>${item.source_observation_ids.map(id => { const source = byId[id] || {}; return `<div class="source"><strong>${esc(source.original_name)}</strong>：${esc(source.final_value)} ${esc(source.final_unit || '')}<br><span class="muted">${esc(source.evidence_text)}</span></div>`; }).join('')}<h3>下一步</h3><p>建议科室：${esc(item.department)}<br>复查方向：${esc(item.recheck_direction)}</p><h3>经审核的营养健康知识</h3><p>${esc(item.patient_visible_body)}</p><p class="muted">正式知识卡：${esc(item.card_id)} · 版本 ${esc(item.card_version)}</p></article>`).join('') : `<div class="panel"><h2>${esc(assessment.message)}</h2><p>当前异常项没有可用于患者展示的正式知识卡，系统不会用草稿内容补充。</p></div>`;
+}
+function setMessage(id,message,error=false) { $(id).textContent = message; $(id).className = error ? 'error' : 'muted'; }
+function restart() { location.reload(); }
+$('restart').onclick = restart; $('newReport').onclick = restart;
+</script>
+</body>
+</html>

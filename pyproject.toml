@@ -23,6 +23,7 @@ dev = [
 ]
 
 [project.scripts]
+genesis-evidence-portal = "genesis_evidence.portal.api:main"
 genesis-evidence-review = "genesis_evidence.review.api:main"
 
 [tool.hatch.build.targets.wheel]
