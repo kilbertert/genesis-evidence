@@ -186,6 +186,20 @@ class PaperStore:
                 "UPDATE papers SET integrity_status = ? WHERE id = ?",
                 (status, paper_id),
             )
+            stale_cards = 0
+            if status != "clear":
+                stale_cards = connection.execute(
+                    """
+                    UPDATE knowledge_cards SET status = 'stale'
+                    WHERE status = 'published' AND id IN (
+                        SELECT cc.card_id FROM card_claims cc
+                        JOIN claims c ON c.id = cc.claim_id
+                        WHERE c.paper_id = ?
+                    )
+                    """,
+                    (paper_id,),
+                ).rowcount
+                detail = {**detail, "stale_cards": stale_cards}
             self._audit(connection, "paper", paper_id, f"integrity_{status}", detail)
 
     def save_full_text(

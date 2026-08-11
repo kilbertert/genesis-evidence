@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from genesis_evidence.core.patient_copy import FORBIDDEN_PATIENT_TERMS
+
 ROOT = Path(__file__).parents[1] / "src" / "genesis_evidence" / "portal"
-FORBIDDEN = ("诊断", "确诊", "处方", "治愈", "根治", "排毒", "抗癌", "逆龄")
 TEXT_SUFFIXES = {".py", ".html", ".js", ".jsx", ".ts", ".tsx", ".vue"}
 
 
@@ -17,7 +18,7 @@ def main() -> None:
         if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
         text = path.read_text(encoding="utf-8")
-        for phrase in FORBIDDEN:
+        for phrase in FORBIDDEN_PATIENT_TERMS:
             if phrase in text:
                 violations.append(f"{path.relative_to(ROOT)}: {phrase}")
     if violations:
