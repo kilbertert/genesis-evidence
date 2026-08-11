@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from genesis_evidence.core.store import Database
-from genesis_evidence.review.api import create_app
+from genesis_evidence.review.api import _review_api_key, create_app
 
 from .test_review_workflow import _review_case
 
@@ -85,3 +85,11 @@ def test_review_api_rejects_weak_server_key(tmp_path) -> None:
         assert "24 characters" in str(exc)
     else:
         raise AssertionError("weak review key was accepted")
+
+
+def test_new_review_key_takes_precedence_over_legacy_compatibility(monkeypatch) -> None:
+    monkeypatch.setenv("GENESIS_REVIEW_API_KEY", "legacy-review-key-with-32-characters")
+    monkeypatch.setenv("GENESIS_EVIDENCE_REVIEW_API_KEY", "new-review-key-with-32-characters")
+    assert _review_api_key() == "new-review-key-with-32-characters"
+    monkeypatch.delenv("GENESIS_EVIDENCE_REVIEW_API_KEY")
+    assert _review_api_key() == "legacy-review-key-with-32-characters"

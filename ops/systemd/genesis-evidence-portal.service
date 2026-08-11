@@ -1,0 +1,14 @@
+[Unit]
+Description=Genesis Evidence Personal Report Portal
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/claude/Projects/genesis-evidence
+EnvironmentFile=/home/claude/Projects/genesis-evidence/var/portal.env
+ExecStart=/home/claude/.local/bin/uv run --no-sync genesis-evidence-portal
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

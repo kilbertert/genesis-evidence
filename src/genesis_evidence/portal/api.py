@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
+from collections import deque
 from pathlib import Path
+from threading import Lock
 from typing import Annotated
 
 import uvicorn
-from fastapi import FastAPI, File, Header, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
@@ -75,12 +79,18 @@ def create_app(
     max_file_bytes: int = 20 * 1024 * 1024,
     max_files: int = 20,
     max_total_bytes: int = 50 * 1024 * 1024,
+    upload_limit: int = 10,
+    upload_window_seconds: int = 3600,
+    max_concurrent_extractions: int = 2,
 ) -> FastAPI:
     database = Database(database_path)
     database.initialize()
     store = ReportStore(database, ObjectStore(object_path))
     portal = Path(__file__).with_name("index.html").read_text(encoding="utf-8")
     app = FastAPI(title="Genesis Evidence Portal", docs_url=None, redoc_url=None)
+    upload_times: deque[float] = deque()
+    upload_lock = Lock()
+    extraction_slots = asyncio.Semaphore(max(1, max_concurrent_extractions))
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -122,6 +132,13 @@ def create_app(
 
     @app.post("/api/reports")
     async def upload(files: Annotated[list[UploadFile], File()]) -> dict[str, object]:
+        now = time.monotonic()
+        with upload_lock:
+            while upload_times and upload_times[0] <= now - max(1, upload_window_seconds):
+                upload_times.popleft()
+            if len(upload_times) >= max(1, upload_limit):
+                raise HTTPException(status_code=429, detail="报告处理请求较多，请稍后再试。")
+            upload_times.append(now)
         if not files or len(files) > max_files:
             raise ValueError(f"一次最多上传 {max_files} 个报告文件。")
         report_files = []
@@ -140,7 +157,8 @@ def create_app(
                     media_type=upload_file.content_type or "",
                 )
             )
-        extracted = await extractor.extract_files(tuple(report_files))
+        async with extraction_slots:
+            extracted = await extractor.extract_files(tuple(report_files))
         handle = await run_in_threadpool(store.create, tuple(report_files))
         await run_in_threadpool(store.save_extraction, handle.report_id, extracted)
         report = await run_in_threadpool(store.get, handle.report_id, handle.access_token)
@@ -185,6 +203,11 @@ def main() -> None:
         database_path=Path(os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3")),
         object_path=Path(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
         max_file_bytes=max_file_bytes,
+        upload_limit=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_LIMIT", "10")),
+        upload_window_seconds=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_WINDOW_SECONDS", "3600")),
+        max_concurrent_extractions=int(
+            os.getenv("GENESIS_EVIDENCE_MAX_CONCURRENT_EXTRACTIONS", "2")
+        ),
         extractor=HealthReportExtractor(
             api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
