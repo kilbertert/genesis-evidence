@@ -50,7 +50,12 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
             "corrected_text": "Lower vitamin D status was associated with frailty.",
             "corrected_study_design": "cohort_study",
             "inference": "associational",
-            "grade": "low",
+            "risk_of_bias": {
+                "tool": "exposure_study",
+                "overall": "some_concerns",
+                "rationale": "Residual confounding remains possible.",
+            },
+            "applicability": "Applies to older adults with measured serum 25(OH)D.",
             "condition_code": "COND_VITAMIN_D_DEFICIENCY",
         },
     ).status_code == 200
@@ -63,6 +68,14 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
             "claim_ids": [claim_id],
             "reviewer": "reviewer-1",
             "patient_body": "维生素 D 状态与衰弱之间存在研究关联。",
+            "profile": {
+                "certainty": "moderate",
+                "certainty_rationale": "The complete eligible evidence body was reviewed.",
+                "evidence_cutoff_date": "2026-08-11",
+                "estimate_target": "Association between vitamin D status and frailty",
+                "evidence_body_complete": True,
+                "interpretations": {claim_id: "supports"},
+            },
         },
     ).json()
     for target in ("in_review", "approved", "published"):
@@ -76,6 +89,7 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
     assert cards[0]["status"] == "published"
     assert cards[0]["claim_ids"] == [claim_id]
     assert cards[0]["paper_ids"] == [paper_id]
+    assert cards[0]["evidence_profile_id"]
 
 
 def test_review_api_rejects_weak_server_key(tmp_path) -> None:

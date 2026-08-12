@@ -68,15 +68,45 @@ class PaperStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def start_collection(self, *, condition_code: str, source: str, query: str) -> str:
+    def start_collection(
+        self,
+        *,
+        condition_code: str,
+        source: str,
+        query: str,
+        search_stream: str = "effect",
+        query_version: str = "1",
+    ) -> str:
+        if search_stream not in {
+            "effect",
+            "requirement",
+            "bioavailability",
+            "safety",
+            "registration",
+            "regulatory",
+            "citation",
+        }:
+            raise ValueError("Unsupported literature search stream")
+        if not query_version.strip():
+            raise ValueError("Query version is required")
         run_id = str(uuid.uuid4())
         with self.database.transaction() as connection:
             connection.execute(
                 """
-                INSERT INTO collection_runs(id, condition_code, source, query, status, created_at)
-                VALUES (?, ?, ?, ?, 'running', ?)
+                INSERT INTO collection_runs(
+                    id, condition_code, source, search_stream, query_version,
+                    query, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
                 """,
-                (run_id, condition_code, source, query, _now()),
+                (
+                    run_id,
+                    condition_code,
+                    source,
+                    search_stream,
+                    query_version.strip(),
+                    query,
+                    _now(),
+                ),
             )
         return run_id
 
@@ -126,8 +156,9 @@ class PaperStore:
             paper_id = next(iter(matches), str(uuid.uuid4()))
             connection.execute(
                 """
-                INSERT INTO papers(id, title, abstract, doi, pmid, pmcid, year, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO papers(
+                    id, title, abstract, doi, pmid, pmcid, year, publication_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = CASE WHEN length(excluded.title) > length(papers.title)
                         THEN excluded.title ELSE papers.title END,
@@ -136,7 +167,10 @@ class PaperStore:
                     doi = COALESCE(papers.doi, excluded.doi),
                     pmid = COALESCE(papers.pmid, excluded.pmid),
                     pmcid = COALESCE(papers.pmcid, excluded.pmcid),
-                    year = COALESCE(papers.year, excluded.year)
+                    year = COALESCE(papers.year, excluded.year),
+                    publication_status = CASE
+                        WHEN papers.publication_status = 'formal' THEN 'formal'
+                        ELSE excluded.publication_status END
                 """,
                 (
                     paper_id,
@@ -146,6 +180,7 @@ class PaperStore:
                     record.pmid,
                     record.pmcid,
                     record.publication_year,
+                    _publication_status(record),
                     _now(),
                 ),
             )
@@ -242,8 +277,9 @@ class PaperStore:
                 """
                 INSERT INTO paper_extractions(
                     id, paper_id, model, extraction_run_id, extraction_json,
+                    second_model, second_run_id, second_extraction_json,
                     check_model, check_run_id, consistency_status, consistency_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     extraction_id,
@@ -251,6 +287,9 @@ class PaperStore:
                     checked.model,
                     checked.extraction_run_id,
                     checked.extraction.model_dump_json(),
+                    checked.second_model,
+                    checked.second_run_id,
+                    checked.second_extraction.model_dump_json(),
                     checked.check_model,
                     checked.check_run_id,
                     checked.consistency.verdict,
@@ -258,32 +297,107 @@ class PaperStore:
                     now,
                 ),
             )
+            study_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"genesis-study:{paper_id}"))
+            connection.execute(
+                """
+                INSERT INTO studies(
+                    id, study_design, registration_ids_json, created_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    study_design = excluded.study_design,
+                    registration_ids_json = excluded.registration_ids_json
+                """,
+                (
+                    study_id,
+                    checked.extraction.study_design,
+                    json.dumps(checked.extraction.registration_ids, ensure_ascii=False),
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO study_publications(study_id, paper_id, role)
+                VALUES (?, ?, 'primary') ON CONFLICT(study_id, paper_id) DO NOTHING
+                """,
+                (study_id, paper_id),
+            )
+            candidate_result_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT result_id FROM claims WHERE paper_id = ? AND status = 'candidate'",
+                    (paper_id,),
+                ).fetchall()
+                if row[0]
+            ]
             connection.execute(
                 "DELETE FROM claims WHERE paper_id = ? AND status = 'candidate'",
                 (paper_id,),
             )
+            if candidate_result_ids:
+                connection.execute(
+                    f"DELETE FROM results WHERE id IN ({_placeholders(candidate_result_ids)})",
+                    candidate_result_ids,
+                )
             inserted = 0
             for claim in checked.extraction.claims:
+                result_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"{extraction_id}\n{claim.locator}\n{claim.evidence}\nresult",
+                    )
+                )
                 claim_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         f"{extraction_id}\n{claim.locator}\n{claim.evidence}\n{claim.text}",
                     )
                 )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO results(
+                        id, study_id, paper_id, extraction_id, population,
+                        baseline_nutrient_status, ingredient_name, ingredient_form,
+                        dose, comparator, outcome, timepoint, effect_estimate,
+                        statistical_details, evidence_text, locator, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result_id,
+                        study_id,
+                        paper_id,
+                        extraction_id,
+                        claim.population,
+                        claim.baseline_nutrient_status,
+                        claim.ingredient_name,
+                        claim.ingredient_form,
+                        claim.dose,
+                        claim.comparator,
+                        claim.outcome,
+                        claim.timepoint,
+                        claim.effect_estimate,
+                        claim.statistical_details,
+                        claim.evidence,
+                        claim.locator,
+                        now,
+                    ),
+                )
                 inserted += connection.execute(
                     """
                     INSERT OR IGNORE INTO claims(
-                        id, paper_id, extraction_id, candidate_text, evidence_text, locator,
+                        id, paper_id, extraction_id, result_id, candidate_text,
+                        evidence_text, locator, candidate_claim_type,
                         candidate_study_design, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         claim_id,
                         paper_id,
                         extraction_id,
+                        result_id,
                         claim.text,
                         claim.evidence,
                         claim.locator,
+                        claim.claim_type,
                         checked.extraction.study_design,
                         now,
                     ),
@@ -355,3 +469,16 @@ class PaperStore:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _placeholders(values: list[str]) -> str:
+    return ",".join("?" for _ in values)
+
+
+def _publication_status(record: PaperRecord) -> str:
+    types = " ".join(record.publication_types).casefold()
+    if "preprint" in types or record.source_id.startswith("PPR:"):
+        return "preprint"
+    if record.source.value in {"doaj", "europe_pmc"}:
+        return "formal"
+    return "unknown"

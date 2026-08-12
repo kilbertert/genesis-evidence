@@ -72,17 +72,33 @@ def _confirm(store, handle, *, value: float) -> str:
 
 def _publish_card(database: Database, condition_code: str, *, grade: str, version: str = "1.0.0"):
     card_id = f"card-{condition_code}-{version}"
+    profile_id = f"profile-{condition_code}-{version}"
     with database.transaction() as connection:
         connection.execute(
             """
+            INSERT INTO evidence_profiles(
+                id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome,
+                timepoint, estimate_target, evidence_body_complete, certainty,
+                certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, ?, 'Test ingredient', 'Test form', 'Adults 40+',
+                'Not reported', 'Test dose', 'Comparator', 'Outcome', 'Timepoint',
+                'Test target', 1, ?, 'Test-only reviewed profile', '2026-08-11',
+                'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
+            """,
+            (profile_id, condition_code, version, grade),
+        )
+        connection.execute(
+            """
             INSERT INTO knowledge_cards(
-                id, condition_code, version, status, grade, reviewer, reviewed_at,
+                id, condition_code, version, status, grade, evidence_profile_id,
+                reviewer, reviewed_at,
                 published_at, patient_visible_body, created_at
-            ) VALUES (?, ?, ?, 'published', ?, 'reviewer', '2026-08-11T00:00:00Z',
+            ) VALUES (?, ?, ?, 'published', ?, ?, 'reviewer', '2026-08-11T00:00:00Z',
                 '2026-08-11T00:00:00Z', '这是经过审核的营养健康知识。',
                 '2026-08-11T00:00:00Z')
             """,
-            (card_id, condition_code, version, grade),
+            (card_id, condition_code, version, grade, profile_id),
         )
     return card_id
 

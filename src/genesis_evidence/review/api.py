@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.store import Database, ReviewStore
-from .service import ClaimReviewInput, EvidenceReviewService
+from .service import ClaimReviewInput, EvidenceProfileInput, EvidenceReviewService
 
 
 class AdmissionRequest(BaseModel):
@@ -20,6 +20,7 @@ class AdmissionRequest(BaseModel):
 
     reviewer: str = Field(min_length=1, max_length=200)
     condition_codes: list[str] = Field(min_length=1, max_length=12)
+    consistency_resolution: str | None = Field(default=None, max_length=5000)
 
 
 class ReviewerRequest(BaseModel):
@@ -40,6 +41,7 @@ class CardDraftRequest(BaseModel):
     claim_ids: list[str] = Field(min_length=1)
     reviewer: str = Field(min_length=1, max_length=200)
     patient_body: str = Field(min_length=1, max_length=20_000)
+    profile: EvidenceProfileInput
 
 
 class CardTransitionRequest(BaseModel):
@@ -118,6 +120,7 @@ def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
             paper_id,
             reviewer=request.reviewer,
             condition_codes=request.condition_codes,
+            consistency_resolution=request.consistency_resolution,
         )
         return {"status": "internally_admitted"}
 

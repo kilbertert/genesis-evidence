@@ -7,42 +7,86 @@ import pytest
 from pydantic import ValidationError
 
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
-from genesis_evidence.review.service import ClaimReviewInput, EvidenceReviewService
+from genesis_evidence.review.service import (
+    ClaimReviewInput,
+    EvidenceProfileInput,
+    EvidenceReviewService,
+    RiskOfBiasInput,
+)
 
 
-def _review_case(database: Database, *, integrity: str = "clear") -> tuple[str, str]:
+def _review_case(
+    database: Database,
+    *,
+    integrity: str = "clear",
+    consistency: str = "consistent",
+    publication_status: str = "formal",
+) -> tuple[str, str]:
     paper_id = str(uuid.uuid4())
     extraction_id = str(uuid.uuid4())
+    study_id = str(uuid.uuid4())
+    result_id = str(uuid.uuid4())
     claim_id = str(uuid.uuid4())
     with database.transaction() as connection:
         connection.execute(
             """
-            INSERT INTO papers(id, title, integrity_status, created_at)
-            VALUES (?, 'Vitamin D and frailty', ?, '2026-08-11T00:00:00Z')
+            INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
+            VALUES (?, 'Vitamin D and frailty', ?, ?, '2026-08-11T00:00:00Z')
             """,
-            (paper_id, integrity),
+            (paper_id, publication_status, integrity),
         )
         connection.execute(
             """
             INSERT INTO paper_extractions(
                 id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
                 check_model, check_run_id, consistency_status, consistency_json, created_at
-            ) VALUES (?, ?, 'model', 'extract-run', '{}', 'model', 'check-run',
-                'consistent', '{}', '2026-08-11T00:00:00Z')
+            ) VALUES (?, ?, 'model-a', 'extract-run-a', '{}', 'model-b',
+                'extract-run-b', '{}', 'checker', 'check-run', ?, '{}',
+                '2026-08-11T00:00:00Z')
             """,
-            (extraction_id, paper_id),
+            (extraction_id, paper_id, consistency),
+        )
+        connection.execute(
+            """
+            INSERT INTO studies(id, study_design, created_at)
+            VALUES (?, 'cohort_study', '2026-08-11T00:00:00Z')
+            """,
+            (study_id,),
+        )
+        connection.execute(
+            "INSERT INTO study_publications(study_id, paper_id) VALUES (?, ?)",
+            (study_id, paper_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO results(
+                id, study_id, paper_id, extraction_id, population,
+                baseline_nutrient_status, ingredient_name, ingredient_form,
+                dose, comparator, outcome, timepoint, effect_estimate,
+                statistical_details, evidence_text, locator, created_at
+            ) VALUES (?, ?, ?, ?, 'Adults aged 60 years and older',
+                'Measured serum 25(OH)D', 'Vitamin D', '25(OH)D status',
+                'Not applicable', 'Higher versus lower status', 'Frailty prevalence',
+                'Baseline', 'Higher prevalence', 'Adjusted association reported',
+                'Lower 25(OH)D was associated with higher frailty prevalence.',
+                'Results', '2026-08-11T00:00:00Z')
+            """,
+            (result_id, study_id, paper_id, extraction_id),
         )
         connection.execute(
             """
             INSERT INTO claims(
-                id, paper_id, extraction_id, candidate_text, evidence_text,
-                locator, candidate_study_design, created_at
-            ) VALUES (?, ?, ?, ?, ?, 'Results', 'cohort_study', '2026-08-11T00:00:00Z')
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_study_design, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'Results', 'cohort_study',
+                '2026-08-11T00:00:00Z')
             """,
             (
                 claim_id,
                 paper_id,
                 extraction_id,
+                result_id,
                 "Lower vitamin D was associated with frailty.",
                 "Lower 25(OH)D was associated with higher frailty prevalence.",
             ),
@@ -52,6 +96,33 @@ def _review_case(database: Database, *, integrity: str = "clear") -> tuple[str, 
             (paper_id,),
         )
     return paper_id, claim_id
+
+
+def _approved_review(condition_code: str = "COND_VITAMIN_D_DEFICIENCY") -> ClaimReviewInput:
+    return ClaimReviewInput(
+        decision="approved",
+        corrected_text="Lower vitamin D status was associated with frailty.",
+        corrected_study_design="cohort_study",
+        inference="associational",
+        risk_of_bias=RiskOfBiasInput(
+            tool="exposure_study",
+            overall="some_concerns",
+            rationale="Residual confounding remains possible.",
+        ),
+        applicability="Applies to older adults with measured serum 25(OH)D.",
+        condition_code=condition_code,
+    )
+
+
+def _profile(claim_id: str, *, certainty: str = "moderate") -> EvidenceProfileInput:
+    return EvidenceProfileInput(
+        certainty=certainty,
+        certainty_rationale="The complete eligible evidence body was reviewed for this outcome.",
+        evidence_cutoff_date="2026-08-11",
+        estimate_target="Association between baseline 25(OH)D status and frailty prevalence",
+        evidence_body_complete=True,
+        interpretations={claim_id: "supports"},
+    )
 
 
 def _service(tmp_path) -> tuple[Database, EvidenceReviewService]:
@@ -78,7 +149,10 @@ def test_observational_claim_cannot_be_approved_as_causal() -> None:
             corrected_text="Vitamin D caused lower frailty.",
             corrected_study_design="cohort_study",
             inference="causal",
-            grade="low",
+            risk_of_bias=RiskOfBiasInput(
+                tool="exposure_study", overall="some_concerns", rationale="Confounding."
+            ),
+            applicability="Older adults only.",
             condition_code="COND_VITAMIN_D_DEFICIENCY",
         )
 
@@ -100,7 +174,10 @@ def test_claim_condition_must_match_paper_admission(tmp_path) -> None:
                 corrected_text="Lower vitamin D status was associated with frailty.",
                 corrected_study_design="cohort_study",
                 inference="associational",
-                grade="low",
+                risk_of_bias=RiskOfBiasInput(
+                    tool="exposure_study", overall="some_concerns", rationale="Confounding."
+                ),
+                applicability="Older adults only.",
                 condition_code="COND_SARCOPENIA_FRAILTY",
             ),
         )
@@ -117,14 +194,7 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
     service.review_claim(
         claim_id,
         reviewer="reviewer-1",
-        review=ClaimReviewInput(
-            decision="approved",
-            corrected_text="Lower vitamin D status was associated with frailty.",
-            corrected_study_design="cohort_study",
-            inference="associational",
-            grade="low",
-            condition_code="COND_VITAMIN_D_DEFICIENCY",
-        ),
+        review=_approved_review(),
     )
     card_id = service.create_card_draft(
         condition_code="COND_VITAMIN_D_DEFICIENCY",
@@ -132,6 +202,7 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
         claim_ids=[claim_id],
         reviewer="reviewer-1",
         patient_body="维生素 D 状态与衰弱之间存在研究关联，结果需要结合个人检查理解。",
+        profile=_profile(claim_id),
     )
     for target in ("in_review", "approved"):
         service.transition_card(card_id, reviewer="reviewer-1", target=target)
@@ -148,7 +219,7 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
         assert json.loads(admission["condition_codes_json"]) == [
             "COND_VITAMIN_D_DEFICIENCY"
         ]
-        assert connection.execute("SELECT grade FROM knowledge_cards").fetchone()[0] == "low"
+        assert connection.execute("SELECT grade FROM knowledge_cards").fetchone()[0] == "moderate"
 
 
 def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path) -> None:
@@ -162,14 +233,7 @@ def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path
     service.review_claim(
         claim_id,
         reviewer="reviewer-1",
-        review=ClaimReviewInput(
-            decision="approved",
-            corrected_text="Lower vitamin D status was associated with frailty.",
-            corrected_study_design="cohort_study",
-            inference="associational",
-            grade="low",
-            condition_code="COND_VITAMIN_D_DEFICIENCY",
-        ),
+        review=_approved_review(),
     )
     card_id = service.create_card_draft(
         condition_code="COND_VITAMIN_D_DEFICIENCY",
@@ -177,6 +241,7 @@ def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path
         claim_ids=[claim_id],
         reviewer="reviewer-1",
         patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(claim_id),
     )
     assert ReviewStore(database).list_published_cards("COND_VITAMIN_D_DEFICIENCY") == []
     for target in ("in_review", "approved", "published"):
@@ -187,6 +252,221 @@ def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path
         detail={"source": "test"},
     )
     assert ReviewStore(database).list_published_cards("COND_VITAMIN_D_DEFICIENCY") == []
+
+
+def test_ai_differences_require_human_resolution_before_admission(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database, consistency="needs_review")
+    with pytest.raises(ValueError, match="human resolution"):
+        service.admit_paper(
+            paper_id,
+            reviewer="reviewer-1",
+            condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        )
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        consistency_resolution="The locator was corrected against the full text.",
+    )
+
+
+def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    card_id = service.create_card_draft(
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="研究结论仍然不确定。",
+        profile=_profile(claim_id, certainty="low"),
+    )
+    for target in ("in_review", "approved"):
+        service.transition_card(card_id, reviewer="reviewer-1", target=target)
+    with pytest.raises(ValueError, match="high or moderate"):
+        service.transition_card(card_id, reviewer="reviewer-1", target="published")
+
+
+def test_claim_without_structured_result_cannot_be_admitted(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+        connection.execute("DELETE FROM results WHERE paper_id = ?", (paper_id,))
+    with pytest.raises(ValueError, match="structured Result"):
+        service.admit_paper(
+            paper_id,
+            reviewer="reviewer-1",
+            condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        )
+
+
+def test_preprint_cannot_support_patient_visible_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE papers SET publication_status = 'preprint' WHERE id = ?", (paper_id,)
+        )
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    with pytest.raises(ValueError, match="formal publications"):
+        service.create_card_draft(
+            condition_code="COND_VITAMIN_D_DEFICIENCY",
+            version="1.0.0",
+            claim_ids=[claim_id],
+            reviewer="reviewer-1",
+            patient_body="研究结论仍需正式发表后确认。",
+            profile=_profile(claim_id),
+        )
+
+
+def test_unknown_publication_status_cannot_support_patient_visible_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database, publication_status="unknown")
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    with pytest.raises(ValueError, match="formal publications"):
+        service.create_card_draft(
+            condition_code="COND_VITAMIN_D_DEFICIENCY",
+            version="1.0.0",
+            claim_ids=[claim_id],
+            reviewer="reviewer-1",
+            patient_body="论文发表状态仍需核验。",
+            profile=_profile(claim_id),
+        )
+
+
+def test_unknown_publication_does_not_block_complete_formal_evidence_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    formal_paper, formal_claim = _review_case(database)
+    unknown_paper, _ = _review_case(database, publication_status="unknown")
+    for paper_id in (formal_paper, unknown_paper):
+        service.admit_paper(
+            paper_id,
+            reviewer="reviewer-1",
+            condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        )
+    service.review_claim(formal_claim, reviewer="reviewer-1", review=_approved_review())
+    service.create_card_draft(
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[formal_claim],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(formal_claim),
+    )
+
+
+def test_publish_rechecks_publication_status_after_card_draft(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    card_id = service.create_card_draft(
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(claim_id),
+    )
+    for target in ("in_review", "approved"):
+        service.transition_card(card_id, reviewer="reviewer-1", target=target)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE papers SET publication_status = 'unknown' WHERE id = ?", (paper_id,)
+        )
+    with pytest.raises(ValueError, match="ineligible evidence"):
+        service.transition_card(card_id, reviewer="reviewer-1", target="published")
+
+
+@pytest.mark.parametrize("study_design", ["case_report", "case_series"])
+def test_case_reports_cannot_support_patient_visible_profile(tmp_path, study_design) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE papers SET study_design_candidate = ? WHERE id = ?",
+            (study_design, paper_id),
+        )
+        connection.execute(
+            "UPDATE claims SET candidate_study_design = ?, candidate_claim_type = 'safety' "
+            "WHERE id = ?",
+            (study_design, claim_id),
+        )
+    service.admit_paper(
+        paper_id,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(
+        claim_id,
+        reviewer="reviewer-1",
+        review=ClaimReviewInput(
+            decision="approved",
+            corrected_text="This report records a possible safety signal.",
+            corrected_study_design=study_design,
+            inference="descriptive",
+            risk_of_bias=RiskOfBiasInput(
+                tool="safety_signal",
+                overall="high",
+                rationale="A case report cannot estimate incidence or establish causality.",
+            ),
+            applicability="Safety signal only.",
+            condition_code="COND_VITAMIN_D_DEFICIENCY",
+        )
+    )
+    with pytest.raises(ValueError, match="case-report"):
+        service.create_card_draft(
+            condition_code="COND_VITAMIN_D_DEFICIENCY",
+            version="1.0.0",
+            claim_ids=[claim_id],
+            reviewer="reviewer-1",
+            patient_body="研究结果仅作为安全信号记录。",
+            profile=_profile(claim_id),
+        )
+
+
+def test_unreviewed_eligible_result_blocks_evidence_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    first_paper, first_claim = _review_case(database)
+    second_paper, _ = _review_case(database)
+    for paper_id in (first_paper, second_paper):
+        service.admit_paper(
+            paper_id,
+            reviewer="reviewer-1",
+            condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        )
+    service.review_claim(first_claim, reviewer="reviewer-1", review=_approved_review())
+    with pytest.raises(ValueError, match="all eligible results"):
+        service.create_card_draft(
+            condition_code="COND_VITAMIN_D_DEFICIENCY",
+            version="1.0.0",
+            claim_ids=[first_claim],
+            reviewer="reviewer-1",
+            patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+            profile=_profile(first_claim),
+        )
 
 
 def test_patient_card_body_rejects_diagnostic_wording(tmp_path) -> None:
@@ -200,14 +480,7 @@ def test_patient_card_body_rejects_diagnostic_wording(tmp_path) -> None:
     service.review_claim(
         claim_id,
         reviewer="reviewer-1",
-        review=ClaimReviewInput(
-            decision="approved",
-            corrected_text="Lower vitamin D status was associated with frailty.",
-            corrected_study_design="cohort_study",
-            inference="associational",
-            grade="low",
-            condition_code="COND_VITAMIN_D_DEFICIENCY",
-        ),
+        review=_approved_review(),
     )
     with pytest.raises(ValueError, match="forbidden term"):
         service.create_card_draft(
@@ -216,6 +489,7 @@ def test_patient_card_body_rejects_diagnostic_wording(tmp_path) -> None:
             claim_ids=[claim_id],
             reviewer="reviewer-1",
             patient_body="这是疾病诊断结果。",
+            profile=_profile(claim_id),
         )
 
 
@@ -227,14 +501,7 @@ def test_rejecting_reviewed_evidence_stales_a_published_card(tmp_path) -> None:
         reviewer="reviewer-1",
         condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
     )
-    approved = ClaimReviewInput(
-        decision="approved",
-        corrected_text="Lower vitamin D status was associated with frailty.",
-        corrected_study_design="cohort_study",
-        inference="associational",
-        grade="low",
-        condition_code="COND_VITAMIN_D_DEFICIENCY",
-    )
+    approved = _approved_review()
     service.review_claim(claim_id, reviewer="reviewer-1", review=approved)
     card_id = service.create_card_draft(
         condition_code="COND_VITAMIN_D_DEFICIENCY",
@@ -242,6 +509,7 @@ def test_rejecting_reviewed_evidence_stales_a_published_card(tmp_path) -> None:
         claim_ids=[claim_id],
         reviewer="reviewer-1",
         patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(claim_id),
     )
     for target in ("in_review", "approved", "published"):
         service.transition_card(card_id, reviewer="reviewer-1", target=target)

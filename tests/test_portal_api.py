@@ -73,10 +73,26 @@ def _publish_card(path, condition_code: str = "COND_PREDIABETES") -> None:
     with Database(path).transaction() as connection:
         connection.execute(
             """
+            INSERT INTO evidence_profiles(
+                id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome,
+                timepoint, estimate_target, evidence_body_complete, certainty,
+                certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES ('profile-1', ?, '1.0.0', 'Test ingredient', 'Test form',
+                'Adults 40+', 'Not reported', 'Test dose', 'Comparator', 'Outcome',
+                'Timepoint', 'Test target', 1, 'moderate', 'Test-only reviewed profile',
+                '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z',
+                '2026-08-11T00:00:00Z')
+            """,
+            (condition_code,),
+        )
+        connection.execute(
+            """
             INSERT INTO knowledge_cards(
-                id, condition_code, version, status, grade, reviewer, reviewed_at,
+                id, condition_code, version, status, grade, evidence_profile_id,
+                reviewer, reviewed_at,
                 published_at, patient_visible_body, created_at
-            ) VALUES ('card-1', ?, '1.0.0', 'published', 'moderate', 'reviewer',
+            ) VALUES ('card-1', ?, '1.0.0', 'published', 'moderate', 'profile-1', 'reviewer',
                 '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
                 '这是经过审核的营养健康知识。', '2026-08-11T00:00:00Z')
             """,
