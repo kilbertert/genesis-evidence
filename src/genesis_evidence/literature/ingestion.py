@@ -49,11 +49,15 @@ class LiteratureIngestionService:
         query: str,
         limit: int,
         download_full_text: bool = True,
+        search_stream: str = "effect",
+        query_version: str = "1",
     ) -> IngestionSummary:
         run_id = self._store.start_collection(
             condition_code=condition_code,
             source=connector.source.value,
             query=query,
+            search_stream=search_stream,
+            query_version=query_version,
         )
         counts = {
             "discovered": 0,
@@ -138,7 +142,10 @@ class LiteratureIngestionService:
             return None
         artifact = self._downloader.download(candidate)
         document = self._jats.parse(artifact.content)
-        if document.license.rights_status != RightsStatus.REDISTRIBUTABLE:
+        if document.license.rights_status not in {
+            RightsStatus.REDISTRIBUTABLE,
+            RightsStatus.INTERNAL_TDM_ONLY,
+        }:
             return None
         stored = self._objects.put(artifact.content, suffix="xml")
         self._store.save_full_text(

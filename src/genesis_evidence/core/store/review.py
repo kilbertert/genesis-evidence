@@ -9,15 +9,18 @@ from datetime import UTC, datetime
 from ..patient_copy import validate_patient_copy
 from .database import Database
 
-GRADE_ORDER = {"high": 0, "moderate": 1, "low": 2, "very_low": 3}
-
 
 class ReviewStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
     def admit_paper(
-        self, paper_id: str, *, reviewer: str, condition_codes: tuple[str, ...]
+        self,
+        paper_id: str,
+        *,
+        reviewer: str,
+        condition_codes: tuple[str, ...],
+        consistency_resolution: str | None,
     ) -> None:
         with self.database.transaction() as connection:
             paper = connection.execute(
@@ -28,10 +31,30 @@ class ReviewStore:
             if paper["integrity_status"] != "clear":
                 raise ValueError("paper integrity must be clear before internal admission")
             extraction = connection.execute(
-                "SELECT id FROM paper_extractions WHERE paper_id = ? LIMIT 1", (paper_id,)
+                """
+                SELECT id, consistency_status FROM paper_extractions
+                WHERE paper_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (paper_id,),
             ).fetchone()
             if extraction is None:
                 raise ValueError("paper has no AI extraction")
+            if extraction["consistency_status"] == "needs_review" and not consistency_resolution:
+                raise ValueError("AI extraction differences require a human resolution")
+            studies = connection.execute(
+                """
+                SELECT s.id FROM studies s JOIN study_publications sp ON sp.study_id = s.id
+                WHERE sp.paper_id = ?
+                """,
+                (paper_id,),
+            ).fetchall()
+            if not studies:
+                raise ValueError("paper has no Study/Publication relationship")
+            result_count = connection.execute(
+                "SELECT count(*) FROM results WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            if result_count == 0:
+                raise ValueError("paper has no structured Result records")
             known = {
                 row[0]
                 for row in connection.execute(
@@ -44,15 +67,37 @@ class ReviewStore:
             connection.execute(
                 """
                 INSERT INTO paper_admissions(
-                    paper_id, status, condition_codes_json, reviewer, reviewed_at
-                ) VALUES (?, 'internally_admitted', ?, ?, ?)
+                    paper_id, status, condition_codes_json, reviewer, reviewed_at,
+                    consistency_resolution
+                ) VALUES (?, 'internally_admitted', ?, ?, ?, ?)
                 ON CONFLICT(paper_id) DO UPDATE SET
                     status = excluded.status,
                     condition_codes_json = excluded.condition_codes_json,
                     reviewer = excluded.reviewer,
-                    reviewed_at = excluded.reviewed_at
+                    reviewed_at = excluded.reviewed_at,
+                    consistency_resolution = excluded.consistency_resolution
                 """,
-                (paper_id, json.dumps(condition_codes), reviewer, _now()),
+                (
+                    paper_id,
+                    json.dumps(condition_codes),
+                    reviewer,
+                    _now(),
+                    consistency_resolution,
+                ),
+            )
+            reviewed_at = _now()
+            connection.execute(
+                """
+                UPDATE studies SET status = 'verified', reviewer = ?, reviewed_at = ?
+                WHERE id IN (SELECT study_id FROM study_publications WHERE paper_id = ?)
+                """,
+                (reviewer, reviewed_at, paper_id),
+            )
+            connection.execute(
+                """
+                UPDATE study_publications SET reviewer = ?, reviewed_at = ? WHERE paper_id = ?
+                """,
+                (reviewer, reviewed_at, paper_id),
             )
             self._audit(
                 connection,
@@ -60,7 +105,10 @@ class ReviewStore:
                 paper_id,
                 "internally_admitted",
                 reviewer,
-                {"condition_codes": condition_codes},
+                {
+                    "condition_codes": condition_codes,
+                    "consistency_resolution": consistency_resolution,
+                },
             )
 
     def reject_paper(self, paper_id: str, *, reviewer: str) -> None:
@@ -86,13 +134,15 @@ class ReviewStore:
         corrected_text: str | None,
         corrected_study_design: str | None,
         inference: str | None,
-        grade: str | None,
+        risk_of_bias: object | None,
+        applicability: str | None,
         condition_code: str | None,
     ) -> None:
         with self.database.transaction() as connection:
             claim = connection.execute(
                 """
-                SELECT c.paper_id, p.integrity_status, pa.status AS admission_status,
+                SELECT c.paper_id, c.result_id, p.integrity_status,
+                    pa.status AS admission_status,
                     pa.condition_codes_json
                 FROM claims c JOIN papers p ON p.id = c.paper_id
                 LEFT JOIN paper_admissions pa ON pa.paper_id = c.paper_id
@@ -106,6 +156,8 @@ class ReviewStore:
                 raise ValueError("paper must be internally admitted before claim review")
             if decision == "approved" and claim["integrity_status"] != "clear":
                 raise ValueError("claim cannot be approved while paper integrity is not clear")
+            if decision == "approved" and not claim["result_id"]:
+                raise ValueError("claim requires a structured Result before approval")
             if decision == "approved" and condition_code not in json.loads(
                 claim["condition_codes_json"]
             ):
@@ -114,12 +166,15 @@ class ReviewStore:
                 """
                 INSERT INTO claim_reviews(
                     claim_id, decision, corrected_text, corrected_study_design,
-                    inference, grade, condition_code, reviewer, reviewed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    inference, risk_of_bias_json, applicability,
+                    condition_code, reviewer, reviewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(claim_id) DO UPDATE SET
                     decision = excluded.decision, corrected_text = excluded.corrected_text,
                     corrected_study_design = excluded.corrected_study_design,
-                    inference = excluded.inference, grade = excluded.grade,
+                    inference = excluded.inference,
+                    risk_of_bias_json = excluded.risk_of_bias_json,
+                    applicability = excluded.applicability,
                     condition_code = excluded.condition_code, reviewer = excluded.reviewer,
                     reviewed_at = excluded.reviewed_at
                 """,
@@ -129,7 +184,8 @@ class ReviewStore:
                     corrected_text,
                     corrected_study_design,
                     inference,
-                    grade,
+                    json.dumps(risk_of_bias, ensure_ascii=False) if risk_of_bias else None,
+                    applicability,
                     condition_code,
                     reviewer,
                     _now(),
@@ -137,6 +193,14 @@ class ReviewStore:
             )
             connection.execute(
                 "UPDATE claims SET status = ? WHERE id = ?",
+                ("reviewed" if decision == "approved" else "rejected", claim_id),
+            )
+            connection.execute(
+                """
+                UPDATE results SET status = ? WHERE id = (
+                    SELECT result_id FROM claims WHERE id = ?
+                )
+                """,
                 ("reviewed" if decision == "approved" else "rejected", claim_id),
             )
             connection.execute(
@@ -154,7 +218,11 @@ class ReviewStore:
                 claim_id,
                 f"claim_{decision}",
                 reviewer,
-                {"condition_code": condition_code, "grade": grade},
+                {
+                    "condition_code": condition_code,
+                    "risk_of_bias": risk_of_bias,
+                    "applicability": applicability,
+                },
             )
 
     def create_card(
@@ -165,18 +233,23 @@ class ReviewStore:
         claim_ids: tuple[str, ...],
         reviewer: str,
         patient_body: str,
+        profile: dict[str, object],
     ) -> str:
         card_id = str(uuid.uuid4())
         patient_body = validate_patient_copy(patient_body)
         with self.database.transaction() as connection:
             rows = connection.execute(
                 f"""
-                SELECT c.id, c.paper_id, c.evidence_text, c.locator,
-                    cr.decision, cr.condition_code, cr.grade,
+                SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
+                    c.candidate_claim_type,
+                    cr.decision, cr.condition_code, cr.corrected_study_design,
                     p.integrity_status, pa.status AS admission_status
+                    , r.population, r.baseline_nutrient_status, r.ingredient_name,
+                    r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint
                 FROM claims c JOIN claim_reviews cr ON cr.claim_id = c.id
                 JOIN papers p ON p.id = c.paper_id
                 JOIN paper_admissions pa ON pa.paper_id = c.paper_id
+                JOIN results r ON r.id = c.result_id
                 WHERE c.id IN ({_placeholders(claim_ids)})
                 """,
                 claim_ids,
@@ -191,16 +264,136 @@ class ReviewStore:
                 for row in rows
             ):
                 raise ValueError("card claims are not eligible for publication")
-            grade = max((str(row["grade"]) for row in rows), key=GRADE_ORDER.__getitem__)
+            publication_status = connection.execute(
+                f"""
+                SELECT p.publication_status FROM papers p
+                JOIN claims c ON c.paper_id = p.id
+                WHERE c.id IN ({_placeholders(claim_ids)})
+                """,
+                claim_ids,
+            ).fetchall()
+            if any(row["publication_status"] != "formal" for row in publication_status):
+                raise ValueError(
+                    "only verified formal publications can support a patient-visible profile"
+                )
+            if any(
+                row["candidate_claim_type"] == "mechanism"
+                    or row["corrected_study_design"]
+                    in {"animal_study", "in_vitro_study", "case_series", "case_report"}
+                for row in rows
+            ):
+                raise ValueError(
+                    "mechanism and case-report results cannot support a patient-visible card"
+                )
+            dimensions = (
+                "population",
+                "baseline_nutrient_status",
+                "ingredient_name",
+                "ingredient_form",
+                "dose",
+                "comparator",
+                "outcome",
+                "timepoint",
+            )
+            if any(len({str(row[field]) for row in rows}) != 1 for field in dimensions):
+                raise ValueError("one evidence profile cannot mix different PICOTS result scopes")
+            first = rows[0]
+            eligible = connection.execute(
+                """
+                SELECT c.id, c.status, cr.decision FROM claims c
+                LEFT JOIN claim_reviews cr ON cr.claim_id = c.id
+                JOIN results r ON r.id = c.result_id
+                JOIN papers p ON p.id = c.paper_id
+                JOIN paper_admissions pa ON pa.paper_id = p.id
+                WHERE p.integrity_status = 'clear'
+                    AND p.publication_status = 'formal'
+                    AND pa.status = 'internally_admitted'
+                    AND c.candidate_claim_type <> 'mechanism'
+                    AND COALESCE(cr.corrected_study_design, c.candidate_study_design) NOT IN (
+                        'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM json_each(pa.condition_codes_json) WHERE value = ?
+                    )
+                    AND r.population = ? AND r.baseline_nutrient_status = ?
+                    AND r.ingredient_name = ? AND r.ingredient_form = ?
+                    AND r.dose = ? AND r.comparator = ? AND r.outcome = ?
+                    AND r.timepoint = ?
+                """,
+                (condition_code, *(first[field] for field in dimensions)),
+            ).fetchall()
+            if any(
+                row["status"] != "reviewed" or row["decision"] != "approved"
+                for row in eligible
+            ):
+                raise ValueError("all eligible results must be reviewed before profile creation")
+            if {row["id"] for row in eligible} != set(claim_ids):
+                raise ValueError("evidence profile must include every reviewed eligible result")
+            interpretations = profile["interpretations"]
+            if not isinstance(interpretations, dict) or set(interpretations) != set(claim_ids):
+                raise ValueError("evidence profile requires one interpretation per selected result")
             now = _now()
+            profile_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                INSERT INTO evidence_profiles(
+                    id, condition_code, version, ingredient_name, ingredient_form,
+                    population, baseline_nutrient_status, dose, comparator, outcome,
+                    timepoint, estimate_target, certainty, certainty_rationale,
+                    evidence_body_complete, evidence_cutoff_date, reviewer, reviewed_at,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile_id,
+                    condition_code,
+                    version,
+                    first["ingredient_name"],
+                    first["ingredient_form"],
+                    first["population"],
+                    first["baseline_nutrient_status"],
+                    first["dose"],
+                    first["comparator"],
+                    first["outcome"],
+                    first["timepoint"],
+                    profile["estimate_target"],
+                    profile["certainty"],
+                    profile["certainty_rationale"],
+                    1 if profile["evidence_body_complete"] else 0,
+                    profile["evidence_cutoff_date"],
+                    reviewer,
+                    now,
+                    now,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (profile_id, row["result_id"], interpretations[row["id"]])
+                    for row in rows
+                ],
+            )
             connection.execute(
                 """
                 INSERT INTO knowledge_cards(
-                    id, condition_code, version, status, grade, reviewer,
+                    id, condition_code, version, status, grade, evidence_profile_id, reviewer,
                     reviewed_at, patient_visible_body, created_at
-                ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
                 """,
-                (card_id, condition_code, version, grade, reviewer, now, patient_body, now),
+                (
+                    card_id,
+                    condition_code,
+                    version,
+                    profile["certainty"],
+                    profile_id,
+                    reviewer,
+                    now,
+                    patient_body,
+                    now,
+                ),
             )
             connection.executemany(
                 """
@@ -215,7 +408,12 @@ class ReviewStore:
                 card_id,
                 "card_drafted",
                 reviewer,
-                {"condition_code": condition_code, "version": version, "claims": claim_ids},
+                {
+                    "condition_code": condition_code,
+                    "version": version,
+                    "claims": claim_ids,
+                    "evidence_profile_id": profile_id,
+                },
             )
         return card_id
 
@@ -235,6 +433,10 @@ class ReviewStore:
                 raise ValueError(f"invalid card transition: {card['status']} -> {target}")
             if target == "published":
                 self._require_publishable(connection, card_id)
+                if card["grade"] not in {"high", "moderate"}:
+                    raise ValueError(
+                        "patient-visible benefit cards require high or moderate certainty"
+                    )
                 connection.execute(
                     """
                     UPDATE knowledge_cards SET status = 'stale'
@@ -263,7 +465,8 @@ class ReviewStore:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, condition_code, version, grade, patient_visible_body, published_at
+                SELECT id, condition_code, version, grade, evidence_profile_id,
+                    patient_visible_body, published_at
                 FROM knowledge_cards
                 WHERE condition_code = ? AND status = 'published'
                 ORDER BY published_at DESC, version DESC
@@ -322,8 +525,13 @@ class ReviewStore:
             claims = connection.execute(
                 """
                 SELECT c.*, cr.decision, cr.corrected_text, cr.corrected_study_design,
-                    cr.inference, cr.grade, cr.condition_code, cr.reviewer, cr.reviewed_at
+                    cr.inference, cr.risk_of_bias_json, cr.applicability,
+                    cr.condition_code, cr.reviewer, cr.reviewed_at,
+                    r.population, r.baseline_nutrient_status, r.ingredient_name,
+                    r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
+                    r.effect_estimate, r.statistical_details
                 FROM claims c LEFT JOIN claim_reviews cr ON cr.claim_id = c.id
+                LEFT JOIN results r ON r.id = c.result_id
                 WHERE c.paper_id = ? ORDER BY c.created_at, c.id
                 """,
                 (paper_id,),
@@ -331,6 +539,9 @@ class ReviewStore:
         return {
             "paper": dict(paper),
             "extraction": json.loads(extraction["extraction_json"]) if extraction else None,
+            "second_extraction": (
+                json.loads(extraction["second_extraction_json"]) if extraction else None
+            ),
             "consistency": json.loads(extraction["consistency_json"]) if extraction else None,
             "admission": (
                 {
@@ -341,7 +552,7 @@ class ReviewStore:
                 else None
             ),
             "sources": [dict(row) for row in sources],
-            "claims": [dict(row) for row in claims],
+            "claims": [_claim_dict(row) for row in claims],
         }
 
     def list_cards(self) -> list[dict[str, object]]:
@@ -349,6 +560,7 @@ class ReviewStore:
             rows = connection.execute(
                 """
                 SELECT kc.id, kc.condition_code, kc.version, kc.status, kc.grade,
+                    kc.evidence_profile_id,
                     kc.reviewer, kc.reviewed_at, kc.published_at, kc.patient_visible_body,
                     count(cc.claim_id) AS claim_count,
                     group_concat(cc.claim_id) AS claim_ids,
@@ -370,14 +582,20 @@ class ReviewStore:
     @staticmethod
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
-            "SELECT condition_code FROM knowledge_cards WHERE id = ?", (card_id,)
+            "SELECT condition_code, evidence_profile_id FROM knowledge_cards WHERE id = ?",
+            (card_id,),
         ).fetchone()
         evidence = connection.execute(
             """
             SELECT count(*) AS total,
                 sum(CASE WHEN cr.decision <> 'approved'
                     OR p.integrity_status <> 'clear'
+                    OR p.publication_status <> 'formal'
                     OR pa.status <> 'internally_admitted'
+                    OR c.candidate_claim_type = 'mechanism'
+                    OR cr.corrected_study_design IN (
+                        'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                    )
                     OR cr.condition_code <> ? THEN 1 ELSE 0 END) AS invalid
             FROM card_claims cc
             JOIN claims c ON c.id = cc.claim_id
@@ -388,7 +606,17 @@ class ReviewStore:
             """,
             (card["condition_code"], card_id),
         ).fetchone()
-        if evidence["total"] == 0 or evidence["invalid"]:
+        missing_profile_results = connection.execute(
+            """
+            SELECT count(*) FROM card_claims cc
+            JOIN claims c ON c.id = cc.claim_id
+            LEFT JOIN evidence_profile_results epr
+                ON epr.profile_id = ? AND epr.result_id = c.result_id
+            WHERE cc.card_id = ? AND epr.result_id IS NULL
+            """,
+            (card["evidence_profile_id"], card_id),
+        ).fetchone()[0]
+        if evidence["total"] == 0 or evidence["invalid"] or missing_profile_results:
             raise ValueError("knowledge card has ineligible evidence")
 
     @staticmethod
@@ -426,6 +654,13 @@ def _placeholders(values: tuple[str, ...]) -> str:
     if not values:
         raise ValueError("at least one value is required")
     return ",".join("?" for _ in values)
+
+
+def _claim_dict(row) -> dict[str, object]:
+    claim = dict(row)
+    raw = claim.pop("risk_of_bias_json", None)
+    claim["risk_of_bias"] = json.loads(raw) if raw else None
+    return claim
 
 
 def _now() -> str:

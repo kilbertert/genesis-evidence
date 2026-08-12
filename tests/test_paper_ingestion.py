@@ -34,6 +34,10 @@ JATS_WITH_RESULT = JATS_CC_BY.replace(
     b"<sec><title>Results</title><p>Protein significantly improved muscle strength.</p></sec>"
     b"</body>",
 )
+JATS_INTERNAL_TDM = JATS_WITH_RESULT.replace(
+    b"https://creativecommons.org/licenses/by/4.0/",
+    b"https://creativecommons.org/licenses/by-sa/4.0/",
+).replace(b"CC BY 4.0", b"CC BY-SA 4.0")
 
 
 @dataclass
@@ -49,6 +53,11 @@ class FakeConnector:
 class FakeDownloader:
     def download(self, candidate: FullTextCandidate) -> DownloadedArtifact:
         return DownloadedArtifact(candidate, JATS_WITH_RESULT, "application/xml", candidate.url)
+
+
+class InternalTdmDownloader(FakeDownloader):
+    def download(self, candidate: FullTextCandidate) -> DownloadedArtifact:
+        return DownloadedArtifact(candidate, JATS_INTERNAL_TDM, "application/xml", candidate.url)
 
 
 class FakeIntegrityChecker:
@@ -70,6 +79,14 @@ class FakeAnalyzer:
             research_question="Does protein improve muscle strength?",
             study_design="randomized_controlled_trial",
             population=["Older adults"],
+            countries_and_centers="Not reported",
+            recruitment_period="Not reported",
+            registration_ids=[],
+            protocol_status="Not reported",
+            statistical_analysis_plan_status="Not reported",
+            ethics="Not reported",
+            funding="Not reported",
+            conflicts_of_interest="Not reported",
             condition_candidates=[],
             directly_reported_symptoms=[],
             studied_approach=["Protein supplementation"],
@@ -83,6 +100,16 @@ class FakeAnalyzer:
                     locator="Results",
                     claim_type="intervention_effect",
                     inference="causal",
+                    population="Older adults",
+                    baseline_nutrient_status="Not reported",
+                    ingredient_name="Protein",
+                    ingredient_form="Protein supplement; form not reported",
+                    dose="Not reported",
+                    comparator="Placebo",
+                    outcome="Muscle strength",
+                    timepoint="Not reported",
+                    effect_estimate="Improved muscle strength",
+                    statistical_details="Not reported",
                 )
             ],
         )
@@ -90,6 +117,9 @@ class FakeAnalyzer:
             model="fake-extractor",
             extraction_run_id="extract-1",
             extraction=extraction,
+            second_model="fake-extractor-independent",
+            second_run_id="extract-2",
+            second_extraction=extraction,
             check_model="fake-checker",
             check_run_id="check-1",
             consistency=ConsistencyReport(verdict="consistent", issues=[]),
@@ -135,6 +165,18 @@ def test_paper_store_deduplicates_the_same_paper_across_sources(tmp_path) -> Non
         assert connection.execute("SELECT count(*) FROM paper_sources").fetchone()[0] == 2
 
 
+def test_unverified_repository_record_keeps_unknown_publication_status(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    PaperStore(database).upsert_paper(
+        _record(source=SourceName.CORE, source_id="core-1"),
+        source_url="https://example.test/core-1",
+    )
+    with database.connect() as connection:
+        status = connection.execute("SELECT publication_status FROM papers").fetchone()[0]
+    assert status == "unknown"
+
+
 def test_object_store_detects_corruption_in_an_existing_digest_path(tmp_path) -> None:
     objects = ObjectStore(tmp_path / "objects")
     stored = objects.put(b"trusted", suffix="xml")
@@ -172,6 +214,32 @@ def test_collection_persists_full_text_and_pending_candidate_claims(tmp_path) ->
         assert connection.execute("SELECT processed_at FROM full_texts").fetchone()[0]
         assert connection.execute("SELECT status FROM paper_admissions").fetchone()[0] == "pending"
         assert connection.execute("SELECT count(*) FROM claims").fetchone()[0] >= 1
+        assert connection.execute("SELECT count(*) FROM results").fetchone()[0] >= 1
+        assert connection.execute("SELECT count(*) FROM studies").fetchone()[0] == 1
+        extraction = connection.execute("SELECT * FROM paper_extractions").fetchone()
+        assert extraction["second_run_id"] == "extract-2"
+
+
+def test_internal_tdm_full_text_is_processed_but_not_marked_redistributable(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    service = LiteratureIngestionService(
+        store=PaperStore(database),
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=InternalTdmDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+        analyzer=FakeAnalyzer(),
+    )
+    summary = service.collect(
+        condition_code="COND_SARCOPENIA_FRAILTY",
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="protein AND ageing",
+        limit=1,
+    )
+    assert summary.downloaded_full_texts == 1
+    with database.connect() as connection:
+        full_text = connection.execute("SELECT rights_status FROM full_texts").fetchone()
+        assert full_text["rights_status"] == "internal_tdm_only"
 
 
 def test_retracted_paper_never_enters_full_text_or_claim_processing(tmp_path) -> None:
