@@ -28,6 +28,7 @@ sessionStorage 并随每次请求发送。
 | unit | 作用 |
 |---|---|
 | `genesis-evidence-portal.service` | 报告门户(FastAPI,8125) |
+| `genesis-evidence-report-worker.service` | 报告解析后台 worker,逐份消费已上传报告 |
 | `genesis-evidence-review.service` | 审核工作台(FastAPI,8126) |
 | `genesis-evidence-worker.service` | 论文抽取后台 worker,逐条消费 `paper_extraction_jobs` |
 | `genesis-evidence-frp.service` | FRP 隧道,暴露上面两个 HTTP 服务 |
@@ -35,8 +36,8 @@ sessionStorage 并随每次请求发送。
 运维命令(均以 `claude` 用户):
 
 ```bash
-systemctl --user status genesis-evidence-{portal,review,worker,frp}
-systemctl --user restart genesis-evidence-worker   # 改了 env 后重启 worker
+systemctl --user status genesis-evidence-{portal,report-worker,review,worker,frp}
+systemctl --user restart genesis-evidence-{report-worker,worker}   # 改了模型 env 后重启
 ```
 
 ## 环境变量
@@ -49,7 +50,8 @@ systemctl --user restart genesis-evidence-worker   # 改了 env 后重启 worker
   `ARK_MAX_TOKENS`(抽取输出预算)。
 - `var/portal.env` — 报告门户:
   `GENESIS_EVIDENCE_PORTAL_HOST/PORT`、`OPENAI_API_KEY`、`OPENAI_RESPONSES_URL`、
-  `OPENAI_REPORT_MODEL` 等。
+  `OPENAI_REPORT_MODEL` 等。上传接口先持久化并返回 `202 uploaded`,报告 worker 完成后
+  状态进入 `pending_confirmation`,前端通过带访问令牌的短请求轮询,不依赖反向代理长连接。
 
 数据:`var/genesis-evidence.sqlite3`(SQLite)、`var/objects`(内容寻址全文)。
 

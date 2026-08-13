@@ -186,5 +186,19 @@ def test_report_state_and_file_identity_cannot_be_replayed(tmp_path) -> None:
     with pytest.raises(ValueError, match="do not match"):
         store.save_extraction(handle.report_id, replace(pending, files=("wrong.txt",)))
     store.save_extraction(handle.report_id, pending)
-    with pytest.raises(ValueError, match="only uploaded"):
+    with pytest.raises(ValueError, match="only queued"):
         store.save_extraction(handle.report_id, pending)
+
+
+def test_report_extraction_claim_recovery_and_failure(tmp_path) -> None:
+    store, handle = _store(tmp_path)
+    assert store.claim_next_extraction() == handle.report_id
+    assert store.get(handle.report_id, handle.access_token)["status"] == "extracted"
+    assert store.recover_running_extractions() == 1
+    assert store.get(handle.report_id, handle.access_token)["status"] == "uploaded"
+    assert store.claim_next_extraction() == handle.report_id
+    store.fail_extraction(handle.report_id, RuntimeError("provider detail"))
+    failed = store.get(handle.report_id, handle.access_token)
+    assert failed["status"] == "abandoned"
+    assert failed["warnings"] == ["报告智能解读失败，请重新上传或稍后重试。"]
+    assert "provider detail" not in str(failed)

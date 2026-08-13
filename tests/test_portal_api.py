@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from genesis_evidence.core.store import Database
+from genesis_evidence.core.store import Database, ObjectStore, ReportStore
 from genesis_evidence.portal.api import create_app
 from genesis_evidence.reports.extraction import (
     HealthReportExtractor,
@@ -10,6 +10,7 @@ from genesis_evidence.reports.extraction import (
     ModelReportExtraction,
     ReportProviderResult,
 )
+from genesis_evidence.reports.extraction_worker import ReportExtractionWorker
 
 
 class FakeProvider:
@@ -53,7 +54,6 @@ def _client(tmp_path, provider: FakeProvider | None = None):
     app = create_app(
         database_path=path,
         object_path=tmp_path / "objects",
-        extractor=HealthReportExtractor(max_bytes=1024, provider=provider),
         max_file_bytes=1024,
     )
     return path, provider, TestClient(app)
@@ -67,6 +67,14 @@ def _upload(client: TestClient):
             ("files", ("page-2.txt", b"second", "text/plain")),
         ],
     )
+
+
+def _process(path, tmp_path, provider: FakeProvider) -> None:
+    worker = ReportExtractionWorker(
+        store=ReportStore(Database(path), ObjectStore(tmp_path / "objects")),
+        extractor=HealthReportExtractor(max_bytes=1024, provider=provider),
+    )
+    assert worker.run_once()
 
 
 def _publish_card(path, condition_code: str = "COND_PREDIABETES") -> None:
@@ -124,44 +132,60 @@ def test_portal_serves_named_no_store_page_and_metric_catalog(tmp_path) -> None:
     assert {"code": "fasting_glucose", "label": "空腹血糖"} in metrics
 
 
-def test_upload_preserves_file_order_and_returns_pending_confirmation(tmp_path) -> None:
+def test_upload_preserves_file_order_and_returns_queued_report(tmp_path) -> None:
     _, provider, client = _client(tmp_path)
     response = _upload(client)
-    assert response.status_code == 200
+    assert response.status_code == 202
     body = response.json()
-    assert provider.filenames == ("page-1.txt", "page-2.txt")
-    assert body["status"] == "pending_confirmation"
+    assert provider.filenames == ()
+    assert body["status"] == "uploaded"
     assert body["files"][0]["original_name"] == "page-1.txt"
     assert body["files"][1]["original_name"] == "page-2.txt"
-    assert body["observations"][0]["evidence_text"].startswith("空腹血糖 6.8")
+    assert body["observations"] == []
     assert body["access_token"]
 
 
 def test_ambiguous_row_is_visible_and_defaults_to_excluded(tmp_path) -> None:
-    _, _, client = _client(tmp_path, FakeProvider(ambiguous=True))
-    observation = _upload(client).json()["observations"][0]
+    path, provider, client = _client(tmp_path, FakeProvider(ambiguous=True))
+    uploaded = _upload(client).json()
+    _process(path, tmp_path, provider)
+    observation = client.get(
+        f"/api/reports/{uploaded['report_id']}",
+        headers={"X-Report-Token": uploaded["access_token"]},
+    ).json()["observations"][0]
     assert observation["extraction_status"] == "ambiguous"
     assert observation["default_decision"] == "excluded"
     assert "模型标记为待核对" in observation["validation_issues"]
 
 
 def test_uncertain_subject_warning_survives_persistence(tmp_path) -> None:
-    _, _, client = _client(tmp_path, FakeProvider(subject="uncertain"))
-    body = _upload(client).json()
+    path, provider, client = _client(tmp_path, FakeProvider(subject="uncertain"))
+    uploaded = _upload(client).json()
+    _process(path, tmp_path, provider)
+    body = client.get(
+        f"/api/reports/{uploaded['report_id']}",
+        headers={"X-Report-Token": uploaded["access_token"]},
+    ).json()
     assert body["subject_consistency"] == "uncertain"
     assert any("无法确认所有页面" in warning for warning in body["warnings"])
 
 
 def test_confirmation_and_assessment_return_only_published_card_content(tmp_path) -> None:
-    path, _, client = _client(tmp_path)
+    path, provider, client = _client(tmp_path)
     uploaded = _upload(client).json()
     token = uploaded["access_token"]
+    report_id = uploaded["report_id"]
+    _process(path, tmp_path, provider)
+    uploaded = client.get(
+        f"/api/reports/{report_id}",
+        headers={"X-Report-Token": token},
+    ).json()
     headers = {"X-Report-Token": token}
     observation_id = uploaded["observations"][0]["id"]
     _publish_card(path)
 
     confirmed = client.post(
-        f"/api/reports/{uploaded['report_id']}/confirm",
+        f"/api/reports/{report_id}/confirm",
         headers=headers,
         json={
             "observations": [
@@ -176,7 +200,7 @@ def test_confirmation_and_assessment_return_only_published_card_content(tmp_path
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "confirmed"
     assessed = client.post(
-        f"/api/reports/{uploaded['report_id']}/assess",
+        f"/api/reports/{report_id}/assess",
         headers=headers,
     )
     assert assessed.status_code == 200
@@ -199,12 +223,11 @@ def test_public_upload_endpoint_has_a_global_model_budget(tmp_path) -> None:
     app = create_app(
         database_path=path,
         object_path=tmp_path / "objects",
-        extractor=HealthReportExtractor(max_bytes=1024, provider=FakeProvider()),
         max_file_bytes=1024,
         upload_limit=1,
     )
     client = TestClient(app)
-    assert _upload(client).status_code == 200
+    assert _upload(client).status_code == 202
     limited = _upload(client)
     assert limited.status_code == 429
     assert "请稍后再试" in limited.json()["detail"]
