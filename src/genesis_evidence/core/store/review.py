@@ -502,6 +502,8 @@ class ReviewStore:
                 """
                 SELECT p.id, p.title, p.doi, p.pmid, p.pmcid, p.year,
                     p.integrity_status, p.study_design_candidate,
+                    EXISTS(SELECT 1 FROM full_texts ft WHERE ft.paper_id = p.id)
+                        AS full_text_available,
                     COALESCE(pa.status, 'pending') AS admission_status,
                     pe.consistency_status,
                     pej.status AS extraction_job_status,
@@ -540,11 +542,12 @@ class ReviewStore:
             extraction_job = connection.execute(
                 """
                 SELECT id, status, stage, attempt_count, error_class, error_message,
-                    extraction_run_id, second_run_id, check_run_id, updated_at, completed_at
+                    extraction_run_id, second_run_id, check_run_id, updated_at, completed_at,
+                    EXISTS(SELECT 1 FROM full_texts WHERE paper_id = ?) AS full_text_available
                 FROM paper_extraction_jobs WHERE paper_id = ?
                 ORDER BY created_at DESC, id DESC LIMIT 1
                 """,
-                (paper_id,),
+                (paper_id, paper_id),
             ).fetchone()
             admission = connection.execute(
                 "SELECT * FROM paper_admissions WHERE paper_id = ?", (paper_id,)
