@@ -11,6 +11,14 @@
 
 产品对外名称统一为“体检报告解读与健康风险提示”。
 
+## 线上访问
+
+- 个人报告门户:https://genesis-evidence.ranlei.work
+- 论文证据审核工作台:https://genesis-evidence-review.ranlei.work(首页填 `GENESIS_EVIDENCE_REVIEW_API_KEY` 作为 Bearer)
+
+服务拓扑、环境变量和与旧 `genesis-health` 域名(`genesis-review` / `genesis-health`)
+的区分,见 [docs/deployment.md](docs/deployment.md)。
+
 ## Development
 
 ```bash
