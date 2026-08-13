@@ -154,6 +154,8 @@ class LiteratureExtractionWorker:
 
 
 def main() -> None:
+    if not os.getenv("ARK_API_KEY", "").strip():
+        raise SystemExit("ARK_API_KEY is not configured; the extraction worker cannot start")
     database_path = Path(os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3"))
     database = Database(database_path)
     database.initialize()
