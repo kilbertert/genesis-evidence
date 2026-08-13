@@ -88,9 +88,22 @@ $('upload').onclick = async () => {
     const data = new FormData(); files.forEach(file => data.append('files', file));
     const response = await fetch('/api/reports', {method:'POST', body:data});
     const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
-    report = body; reportId = body.report_id; token = body.access_token; metrics = metrics.length ? metrics : await jsonApi('/api/metrics'); renderConfirmation();
+    report = body; reportId = body.report_id; token = body.access_token;
+    await waitForExtraction();
+    metrics = metrics.length ? metrics : await jsonApi('/api/metrics'); renderConfirmation();
   } catch (error) { setMessage('uploadStatus', error.message, true); } finally { setBusy($('upload'), false); }
 };
+
+async function waitForExtraction() {
+  for (let attempt = 0; attempt < 300; attempt++) {
+    report = await jsonApi(`/api/reports/${reportId}`);
+    if (report.status === 'pending_confirmation') return;
+    if (report.status === 'abandoned') throw new Error(report.warnings?.[0] || '报告智能解读失败，请重新上传。');
+    setMessage('uploadStatus', report.status === 'extracted' ? '正在智能解读报告，请稍候…' : '报告已安全入队，等待智能解读…');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error('报告处理时间较长，请稍后重新打开并查询。');
+}
 
 function renderConfirmation() {
   $('uploadPanel').hidden = true; $('confirmPanel').hidden = false; setStep(2);

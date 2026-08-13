@@ -122,6 +122,85 @@ class ReportStore:
             self._audit(connection, report_id, "uploaded", {"file_count": len(files)})
         return ReportHandle(report_id, access_token)
 
+    def claim_next_extraction(self) -> str | None:
+        now = _now()
+        with self.database.transaction() as connection:
+            report = connection.execute(
+                "SELECT id FROM reports WHERE status = 'uploaded' ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if report is None:
+                return None
+            report_id = str(report["id"])
+            connection.execute(
+                "UPDATE reports SET status = 'extracted', updated_at = ? WHERE id = ?",
+                (now, report_id),
+            )
+            self._audit(connection, report_id, "extraction_started", {}, actor="system")
+        return report_id
+
+    def load_files(self, report_id: str) -> tuple[ReportFile, ...]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT original_name, object_key, media_type FROM report_files
+                WHERE report_id = ? ORDER BY file_index
+                """,
+                (report_id,),
+            ).fetchall()
+        if not rows:
+            raise ValueError("report files do not exist")
+        return tuple(
+            ReportFile(
+                content=self.objects.read(row["object_key"]),
+                filename=row["original_name"],
+                media_type=row["media_type"],
+            )
+            for row in rows
+        )
+
+    def recover_running_extractions(self) -> int:
+        now = _now()
+        with self.database.transaction() as connection:
+            reports = connection.execute(
+                "SELECT id FROM reports WHERE status = 'extracted'"
+            ).fetchall()
+            for report in reports:
+                report_id = str(report["id"])
+                connection.execute(
+                    "UPDATE reports SET status = 'uploaded', updated_at = ? WHERE id = ?",
+                    (now, report_id),
+                )
+                self._audit(
+                    connection, report_id, "extraction_recovered", {}, actor="system"
+                )
+        return len(reports)
+
+    def fail_extraction(self, report_id: str, error: Exception) -> None:
+        now = _now()
+        with self.database.transaction() as connection:
+            updated = connection.execute(
+                """
+                UPDATE reports SET status = 'abandoned', extraction_warnings_json = ?,
+                    updated_at = ? WHERE id = ? AND status = 'extracted'
+                """,
+                (
+                    json.dumps(["报告智能解读失败，请重新上传或稍后重试。"], ensure_ascii=False),
+                    now,
+                    report_id,
+                ),
+            ).rowcount
+            if updated:
+                self._audit(
+                    connection,
+                    report_id,
+                    "extraction_failed",
+                    {
+                        "error_class": type(error).__name__,
+                        "error_message": str(error)[:4000],
+                    },
+                    actor="system",
+                )
+
     def save_extraction(self, report_id: str, extracted: PendingReportExtraction) -> None:
         if extracted.status != "pending_confirmation":
             raise ValueError("extraction must stop at pending_confirmation")
@@ -132,8 +211,8 @@ class ReportStore:
             ).fetchone()
             if report is None:
                 raise ValueError("report not found")
-            if report["status"] != "uploaded":
-                raise ValueError("only uploaded reports can accept an extraction")
+            if report["status"] not in {"uploaded", "extracted"}:
+                raise ValueError("only queued reports can accept an extraction")
             filenames = tuple(
                 row[0]
                 for row in connection.execute(
@@ -146,10 +225,6 @@ class ReportStore:
             )
             if filenames != extracted.files:
                 raise ValueError("extraction files do not match the uploaded report")
-            connection.execute(
-                "UPDATE reports SET status = 'extracted', updated_at = ? WHERE id = ?",
-                (now, report_id),
-            )
             self._audit(
                 connection,
                 report_id,

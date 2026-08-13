@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from collections import deque
@@ -24,9 +23,6 @@ from ..core.store import (
     ReportStore,
 )
 from ..reports.extraction import (
-    DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_REPORT_MODEL,
-    HealthReportExtractor,
     ReportExtractionError,
     ReportExtractionUnavailable,
     ReportFile,
@@ -75,13 +71,11 @@ def create_app(
     *,
     database_path: Path | str,
     object_path: Path | str,
-    extractor: HealthReportExtractor,
     max_file_bytes: int = 20 * 1024 * 1024,
     max_files: int = 20,
     max_total_bytes: int = 50 * 1024 * 1024,
     upload_limit: int = 10,
     upload_window_seconds: int = 3600,
-    max_concurrent_extractions: int = 2,
 ) -> FastAPI:
     database = Database(database_path)
     database.initialize()
@@ -90,7 +84,6 @@ def create_app(
     app = FastAPI(title="Genesis Evidence Portal", docs_url=None, redoc_url=None)
     upload_times: deque[float] = deque()
     upload_lock = Lock()
-    extraction_slots = asyncio.Semaphore(max(1, max_concurrent_extractions))
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -130,7 +123,7 @@ def create_app(
     def metrics() -> list[dict[str, str]]:
         return [{"code": code, "label": label} for code, label in METRIC_LABELS.items()]
 
-    @app.post("/api/reports")
+    @app.post("/api/reports", status_code=202)
     async def upload(files: Annotated[list[UploadFile], File()]) -> dict[str, object]:
         now = time.monotonic()
         with upload_lock:
@@ -157,10 +150,7 @@ def create_app(
                     media_type=upload_file.content_type or "",
                 )
             )
-        async with extraction_slots:
-            extracted = await extractor.extract_files(tuple(report_files))
         handle = await run_in_threadpool(store.create, tuple(report_files))
-        await run_in_threadpool(store.save_extraction, handle.report_id, extracted)
         report = await run_in_threadpool(store.get, handle.report_id, handle.access_token)
         return {**report, "report_id": handle.report_id, "access_token": handle.access_token}
 
@@ -205,16 +195,6 @@ def main() -> None:
         max_file_bytes=max_file_bytes,
         upload_limit=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_LIMIT", "10")),
         upload_window_seconds=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_WINDOW_SECONDS", "3600")),
-        max_concurrent_extractions=int(
-            os.getenv("GENESIS_EVIDENCE_MAX_CONCURRENT_EXTRACTIONS", "2")
-        ),
-        extractor=HealthReportExtractor(
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            base_url=os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
-            responses_url=os.getenv("OPENAI_RESPONSES_URL", ""),
-            model=os.getenv("OPENAI_REPORT_MODEL", DEFAULT_REPORT_MODEL),
-            max_bytes=max_file_bytes,
-        ),
     )
     uvicorn.run(
         app,

@@ -39,6 +39,7 @@ OPENAI_API_KEY=...
 OPENAI_RESPONSES_URL=https://your-provider.example/v1/responses
 OPENAI_REPORT_MODEL=gpt-5.6-sol
 uv run genesis-evidence-portal
+uv run genesis-evidence-report-worker
 ```
 
 Use `OPENAI_RESPONSES_URL` when a proxy has a non-default path. `OPENAI_BASE_URL`
