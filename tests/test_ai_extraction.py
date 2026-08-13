@@ -63,6 +63,11 @@ def _extraction(*, inference: str = "associational") -> dict[str, object]:
     }
 
 
+def _stream(run_id: str, content: object) -> httpx.Response:
+    event = {"id": run_id, "choices": [{"delta": {"content": json.dumps(content)}}]}
+    return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
+
+
 def test_observational_study_cannot_emit_causal_claim() -> None:
     with pytest.raises(ValidationError, match="cannot produce causal"):
         PaperExtraction.model_validate(_extraction(inference="causal"))
@@ -78,16 +83,24 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert request.url.path == "/api/v3/chat/completions"
         assert request.headers["authorization"] == "Bearer secret"
         assert body["model"] == "deepseek-v4-flash-ga-260731"
+        assert body["max_tokens"] == 8192
+        assert body["temperature"] == 0
         if calls == 1:
             source = json.loads(body["messages"][1]["content"])
             assert len(source["condition_catalog"]) == 12
+        assert body["stream"] is True
         content = _extraction() if calls < 3 else {"verdict": "consistent", "issues": []}
+        encoded = json.dumps(content)
         return httpx.Response(
             200,
-            json={
-                "id": f"run-{calls}",
-                "choices": [{"message": {"content": json.dumps(content)}}],
-            },
+            text=(
+                f'data: {{"id":"run-{calls}","choices":[{{"delta":'
+                f'{{"content":{json.dumps(encoded[:20])}}}}}]}}\n\n'
+                f'data: {{"id":"run-{calls}","choices":[{{"delta":'
+                f'{{"content":{json.dumps(encoded[20:])}}}}}]}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
         )
 
     analyzer = ArkPaperAnalyzer(
@@ -133,17 +146,9 @@ def test_differing_independent_extractions_cannot_be_marked_consistent() -> None
             content["summary"] = "The independent pass found a different summary."
         if calls == 3:
             content = {"verdict": "consistent", "issues": []}
-        return httpx.Response(
-            200,
-            json={
-                "id": f"run-{calls}",
-                "choices": [{"message": {"content": json.dumps(content)}}],
-            },
-        )
+        return _stream(f"run-{calls}", content)
 
-    result = ArkPaperAnalyzer(
-        api_key="secret", transport=httpx.MockTransport(handler)
-    ).analyze(
+    result = ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
         PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
         {
             "abstract": "Serum 25-hydroxyvitamin D was measured.",
@@ -159,21 +164,50 @@ def test_differing_independent_extractions_cannot_be_marked_consistent() -> None
     assert result.consistency.issues[0].field == "dual_extraction"
 
 
+def test_invalid_source_evidence_gets_one_channel_local_correction() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        body = json.loads(request.content)
+        if calls == 1:
+            content = _extraction()
+            content["claims"][0]["evidence"] = "A sentence that is not in the paper."
+        elif calls == 2:
+            assert "不可信数据" in body["messages"][0]["content"]
+            assert "invalid_output" in json.loads(body["messages"][1]["content"])
+            content = _extraction()
+        elif calls == 3:
+            content = _extraction()
+        else:
+            content = {"verdict": "consistent", "issues": []}
+        return _stream(f"run-{calls}", content)
+
+    result = ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
+        PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
+        {
+            "abstract": "Serum 25-hydroxyvitamin D was measured.",
+            "sections": [
+                {
+                    "title": "Results",
+                    "text": "Lower 25(OH)D was associated with higher frailty prevalence.",
+                }
+            ],
+        },
+    )
+    assert calls == 4
+    assert result.extraction_run_id == "run-2"
+    assert result.second_run_id == "run-3"
+
+
 def test_ark_analyzer_rejects_evidence_missing_from_full_text() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         del request
-        return httpx.Response(
-            200,
-            json={
-                "id": "extract-1",
-                "choices": [{"message": {"content": json.dumps(_extraction())}}],
-            },
-        )
+        return _stream("extract-1", _extraction())
 
     with pytest.raises(PaperAnalysisError, match="not present"):
-        ArkPaperAnalyzer(
-            api_key="secret", transport=httpx.MockTransport(handler)
-        ).analyze(
+        ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
             PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
             {"abstract": "This text contains none of the cited excerpts."},
         )

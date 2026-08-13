@@ -73,20 +73,34 @@ def _confirm(store, handle, *, value: float) -> str:
 def _publish_card(database: Database, condition_code: str, *, grade: str, version: str = "1.0.0"):
     card_id = f"card-{condition_code}-{version}"
     profile_id = f"profile-{condition_code}-{version}"
+    topic_id = f"topic-{condition_code}-{version}"
     with database.transaction() as connection:
         connection.execute(
             """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES (?, ?, ?, ?, 'locked', 'Test question', '{}', '[]', '[]', '[]', '[]',
+                '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', 'reviewer',
+                '2026-08-11T00:00:00Z')
+            """,
+            (topic_id, topic_id, version, condition_code),
+        )
+        connection.execute(
+            """
             INSERT INTO evidence_profiles(
-                id, condition_code, version, ingredient_name, ingredient_form,
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
                 population, baseline_nutrient_status, dose, comparator, outcome,
                 timepoint, estimate_target, evidence_body_complete, certainty,
                 certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES (?, ?, ?, 'Test ingredient', 'Test form', 'Adults 40+',
+            ) VALUES (?, ?, ?, ?, 'Test ingredient', 'Test form', 'Adults 40+',
                 'Not reported', 'Test dose', 'Comparator', 'Outcome', 'Timepoint',
                 'Test target', 1, ?, 'Test-only reviewed profile', '2026-08-11',
                 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
             """,
-            (profile_id, condition_code, version, grade),
+            (profile_id, topic_id, condition_code, version, grade),
         )
         connection.execute(
             """

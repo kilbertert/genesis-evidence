@@ -35,3 +35,13 @@ uv run genesis-evidence-portal
 
 Use `OPENAI_RESPONSES_URL` when a proxy has a non-default path. `OPENAI_BASE_URL`
 remains available for providers whose Responses endpoint is simply `<base>/responses`.
+
+Long paper extraction runs outside the review request path:
+
+```bash
+ARK_API_KEY=...
+uv run genesis-evidence-worker
+```
+
+The worker stores progress after extraction A, extraction B, and the consistency
+check. The review workbench shows queued, running, failed, and completed jobs.

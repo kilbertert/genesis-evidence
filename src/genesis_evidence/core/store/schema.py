@@ -11,8 +11,30 @@ CREATE TABLE IF NOT EXISTS conditions (
     recheck_direction TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS evidence_topics (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
+    version TEXT NOT NULL,
+    condition_code TEXT NOT NULL REFERENCES conditions(code),
+    status TEXT NOT NULL CHECK (status IN ('draft', 'locked', 'retired')),
+    review_question TEXT NOT NULL,
+    picots_json TEXT NOT NULL,
+    eligible_study_designs_json TEXT NOT NULL,
+    inclusion_criteria_json TEXT NOT NULL,
+    exclusion_reasons_json TEXT NOT NULL,
+    required_search_streams_json TEXT NOT NULL,
+    evidence_cutoff_date TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    locked_by TEXT,
+    locked_at TEXT,
+    UNIQUE (code, version),
+    CHECK (status <> 'locked' OR (locked_by IS NOT NULL AND locked_at IS NOT NULL))
+);
+
 CREATE TABLE IF NOT EXISTS collection_runs (
     id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL REFERENCES evidence_topics(id),
     condition_code TEXT NOT NULL REFERENCES conditions(code),
     source TEXT NOT NULL,
     search_stream TEXT NOT NULL DEFAULT 'effect'
@@ -23,7 +45,8 @@ CREATE TABLE IF NOT EXISTS collection_runs (
     query_version TEXT NOT NULL DEFAULT '1',
     query TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    completed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS papers (
@@ -69,6 +92,14 @@ CREATE TABLE IF NOT EXISTS collection_papers (
     run_id TEXT NOT NULL REFERENCES collection_runs(id) ON DELETE CASCADE,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
+    title_abstract_decision TEXT
+        CHECK (title_abstract_decision IN ('included', 'excluded')),
+    title_abstract_reviewer TEXT,
+    title_abstract_reviewed_at TEXT,
+    full_text_decision TEXT CHECK (full_text_decision IN ('included', 'excluded')),
+    primary_exclusion_reason TEXT,
+    full_text_reviewer TEXT,
+    full_text_reviewed_at TEXT,
     PRIMARY KEY (run_id, paper_id)
 );
 
@@ -83,6 +114,43 @@ CREATE TABLE IF NOT EXISTS full_texts (
         )),
     processed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS paper_extraction_jobs (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    collection_run_id TEXT REFERENCES collection_runs(id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'failed', 'completed')),
+    stage TEXT NOT NULL
+        CHECK (stage IN ('extraction_a', 'extraction_b', 'consistency', 'saved')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    model TEXT,
+    extraction_run_id TEXT,
+    extraction_json TEXT,
+    second_model TEXT,
+    second_run_id TEXT,
+    second_extraction_json TEXT,
+    check_model TEXT,
+    check_run_id TEXT,
+    consistency_json TEXT,
+    error_class TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK (status <> 'running' OR started_at IS NOT NULL),
+    CHECK (status <> 'failed' OR (error_class IS NOT NULL AND error_message IS NOT NULL)),
+    CHECK (status <> 'completed' OR (
+        stage = 'saved' AND model IS NOT NULL AND extraction_run_id IS NOT NULL
+        AND extraction_json IS NOT NULL AND second_model IS NOT NULL
+        AND second_run_id IS NOT NULL AND second_extraction_json IS NOT NULL
+        AND check_model IS NOT NULL AND check_run_id IS NOT NULL
+        AND consistency_json IS NOT NULL AND completed_at IS NOT NULL
+    ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS paper_extraction_jobs_active_paper_unique
+ON paper_extraction_jobs(paper_id) WHERE status IN ('queued', 'running');
 
 CREATE TABLE IF NOT EXISTS paper_admissions (
     paper_id TEXT PRIMARY KEY REFERENCES papers(id) ON DELETE CASCADE,
@@ -204,6 +272,7 @@ CREATE TABLE IF NOT EXISTS claim_reviews (
 
 CREATE TABLE IF NOT EXISTS evidence_profiles (
     id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL REFERENCES evidence_topics(id),
     condition_code TEXT NOT NULL REFERENCES conditions(code),
     version TEXT NOT NULL,
     ingredient_name TEXT NOT NULL,

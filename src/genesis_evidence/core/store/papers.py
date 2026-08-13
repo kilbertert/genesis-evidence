@@ -8,12 +8,30 @@ import os
 import tempfile
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from ...literature.ai_extraction import CheckedPaperExtraction
-from ...literature.models import PaperRecord
+from ...literature.models import PaperRecord, SourceName
 from .database import Database
+
+SEARCH_STREAMS = {
+    "effect",
+    "requirement",
+    "bioavailability",
+    "safety",
+    "registration",
+    "regulatory",
+    "citation",
+}
+PICOTS_FIELDS = {
+    "population",
+    "intervention_or_exposure",
+    "comparator",
+    "outcomes",
+    "timing",
+    "setting",
+}
 
 
 class PaperIdentityConflict(RuntimeError):
@@ -68,39 +86,162 @@ class PaperStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def create_topic(
+        self,
+        *,
+        code: str,
+        version: str,
+        condition_code: str,
+        review_question: str,
+        picots: dict[str, str],
+        eligible_study_designs: tuple[str, ...],
+        inclusion_criteria: tuple[str, ...],
+        exclusion_reasons: tuple[str, ...],
+        required_search_streams: tuple[str, ...],
+        evidence_cutoff_date: str,
+        reviewer: str,
+    ) -> str:
+        if set(picots) != PICOTS_FIELDS or any(not value.strip() for value in picots.values()):
+            raise ValueError(
+                "topic requires complete population, intervention/exposure, comparator, "
+                "outcomes, timing, and setting"
+            )
+        if not all(
+            (
+                code.strip(),
+                version.strip(),
+                review_question.strip(),
+                eligible_study_designs,
+                inclusion_criteria,
+                exclusion_reasons,
+                required_search_streams,
+                evidence_cutoff_date.strip(),
+                reviewer.strip(),
+            )
+        ):
+            raise ValueError("topic governance fields are required")
+        if any(not value.strip() for value in (*eligible_study_designs, *inclusion_criteria)):
+            raise ValueError("topic study designs and inclusion criteria cannot be blank")
+        if any(not value.strip() for value in exclusion_reasons) or len(
+            set(exclusion_reasons)
+        ) != len(exclusion_reasons):
+            raise ValueError("topic exclusion reasons must be unique non-blank codes")
+        if len(set(required_search_streams)) != len(required_search_streams):
+            raise ValueError("topic required search streams must be unique")
+        if not set(required_search_streams) <= SEARCH_STREAMS:
+            raise ValueError("topic contains an unsupported search stream")
+        try:
+            cutoff = date.fromisoformat(evidence_cutoff_date)
+        except ValueError as exc:
+            raise ValueError("topic evidence cutoff date must be a valid ISO date") from exc
+        if cutoff > date.today():
+            raise ValueError("topic evidence cutoff date cannot be in the future")
+        topic_id = str(uuid.uuid4())
+        now = _now()
+        with self.database.transaction() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM conditions WHERE code = ?", (condition_code,)
+            ).fetchone():
+                raise ValueError("topic contains an unknown condition code")
+            connection.execute(
+                """
+                INSERT INTO evidence_topics(
+                    id, code, version, condition_code, status, review_question,
+                    picots_json, eligible_study_designs_json, inclusion_criteria_json,
+                    exclusion_reasons_json, required_search_streams_json,
+                    evidence_cutoff_date, created_by, created_at
+                ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    topic_id,
+                    code,
+                    version,
+                    condition_code,
+                    review_question,
+                    json.dumps(picots, ensure_ascii=False),
+                    json.dumps(eligible_study_designs, ensure_ascii=False),
+                    json.dumps(inclusion_criteria, ensure_ascii=False),
+                    json.dumps(exclusion_reasons, ensure_ascii=False),
+                    json.dumps(required_search_streams, ensure_ascii=False),
+                    evidence_cutoff_date,
+                    reviewer,
+                    now,
+                ),
+            )
+            self._audit(
+                connection,
+                "evidence_topic",
+                topic_id,
+                "topic_created",
+                {"code": code, "version": version},
+                actor=reviewer,
+            )
+        return topic_id
+
+    def lock_topic(self, topic_id: str, *, reviewer: str) -> None:
+        with self.database.transaction() as connection:
+            updated = connection.execute(
+                """
+                UPDATE evidence_topics SET status = 'locked', locked_by = ?, locked_at = ?
+                WHERE id = ? AND status = 'draft'
+                """,
+                (reviewer, _now(), topic_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("topic is missing or is not a draft")
+            self._audit(
+                connection,
+                "evidence_topic",
+                topic_id,
+                "topic_locked",
+                {},
+                actor=reviewer,
+            )
+
+    def list_topics(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM evidence_topics ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return [_topic_dict(row) for row in rows]
+
     def start_collection(
         self,
         *,
-        condition_code: str,
+        topic_id: str,
         source: str,
         query: str,
         search_stream: str = "effect",
         query_version: str = "1",
     ) -> str:
-        if search_stream not in {
-            "effect",
-            "requirement",
-            "bioavailability",
-            "safety",
-            "registration",
-            "regulatory",
-            "citation",
-        }:
+        if search_stream not in SEARCH_STREAMS:
             raise ValueError("Unsupported literature search stream")
-        if not query_version.strip():
-            raise ValueError("Query version is required")
+        if not source.strip() or not query.strip() or not query_version.strip():
+            raise ValueError("collection source, query, and query version are required")
         run_id = str(uuid.uuid4())
         with self.database.transaction() as connection:
+            topic = connection.execute(
+                "SELECT * FROM evidence_topics WHERE id = ?", (topic_id,)
+            ).fetchone()
+            if topic is None or topic["status"] != "locked":
+                raise ValueError("a locked evidence topic is required before collection")
+            if connection.execute(
+                "SELECT 1 FROM evidence_profiles WHERE topic_id = ?", (topic_id,)
+            ).fetchone():
+                raise ValueError("collection is closed after evidence profile creation")
+            if search_stream not in json.loads(topic["required_search_streams_json"]):
+                raise ValueError("search stream is not required by the locked topic")
             connection.execute(
                 """
                 INSERT INTO collection_runs(
-                    id, condition_code, source, search_stream, query_version,
+                    id, topic_id, condition_code, source, search_stream, query_version,
                     query, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)
                 """,
                 (
                     run_id,
-                    condition_code,
+                    topic_id,
+                    topic["condition_code"],
                     source,
                     search_stream,
                     query_version.strip(),
@@ -115,8 +256,11 @@ class PaperStore:
             raise ValueError("Collection status must be completed or failed")
         with self.database.transaction() as connection:
             updated = connection.execute(
-                "UPDATE collection_runs SET status = ? WHERE id = ? AND status = 'running'",
-                (status, run_id),
+                """
+                UPDATE collection_runs SET status = ?, completed_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (status, _now(), run_id),
             ).rowcount
             if updated != 1:
                 raise ValueError("Collection run is missing or already finished")
@@ -197,6 +341,11 @@ class PaperStore:
 
     def add_to_collection(self, run_id: str, paper_id: str, *, position: int) -> None:
         with self.database.transaction() as connection:
+            run = connection.execute(
+                "SELECT status FROM collection_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if run is None or run["status"] != "running":
+                raise ValueError("papers can only be added to a running collection")
             connection.execute(
                 """
                 INSERT INTO collection_papers(run_id, paper_id, position) VALUES (?, ?, ?)
@@ -205,6 +354,105 @@ class PaperStore:
                 """,
                 (run_id, paper_id, position),
             )
+
+    def screen_collection_paper(
+        self,
+        run_id: str,
+        paper_id: str,
+        *,
+        stage: str,
+        decision: str,
+        exclusion_reason: str | None,
+        reviewer: str,
+    ) -> None:
+        if stage not in {"title_abstract", "full_text"}:
+            raise ValueError("screening stage must be title_abstract or full_text")
+        if decision not in {"included", "excluded"}:
+            raise ValueError("screening decision must be included or excluded")
+        reason = (exclusion_reason or "").strip() or None
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT cp.*, cr.status AS run_status, et.status AS topic_status,
+                    et.exclusion_reasons_json
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN evidence_topics et ON et.id = cr.topic_id
+                WHERE cp.run_id = ? AND cp.paper_id = ?
+                """,
+                (run_id, paper_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("collection paper was not found")
+            if row["run_status"] != "completed" or row["topic_status"] != "locked":
+                raise ValueError("screening requires a completed run for a locked topic")
+            if connection.execute(
+                """
+                SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
+                    ON cr.topic_id = ep.topic_id
+                WHERE cr.id = ? LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone():
+                raise ValueError("screening is immutable after evidence profile creation")
+            allowed_reasons = set(json.loads(row["exclusion_reasons_json"]))
+            if decision == "excluded" and reason not in allowed_reasons:
+                raise ValueError("an excluded record requires one catalogued primary reason")
+            if decision == "included" and reason is not None:
+                raise ValueError("an included record cannot have an exclusion reason")
+            now = _now()
+            if stage == "title_abstract":
+                connection.execute(
+                    """
+                    UPDATE collection_papers SET title_abstract_decision = ?,
+                        title_abstract_reviewer = ?, title_abstract_reviewed_at = ?,
+                        full_text_decision = NULL, full_text_reviewer = NULL,
+                        full_text_reviewed_at = NULL, primary_exclusion_reason = ?
+                    WHERE run_id = ? AND paper_id = ?
+                    """,
+                    (decision, reviewer, now, reason, run_id, paper_id),
+                )
+            else:
+                if row["title_abstract_decision"] != "included":
+                    raise ValueError("full-text screening requires title/abstract inclusion")
+                full_text = connection.execute(
+                    "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
+                ).fetchone()
+                if full_text is None:
+                    raise ValueError("full-text screening requires a stored full text")
+                connection.execute(
+                    """
+                    UPDATE collection_papers SET full_text_decision = ?,
+                        primary_exclusion_reason = ?, full_text_reviewer = ?,
+                        full_text_reviewed_at = ? WHERE run_id = ? AND paper_id = ?
+                    """,
+                    (decision, reason, reviewer, now, run_id, paper_id),
+                )
+            self._audit(
+                connection,
+                "collection_paper",
+                f"{run_id}:{paper_id}",
+                f"{stage}_screened",
+                {"decision": decision, "primary_exclusion_reason": reason},
+                actor=reviewer,
+            )
+
+    def list_topic_ledger(self, topic_id: str) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT cp.*, cr.source, cr.search_stream, cr.query_version, cr.query,
+                    cr.status AS run_status, cr.completed_at, p.title, p.doi, p.pmid,
+                    p.pmcid, p.year
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN papers p ON p.id = cp.paper_id
+                WHERE cr.topic_id = ?
+                ORDER BY cr.created_at, cp.position, cp.paper_id
+                """,
+                (topic_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def update_integrity(self, paper_id: str, status: str, *, detail: dict[str, object]) -> None:
         if status not in {
@@ -258,6 +506,267 @@ class PaperStore:
                 (paper_id, stored.key, stored.sha256, media_type, rights_status),
             )
 
+    def enqueue_extraction(self, paper_id: str, *, collection_run_id: str | None) -> str:
+        now = _now()
+        with self.database.transaction() as connection:
+            full_text = connection.execute(
+                "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if full_text is None:
+                raise ValueError("paper extraction requires a stored full text")
+            active = connection.execute(
+                """
+                SELECT id FROM paper_extraction_jobs
+                WHERE paper_id = ? AND status IN ('queued', 'running')
+                """,
+                (paper_id,),
+            ).fetchone()
+            if active:
+                return str(active["id"])
+            job_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                INSERT INTO paper_extraction_jobs(
+                    id, paper_id, collection_run_id, status, stage, created_at, updated_at
+                ) VALUES (?, ?, ?, 'queued', 'extraction_a', ?, ?)
+                """,
+                (job_id, paper_id, collection_run_id, now, now),
+            )
+            self._audit(
+                connection,
+                "paper_extraction_job",
+                job_id,
+                "extraction_queued",
+                {"paper_id": paper_id, "collection_run_id": collection_run_id},
+            )
+        return job_id
+
+    def claim_next_extraction_job(self) -> dict[str, object] | None:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM paper_extraction_jobs
+                WHERE status = 'queued' ORDER BY created_at, id LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            now = _now()
+            connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET status = 'running',
+                    attempt_count = attempt_count + 1, started_at = ?, updated_at = ?,
+                    error_class = NULL, error_message = NULL
+                WHERE id = ?
+                """,
+                (now, now, row["id"]),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM paper_extraction_jobs WHERE id = ?", (row["id"],)
+            ).fetchone()
+        return dict(claimed)
+
+    def recover_running_extraction_jobs(self) -> int:
+        with self.database.transaction() as connection:
+            now = _now()
+            rows = connection.execute(
+                "SELECT id FROM paper_extraction_jobs WHERE status = 'running'"
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE paper_extraction_jobs SET status = 'failed',
+                        error_class = 'WorkerInterrupted',
+                        error_message = 'Worker stopped before the current stage was persisted.',
+                        updated_at = ? WHERE id = ?
+                    """,
+                    (now, row["id"]),
+                )
+                self._audit(
+                    connection,
+                    "paper_extraction_job",
+                    row["id"],
+                    "extraction_interrupted",
+                    {},
+                )
+        return len(rows)
+
+    def retry_extraction(self, job_id: str, *, reviewer: str) -> None:
+        with self.database.transaction() as connection:
+            job = connection.execute(
+                "SELECT paper_id, status FROM paper_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None or job["status"] != "failed":
+                raise ValueError("only a failed extraction job can be retried")
+            if connection.execute(
+                """
+                SELECT 1 FROM paper_extraction_jobs
+                WHERE paper_id = ? AND status IN ('queued', 'running')
+                """,
+                (job["paper_id"],),
+            ).fetchone():
+                raise ValueError("paper already has an active extraction job")
+            updated = connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET status = 'queued', started_at = NULL,
+                    updated_at = ?, error_class = NULL, error_message = NULL
+                WHERE id = ? AND status = 'failed'
+                """,
+                (_now(), job_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("only a failed extraction job can be retried")
+            self._audit(
+                connection,
+                "paper_extraction_job",
+                job_id,
+                "extraction_retried",
+                {},
+                actor=reviewer,
+            )
+
+    def save_extraction_channel(
+        self,
+        job_id: str,
+        *,
+        channel: str,
+        model: str,
+        run_id: str,
+        extraction_json: str,
+    ) -> None:
+        if channel not in {"a", "b"}:
+            raise ValueError("extraction channel must be a or b")
+        fields = (
+            ("model", "extraction_run_id", "extraction_json", "extraction_b")
+            if channel == "a"
+            else ("second_model", "second_run_id", "second_extraction_json", "consistency")
+        )
+        with self.database.transaction() as connection:
+            updated = connection.execute(
+                f"""
+                UPDATE paper_extraction_jobs SET {fields[0]} = ?, {fields[1]} = ?,
+                    {fields[2]} = ?, stage = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (model, run_id, extraction_json, fields[3], _now(), job_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("extraction job is not running")
+
+    def save_extraction_consistency(
+        self,
+        job_id: str,
+        *,
+        model: str,
+        run_id: str,
+        consistency_json: str,
+    ) -> None:
+        with self.database.transaction() as connection:
+            updated = connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET check_model = ?, check_run_id = ?,
+                    consistency_json = ?, updated_at = ?
+                WHERE id = ? AND status = 'running' AND stage = 'consistency'
+                """,
+                (model, run_id, consistency_json, _now(), job_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("extraction consistency stage is not running")
+
+    def complete_extraction_job(self, job_id: str) -> None:
+        with self.database.transaction() as connection:
+            now = _now()
+            updated = connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET status = 'completed', stage = 'saved',
+                    updated_at = ?, completed_at = ?
+                WHERE id = ? AND status = 'running' AND consistency_json IS NOT NULL
+                """,
+                (now, now, job_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("extraction job cannot be completed")
+            self._audit(
+                connection,
+                "paper_extraction_job",
+                job_id,
+                "extraction_completed",
+                {},
+            )
+
+    def fail_extraction_job(self, job_id: str, error: Exception) -> None:
+        with self.database.transaction() as connection:
+            updated = connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET status = 'failed', error_class = ?,
+                    error_message = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (type(error).__name__, str(error)[:4000], _now(), job_id),
+            ).rowcount
+            if updated != 1:
+                return
+            self._audit(
+                connection,
+                "paper_extraction_job",
+                job_id,
+                "extraction_failed",
+                {"error_class": type(error).__name__, "error_message": str(error)[:4000]},
+            )
+
+    def list_extraction_jobs(self, *, limit: int = 100) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT pej.id, pej.paper_id, pej.collection_run_id, pej.status, pej.stage,
+                    pej.attempt_count, pej.model, pej.extraction_run_id, pej.second_model,
+                    pej.second_run_id, pej.check_model, pej.check_run_id, pej.error_class,
+                    pej.error_message, pej.created_at, pej.started_at, pej.updated_at,
+                    pej.completed_at, p.title, p.doi
+                FROM paper_extraction_jobs pej
+                JOIN papers p ON p.id = pej.paper_id
+                ORDER BY pej.created_at DESC, pej.id DESC LIMIT ?
+                """,
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_extraction_job(self, job_id: str) -> dict[str, object] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_analysis_source(self, paper_id: str) -> tuple[PaperRecord, str]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT p.*, ps.source, ps.source_id, ft.object_key
+                FROM papers p JOIN full_texts ft ON ft.paper_id = p.id
+                LEFT JOIN paper_sources ps ON ps.rowid = (
+                    SELECT rowid FROM paper_sources WHERE paper_id = p.id
+                    ORDER BY source, source_id LIMIT 1
+                )
+                WHERE p.id = ?
+                """,
+                (paper_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("paper or full text does not exist")
+        source = SourceName(row["source"] or "europe_pmc")
+        paper = PaperRecord(
+            source=source,
+            source_id=row["source_id"] or paper_id,
+            title=row["title"],
+            abstract=row["abstract"] or None,
+            doi=row["doi"],
+            pmid=row["pmid"],
+            pmcid=row["pmcid"],
+            publication_year=row["year"],
+        )
+        return paper, str(row["object_key"])
+
     def save_ai_extraction(self, paper_id: str, checked: CheckedPaperExtraction) -> int:
         now = _now()
         extraction_id = str(uuid.uuid4())
@@ -269,6 +778,18 @@ class PaperStore:
                 raise ValueError("Paper does not exist")
             if paper["integrity_status"] == "retracted":
                 raise ValueError("Candidate claims cannot be stored for a retracted paper")
+            existing = connection.execute(
+                """
+                SELECT id FROM paper_extractions
+                WHERE paper_id = ? AND extraction_run_id = ?
+                """,
+                (paper_id, checked.extraction_run_id),
+            ).fetchone()
+            if existing:
+                return connection.execute(
+                    "SELECT count(*) FROM claims WHERE extraction_id = ?",
+                    (existing["id"],),
+                ).fetchone()[0]
             connection.execute(
                 "UPDATE papers SET study_design_candidate = ? WHERE id = ?",
                 (checked.extraction.study_design, paper_id),
@@ -457,13 +978,21 @@ class PaperStore:
             self._audit(connection, entity_type, entity_id, action, detail)
 
     @staticmethod
-    def _audit(connection, entity_type: str, entity_id: str, action: str, detail: object) -> None:
+    def _audit(
+        connection,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        detail: object,
+        *,
+        actor: str = "system",
+    ) -> None:
         connection.execute(
             """
             INSERT INTO audit_events(entity_type, entity_id, action, actor, detail_json, created_at)
-            VALUES (?, ?, ?, 'system', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (entity_type, entity_id, action, json.dumps(detail, ensure_ascii=False), _now()),
+            (entity_type, entity_id, action, actor, json.dumps(detail, ensure_ascii=False), _now()),
         )
 
 
@@ -482,3 +1011,16 @@ def _publication_status(record: PaperRecord) -> str:
     if record.source.value in {"doaj", "europe_pmc"}:
         return "formal"
     return "unknown"
+
+
+def _topic_dict(row) -> dict[str, object]:
+    topic = dict(row)
+    for field in (
+        "picots_json",
+        "eligible_study_designs_json",
+        "inclusion_criteria_json",
+        "exclusion_reasons_json",
+        "required_search_streams_json",
+    ):
+        topic[field.removesuffix("_json")] = json.loads(topic.pop(field))
+    return topic

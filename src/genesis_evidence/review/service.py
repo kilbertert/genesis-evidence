@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,17 +54,13 @@ class EvidenceProfileInput(BaseModel):
 
     certainty: Literal["high", "moderate", "low", "very_low"]
     certainty_rationale: str = Field(min_length=1, max_length=5000)
-    evidence_cutoff_date: date
     estimate_target: str = Field(min_length=1, max_length=1000)
-    evidence_body_complete: bool
     interpretations: dict[
         str, Literal["supports", "does_not_support", "mixed", "uncertain", "not_reported"]
     ]
 
     @model_validator(mode="after")
-    def require_complete_evidence_body(self) -> EvidenceProfileInput:
-        if not self.evidence_body_complete:
-            raise ValueError("patient evidence profiles require a complete eligible evidence body")
+    def require_interpretations(self) -> EvidenceProfileInput:
         if not self.interpretations:
             raise ValueError("evidence profile requires result interpretations")
         return self
@@ -147,9 +142,7 @@ class EvidenceReviewService:
     def reject_paper(self, paper_id: str, *, reviewer: str) -> None:
         self.store.reject_paper(paper_id, reviewer=_reviewer(reviewer))
 
-    def review_claim(
-        self, claim_id: str, *, reviewer: str, review: ClaimReviewInput
-    ) -> None:
+    def review_claim(self, claim_id: str, *, reviewer: str, review: ClaimReviewInput) -> None:
         values = review.model_dump()
         if review.decision == "rejected":
             values.update(
@@ -167,6 +160,7 @@ class EvidenceReviewService:
     def create_card_draft(
         self,
         *,
+        topic_id: str,
         condition_code: str,
         version: str,
         claim_ids: list[str],
@@ -179,6 +173,7 @@ class EvidenceReviewService:
         profile = EvidenceProfileInput.model_validate(profile)
         return self.store.create_card(
             condition_code=condition_code,
+            topic_id=topic_id,
             version=version,
             claim_ids=tuple(dict.fromkeys(claim_ids)),
             reviewer=_reviewer(reviewer),

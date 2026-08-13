@@ -1,13 +1,13 @@
 [Unit]
-Description=Genesis Evidence Paper Review Workbench
-After=network-online.target genesis-evidence-worker.service
+Description=Genesis Evidence Literature Extraction Worker
+After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/claude/Projects/genesis-evidence
 EnvironmentFile=-/home/claude/Projects/genesis-health/var/review-api.env
 EnvironmentFile=/home/claude/Projects/genesis-evidence/var/review.env
-ExecStart=/home/claude/.local/bin/uv run --no-sync python -m genesis_evidence.review.api
+ExecStart=/home/claude/.local/bin/uv run --no-sync python -m genesis_evidence.literature.extraction_worker
 Restart=on-failure
 RestartSec=3
 
