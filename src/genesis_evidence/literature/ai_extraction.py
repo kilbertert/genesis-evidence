@@ -247,7 +247,9 @@ class ArkPaperAnalyzer:
             },
             ensure_ascii=False,
         )
-        check_text, check_run_id = self._complete(_CONSISTENCY_PROMPT, check_source)
+        check_text, check_run_id = self._complete(
+            _CONSISTENCY_PROMPT, check_source, max_tokens=min(self._max_tokens, 4096)
+        )
         try:
             consistency = ConsistencyReport.model_validate(_json_object(check_text))
         except (ValueError, json.JSONDecodeError) as exc:
@@ -317,7 +319,9 @@ class ArkPaperAnalyzer:
             ) from exc
         return corrected, corrected_run_id
 
-    def _complete(self, system_prompt: str, user_content: str) -> tuple[str, str]:
+    def _complete(
+        self, system_prompt: str, user_content: str, *, max_tokens: int | None = None
+    ) -> tuple[str, str]:
         try:
             with (
                 httpx.Client(timeout=self._timeout, transport=self._transport) as client,
@@ -327,7 +331,7 @@ class ArkPaperAnalyzer:
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     json={
                         "model": self._model,
-                        "max_tokens": self._max_tokens,
+                        "max_tokens": max_tokens or self._max_tokens,
                         "temperature": 0,
                         "thinking": {"type": "disabled"},
                         "messages": [
