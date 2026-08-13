@@ -86,6 +86,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert body["model"] == "deepseek-v4-flash-ga-260731"
         assert body["max_tokens"] == 16_384
         assert body["temperature"] == 0
+        assert body["thinking"] == {"type": "disabled"}
         if calls == 1:
             source = json.loads(body["messages"][1]["content"])
             assert len(source["condition_catalog"]) == 12
@@ -224,6 +225,38 @@ def test_streamed_completion_skips_chunks_without_choices() -> None:
     content, run_id = _streamed_completion(httpx.Response(200, text=body))
     assert run_id == "run-1"
     assert json.loads(content) == {"answer": 1}
+
+
+def test_streamed_completion_honors_deadline() -> None:
+    with pytest.raises(TimeoutError, match="deadline"):
+        _streamed_completion(httpx.Response(200, text="data: {}\n\n"), deadline=0)
+
+
+def test_invalid_consistency_report_preserves_validation_reason() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        del request
+        content = _extraction() if calls < 3 else {"verdict": "consistent"}
+        return _stream(f"run-{calls}", content)
+
+    with pytest.raises(PaperAnalysisError, match=r"issues\s+Field required"):
+        ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
+            PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
+            {
+                "abstract": "Serum 25-hydroxyvitamin D was measured.",
+                "sections": [
+                    {
+                        "title": "Results",
+                        "text": (
+                            "Lower 25(OH)D was associated with higher frailty prevalence."
+                        ),
+                    }
+                ],
+            },
+        )
 
 
 def test_from_env_honors_ark_max_tokens(monkeypatch) -> None:

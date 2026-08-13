@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import unicodedata
 from dataclasses import dataclass
 from typing import Literal
@@ -250,7 +251,9 @@ class ArkPaperAnalyzer:
         try:
             consistency = ConsistencyReport.model_validate(_json_object(check_text))
         except (ValueError, json.JSONDecodeError) as exc:
-            raise PaperAnalysisError("provider returned an invalid consistency report") from exc
+            raise PaperAnalysisError(
+                f"provider returned an invalid consistency report: {exc}"
+            ) from exc
         if (
             extraction.model_dump(mode="json") != second_extraction.model_dump(mode="json")
             and consistency.verdict == "consistent"
@@ -326,6 +329,7 @@ class ArkPaperAnalyzer:
                         "model": self._model,
                         "max_tokens": self._max_tokens,
                         "temperature": 0,
+                        "thinking": {"type": "disabled"},
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_content},
@@ -336,9 +340,13 @@ class ArkPaperAnalyzer:
                 ) as response,
             ):
                 response.raise_for_status()
-                content, run_id = _streamed_completion(response)
+                content, run_id = _streamed_completion(
+                    response, deadline=time.monotonic() + self._timeout
+                )
         except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
             raise PaperAnalysisError("paper analysis provider request failed") from exc
+        except TimeoutError as exc:
+            raise PaperAnalysisError("paper analysis provider request timed out") from exc
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise PaperAnalysisError(
                 f"paper analysis provider response is malformed: {exc}"
@@ -346,10 +354,14 @@ class ArkPaperAnalyzer:
         return content, run_id
 
 
-def _streamed_completion(response: httpx.Response) -> tuple[str, str]:
+def _streamed_completion(
+    response: httpx.Response, *, deadline: float | None = None
+) -> tuple[str, str]:
     content: list[str] = []
     run_id = ""
     for line in response.iter_lines():
+        if deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError("stream exceeded the provider request deadline")
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()

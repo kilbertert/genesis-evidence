@@ -187,3 +187,15 @@ def test_review_api_lists_and_retries_failed_extraction_jobs(tmp_path) -> None:
     assert "extraction_json" not in jobs[0]
     response = client.post("/api/review/extraction-jobs/job-1/retry", headers=HEADERS)
     assert response.json() == {"id": "job-1", "status": "queued"}
+
+
+def test_workbench_does_not_present_pending_extraction_as_missing_results(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            database_path=tmp_path / "evidence.sqlite3",
+            api_key=API_KEY,
+            reviewer_id=REVIEWER,
+        )
+    )
+    page = client.get("/").text
+    assert "任务完成后才会显示通读摘要、独立抽取和差异检查" in page
