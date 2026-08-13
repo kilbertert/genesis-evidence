@@ -97,8 +97,19 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
     additions = {
         "papers": ("publication_status TEXT NOT NULL DEFAULT 'unknown'",),
         "collection_runs": (
+            "topic_id TEXT REFERENCES evidence_topics(id)",
             "search_stream TEXT NOT NULL DEFAULT 'effect'",
             "query_version TEXT NOT NULL DEFAULT '1'",
+            "completed_at TEXT",
+        ),
+        "collection_papers": (
+            "title_abstract_decision TEXT",
+            "title_abstract_reviewer TEXT",
+            "title_abstract_reviewed_at TEXT",
+            "full_text_decision TEXT",
+            "primary_exclusion_reason TEXT",
+            "full_text_reviewer TEXT",
+            "full_text_reviewed_at TEXT",
         ),
         "paper_admissions": ("consistency_resolution TEXT",),
         "paper_extractions": (
@@ -114,6 +125,7 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             "risk_of_bias_json TEXT",
             "applicability TEXT",
         ),
+        "evidence_profiles": ("topic_id TEXT REFERENCES evidence_topics(id)",),
         "knowledge_cards": ("evidence_profile_id TEXT REFERENCES evidence_profiles(id)",),
     }
     for table, columns in additions.items():
@@ -143,8 +155,7 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
         """
     )
     claim_review_columns = {
-        row["name"]
-        for row in connection.execute("PRAGMA table_info(claim_reviews)").fetchall()
+        row["name"] for row in connection.execute("PRAGMA table_info(claim_reviews)").fetchall()
     }
     if "grade" in claim_review_columns:
         legacy_reviews = [
@@ -207,6 +218,11 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
         UPDATE knowledge_cards SET status = 'stale'
-        WHERE status = 'published' AND evidence_profile_id IS NULL
+        WHERE status = 'published' AND (
+            evidence_profile_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM evidence_profiles ep
+                WHERE ep.id = knowledge_cards.evidence_profile_id AND ep.topic_id IS NOT NULL
+            )
+        )
         """
     )

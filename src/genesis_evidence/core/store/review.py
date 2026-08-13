@@ -228,6 +228,7 @@ class ReviewStore:
     def create_card(
         self,
         *,
+        topic_id: str,
         condition_code: str,
         version: str,
         claim_ids: tuple[str, ...],
@@ -238,6 +239,7 @@ class ReviewStore:
         card_id = str(uuid.uuid4())
         patient_body = validate_patient_copy(patient_body)
         with self.database.transaction() as connection:
+            topic = _require_complete_topic(connection, topic_id, condition_code)
             rows = connection.execute(
                 f"""
                 SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
@@ -264,6 +266,21 @@ class ReviewStore:
                 for row in rows
             ):
                 raise ValueError("card claims are not eligible for publication")
+            included_papers = {
+                row["paper_id"]
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT cp.paper_id FROM collection_papers cp
+                    JOIN collection_runs cr ON cr.id = cp.run_id
+                    WHERE cr.topic_id = ? AND cp.full_text_decision = 'included'
+                    """,
+                    (topic_id,),
+                ).fetchall()
+            }
+            if not {row["paper_id"] for row in rows} <= included_papers:
+                raise ValueError(
+                    "card claims must come from full-text records included in the topic"
+                )
             publication_status = connection.execute(
                 f"""
                 SELECT p.publication_status FROM papers p
@@ -278,8 +295,8 @@ class ReviewStore:
                 )
             if any(
                 row["candidate_claim_type"] == "mechanism"
-                    or row["corrected_study_design"]
-                    in {"animal_study", "in_vitro_study", "case_series", "case_report"}
+                or row["corrected_study_design"]
+                in {"animal_study", "in_vitro_study", "case_series", "case_report"}
                 for row in rows
             ):
                 raise ValueError(
@@ -315,16 +332,21 @@ class ReviewStore:
                     AND EXISTS (
                         SELECT 1 FROM json_each(pa.condition_codes_json) WHERE value = ?
                     )
+                    AND EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs cr ON cr.id = cp.run_id
+                        WHERE cr.topic_id = ? AND cp.paper_id = p.id
+                            AND cp.full_text_decision = 'included'
+                    )
                     AND r.population = ? AND r.baseline_nutrient_status = ?
                     AND r.ingredient_name = ? AND r.ingredient_form = ?
                     AND r.dose = ? AND r.comparator = ? AND r.outcome = ?
                     AND r.timepoint = ?
                 """,
-                (condition_code, *(first[field] for field in dimensions)),
+                (condition_code, topic_id, *(first[field] for field in dimensions)),
             ).fetchall()
             if any(
-                row["status"] != "reviewed" or row["decision"] != "approved"
-                for row in eligible
+                row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
             ):
                 raise ValueError("all eligible results must be reviewed before profile creation")
             if {row["id"] for row in eligible} != set(claim_ids):
@@ -337,15 +359,16 @@ class ReviewStore:
             connection.execute(
                 """
                 INSERT INTO evidence_profiles(
-                    id, condition_code, version, ingredient_name, ingredient_form,
+                    id, topic_id, condition_code, version, ingredient_name, ingredient_form,
                     population, baseline_nutrient_status, dose, comparator, outcome,
                     timepoint, estimate_target, certainty, certainty_rationale,
                     evidence_body_complete, evidence_cutoff_date, reviewer, reviewed_at,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
+                    topic_id,
                     condition_code,
                     version,
                     first["ingredient_name"],
@@ -359,8 +382,8 @@ class ReviewStore:
                     profile["estimate_target"],
                     profile["certainty"],
                     profile["certainty_rationale"],
-                    1 if profile["evidence_body_complete"] else 0,
-                    profile["evidence_cutoff_date"],
+                    1,
+                    topic["evidence_cutoff_date"],
                     reviewer,
                     now,
                     now,
@@ -371,10 +394,7 @@ class ReviewStore:
                 INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
                 VALUES (?, ?, ?)
                 """,
-                [
-                    (profile_id, row["result_id"], interpretations[row["id"]])
-                    for row in rows
-                ],
+                [(profile_id, row["result_id"], interpretations[row["id"]]) for row in rows],
             )
             connection.execute(
                 """
@@ -413,6 +433,7 @@ class ReviewStore:
                     "version": version,
                     "claims": claim_ids,
                     "evidence_profile_id": profile_id,
+                    "topic_id": topic_id,
                 },
             )
         return card_id
@@ -483,6 +504,8 @@ class ReviewStore:
                     p.integrity_status, p.study_design_candidate,
                     COALESCE(pa.status, 'pending') AS admission_status,
                     pe.consistency_status,
+                    pej.status AS extraction_job_status,
+                    pej.stage AS extraction_job_stage,
                     count(c.id) AS claim_count,
                     sum(CASE WHEN c.status = 'candidate' THEN 1 ELSE 0 END) AS pending_claims
                 FROM papers p
@@ -491,8 +514,12 @@ class ReviewStore:
                     SELECT id FROM paper_extractions
                     WHERE paper_id = p.id ORDER BY created_at DESC, id DESC LIMIT 1
                 )
+                LEFT JOIN paper_extraction_jobs pej ON pej.id = (
+                    SELECT id FROM paper_extraction_jobs
+                    WHERE paper_id = p.id ORDER BY created_at DESC, id DESC LIMIT 1
+                )
                 LEFT JOIN claims c ON c.paper_id = p.id
-                GROUP BY p.id, pa.status, pe.consistency_status
+                GROUP BY p.id, pa.status, pe.consistency_status, pej.status, pej.stage
                 ORDER BY p.created_at DESC, p.id DESC
                 """
             ).fetchall()
@@ -500,14 +527,21 @@ class ReviewStore:
 
     def get_review_item(self, paper_id: str) -> dict[str, object] | None:
         with self.database.connect() as connection:
-            paper = connection.execute(
-                "SELECT * FROM papers WHERE id = ?", (paper_id,)
-            ).fetchone()
+            paper = connection.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
             if paper is None:
                 return None
             extraction = connection.execute(
                 """
                 SELECT * FROM paper_extractions WHERE paper_id = ?
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (paper_id,),
+            ).fetchone()
+            extraction_job = connection.execute(
+                """
+                SELECT id, status, stage, attempt_count, error_class, error_message,
+                    extraction_run_id, second_run_id, check_run_id, updated_at, completed_at
+                FROM paper_extraction_jobs WHERE paper_id = ?
                 ORDER BY created_at DESC, id DESC LIMIT 1
                 """,
                 (paper_id,),
@@ -519,6 +553,19 @@ class ReviewStore:
                 """
                 SELECT source, source_id, source_url, license
                 FROM paper_sources WHERE paper_id = ?
+                """,
+                (paper_id,),
+            ).fetchall()
+            collections = connection.execute(
+                """
+                SELECT et.id AS topic_id, et.code AS topic_code, et.version AS topic_version,
+                    et.exclusion_reasons_json, cr.id AS run_id, cr.source, cr.search_stream,
+                    cr.status AS run_status, cp.title_abstract_decision,
+                    cp.full_text_decision, cp.primary_exclusion_reason
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN evidence_topics et ON et.id = cr.topic_id
+                WHERE cp.paper_id = ? ORDER BY cr.created_at, cr.id
                 """,
                 (paper_id,),
             ).fetchall()
@@ -543,6 +590,7 @@ class ReviewStore:
                 json.loads(extraction["second_extraction_json"]) if extraction else None
             ),
             "consistency": json.loads(extraction["consistency_json"]) if extraction else None,
+            "extraction_job": dict(extraction_job) if extraction_job else None,
             "admission": (
                 {
                     **dict(admission),
@@ -552,6 +600,17 @@ class ReviewStore:
                 else None
             ),
             "sources": [dict(row) for row in sources],
+            "collections": [
+                {
+                    **{
+                        key: value
+                        for key, value in dict(row).items()
+                        if key != "exclusion_reasons_json"
+                    },
+                    "exclusion_reasons": json.loads(row["exclusion_reasons_json"]),
+                }
+                for row in collections
+            ],
             "claims": [_claim_dict(row) for row in claims],
         }
 
@@ -582,9 +641,17 @@ class ReviewStore:
     @staticmethod
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
-            "SELECT condition_code, evidence_profile_id FROM knowledge_cards WHERE id = ?",
+            """
+            SELECT kc.condition_code, kc.evidence_profile_id, ep.topic_id
+            FROM knowledge_cards kc
+            LEFT JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
+            WHERE kc.id = ?
+            """,
             (card_id,),
         ).fetchone()
+        if card["topic_id"] is None:
+            raise ValueError("knowledge card has no governed evidence topic")
+        _require_complete_topic(connection, card["topic_id"], card["condition_code"])
         evidence = connection.execute(
             """
             SELECT count(*) AS total,
@@ -654,6 +721,123 @@ def _placeholders(values: tuple[str, ...]) -> str:
     if not values:
         raise ValueError("at least one value is required")
     return ",".join("?" for _ in values)
+
+
+def _require_complete_topic(connection, topic_id: str, condition_code: str):
+    topic = connection.execute("SELECT * FROM evidence_topics WHERE id = ?", (topic_id,)).fetchone()
+    if topic is None or topic["status"] != "locked" or topic["condition_code"] != condition_code:
+        raise ValueError("a locked matching evidence topic is required")
+    missing_stream = connection.execute(
+        """
+        SELECT 1 FROM json_each(?) required
+        WHERE NOT EXISTS (
+            SELECT 1 FROM collection_runs cr
+            WHERE cr.topic_id = ? AND cr.search_stream = required.value
+                AND cr.status = 'completed' AND cr.completed_at IS NOT NULL
+        ) LIMIT 1
+        """,
+        (topic["required_search_streams_json"], topic_id),
+    ).fetchone()
+    running_search = connection.execute(
+        "SELECT 1 FROM collection_runs WHERE topic_id = ? AND status = 'running' LIMIT 1",
+        (topic_id,),
+    ).fetchone()
+    incomplete_screening = connection.execute(
+        """
+        SELECT 1 FROM collection_papers cp
+        JOIN collection_runs cr ON cr.id = cp.run_id
+        WHERE cr.topic_id = ? AND cr.status = 'completed' AND (
+            cp.title_abstract_decision IS NULL
+            OR (cp.title_abstract_decision = 'included' AND cp.full_text_decision IS NULL)
+            OR (COALESCE(cp.full_text_decision, cp.title_abstract_decision) = 'excluded' AND (
+                cp.primary_exclusion_reason IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM json_each(?) reason
+                    WHERE reason.value = cp.primary_exclusion_reason
+                )
+            ))
+        ) LIMIT 1
+        """,
+        (topic_id, topic["exclusion_reasons_json"]),
+    ).fetchone()
+    conflicting_screening = connection.execute(
+        """
+        SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
+        WHERE cr.topic_id = ? AND cr.status = 'completed'
+        GROUP BY cp.paper_id
+        HAVING count(DISTINCT COALESCE(cp.full_text_decision, cp.title_abstract_decision)) > 1
+        LIMIT 1
+        """,
+        (topic_id,),
+    ).fetchone()
+    incomplete_included_paper = connection.execute(
+        """
+        SELECT 1 FROM collection_papers cp
+        JOIN collection_runs cr ON cr.id = cp.run_id
+        LEFT JOIN full_texts ft ON ft.paper_id = cp.paper_id
+        LEFT JOIN paper_extractions pe ON pe.id = (
+            SELECT id FROM paper_extractions
+            WHERE paper_id = cp.paper_id ORDER BY created_at DESC, id DESC LIMIT 1
+        )
+        LEFT JOIN paper_admissions pa ON pa.paper_id = cp.paper_id
+            WHERE cr.topic_id = ? AND cr.status = 'completed'
+                AND cp.full_text_decision = 'included' AND (
+                ft.paper_id IS NULL OR pe.id IS NULL OR pa.status <> 'internally_admitted'
+                OR NOT EXISTS (
+                    SELECT 1 FROM json_each(pa.condition_codes_json) admitted
+                    WHERE admitted.value = ?
+                )
+                OR EXISTS (
+                    SELECT 1 FROM study_publications sp JOIN studies s ON s.id = sp.study_id
+                    WHERE sp.paper_id = cp.paper_id AND NOT EXISTS (
+                        SELECT 1 FROM json_each(?) design WHERE design.value = s.study_design
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1 FROM claims c LEFT JOIN claim_reviews review ON review.claim_id = c.id
+                    WHERE c.paper_id = cp.paper_id AND (
+                        c.status NOT IN ('reviewed', 'rejected') OR review.claim_id IS NULL
+                        OR review.reviewer IS NULL OR trim(review.reviewer) = ''
+                    )
+                )
+            )
+        LIMIT 1
+        """,
+        (topic_id, condition_code, topic["eligible_study_designs_json"]),
+    ).fetchone()
+    missing_included_claim = connection.execute(
+        """
+        SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
+        WHERE cr.topic_id = ? AND cr.status = 'completed'
+            AND cp.full_text_decision = 'included' AND NOT EXISTS (
+                SELECT 1 FROM claims c JOIN claim_reviews review ON review.claim_id = c.id
+                WHERE c.paper_id = cp.paper_id AND review.decision = 'approved'
+                    AND review.condition_code = ?
+            ) LIMIT 1
+        """,
+        (topic_id, condition_code),
+    ).fetchone()
+    included_count = connection.execute(
+        """
+        SELECT count(DISTINCT cp.paper_id) FROM collection_papers cp
+        JOIN collection_runs cr ON cr.id = cp.run_id
+        WHERE cr.topic_id = ? AND cr.status = 'completed'
+            AND cp.full_text_decision = 'included'
+        """,
+        (topic_id,),
+    ).fetchone()[0]
+    if missing_stream:
+        raise ValueError("every required search stream must have a completed collection run")
+    if running_search:
+        raise ValueError("every active topic collection run must finish before profile creation")
+    if incomplete_screening:
+        raise ValueError("topic screening ledger is incomplete or has an invalid exclusion reason")
+    if conflicting_screening:
+        raise ValueError("deduplicated papers cannot have conflicting topic screening decisions")
+    if not included_count:
+        raise ValueError("topic has no full-text included evidence")
+    if incomplete_included_paper or missing_included_claim:
+        raise ValueError("every full-text included paper must be extracted, admitted, and reviewed")
+    return topic
 
 
 def _claim_dict(row) -> dict[str, object]:

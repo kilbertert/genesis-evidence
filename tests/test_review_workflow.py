@@ -118,11 +118,69 @@ def _profile(claim_id: str, *, certainty: str = "moderate") -> EvidenceProfileIn
     return EvidenceProfileInput(
         certainty=certainty,
         certainty_rationale="The complete eligible evidence body was reviewed for this outcome.",
-        evidence_cutoff_date="2026-08-11",
         estimate_target="Association between baseline 25(OH)D status and frailty prevalence",
-        evidence_body_complete=True,
         interpretations={claim_id: "supports"},
     )
+
+
+def _complete_topic(database: Database, *paper_ids: str) -> str:
+    store = PaperStore(database)
+    topic_id = store.create_topic(
+        code=f"vitamin-d-frailty-{uuid.uuid4()}",
+        version="1",
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        review_question="Is vitamin D status associated with frailty in older adults?",
+        picots={
+            "population": "Adults aged 60 years and older",
+            "intervention_or_exposure": "Measured serum 25(OH)D",
+            "comparator": "Higher versus lower status",
+            "outcomes": "Frailty prevalence",
+            "timing": "Baseline",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("cohort_study",),
+        inclusion_criteria=("Older adults with measured serum 25(OH)D",),
+        exclusion_reasons=("wrong_population", "wrong_exposure", "wrong_outcome"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    store.lock_topic(topic_id, reviewer="reviewer-1")
+    run_id = store.start_collection(
+        topic_id=topic_id,
+        source="test",
+        query="vitamin D AND frailty",
+    )
+    for position, paper_id in enumerate(paper_ids, 1):
+        store.add_to_collection(run_id, paper_id, position=position)
+    store.finish_collection(run_id, status="completed", detail={})
+    for paper_id in paper_ids:
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="title_abstract",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+        with database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO full_texts(paper_id, object_key, sha256, media_type, rights_status)
+                VALUES (?, ?, ?, 'application/xml', 'redistributable')
+                ON CONFLICT(paper_id) DO NOTHING
+                """,
+                (paper_id, f"test/{paper_id}.xml", "0" * 64),
+            )
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="full_text",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+    return topic_id
 
 
 def _service(tmp_path) -> tuple[Database, EvidenceReviewService]:
@@ -197,6 +255,7 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
         review=_approved_review(),
     )
     card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],
@@ -216,9 +275,7 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
             "SELECT status, condition_codes_json FROM paper_admissions"
         ).fetchone()
         assert admission["status"] == "internally_admitted"
-        assert json.loads(admission["condition_codes_json"]) == [
-            "COND_VITAMIN_D_DEFICIENCY"
-        ]
+        assert json.loads(admission["condition_codes_json"]) == ["COND_VITAMIN_D_DEFICIENCY"]
         assert connection.execute("SELECT grade FROM knowledge_cards").fetchone()[0] == "moderate"
 
 
@@ -236,6 +293,7 @@ def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path
         review=_approved_review(),
     )
     card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],
@@ -281,6 +339,7 @@ def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:
     )
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],
@@ -323,6 +382,7 @@ def test_preprint_cannot_support_patient_visible_profile(tmp_path) -> None:
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     with pytest.raises(ValueError, match="formal publications"):
         service.create_card_draft(
+            topic_id=_complete_topic(database, paper_id),
             condition_code="COND_VITAMIN_D_DEFICIENCY",
             version="1.0.0",
             claim_ids=[claim_id],
@@ -343,6 +403,7 @@ def test_unknown_publication_status_cannot_support_patient_visible_profile(tmp_p
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     with pytest.raises(ValueError, match="formal publications"):
         service.create_card_draft(
+            topic_id=_complete_topic(database, paper_id),
             condition_code="COND_VITAMIN_D_DEFICIENCY",
             version="1.0.0",
             claim_ids=[claim_id],
@@ -364,6 +425,7 @@ def test_unknown_publication_does_not_block_complete_formal_evidence_profile(tmp
         )
     service.review_claim(formal_claim, reviewer="reviewer-1", review=_approved_review())
     service.create_card_draft(
+        topic_id=_complete_topic(database, formal_paper),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[formal_claim],
@@ -383,6 +445,7 @@ def test_publish_rechecks_publication_status_after_card_draft(tmp_path) -> None:
     )
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],
@@ -434,10 +497,11 @@ def test_case_reports_cannot_support_patient_visible_profile(tmp_path, study_des
             ),
             applicability="Safety signal only.",
             condition_code="COND_VITAMIN_D_DEFICIENCY",
-        )
+        ),
     )
     with pytest.raises(ValueError, match="case-report"):
         service.create_card_draft(
+            topic_id=_complete_topic(database, paper_id),
             condition_code="COND_VITAMIN_D_DEFICIENCY",
             version="1.0.0",
             claim_ids=[claim_id],
@@ -458,8 +522,9 @@ def test_unreviewed_eligible_result_blocks_evidence_profile(tmp_path) -> None:
             condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
         )
     service.review_claim(first_claim, reviewer="reviewer-1", review=_approved_review())
-    with pytest.raises(ValueError, match="all eligible results"):
+    with pytest.raises(ValueError, match="full-text included paper"):
         service.create_card_draft(
+            topic_id=_complete_topic(database, first_paper, second_paper),
             condition_code="COND_VITAMIN_D_DEFICIENCY",
             version="1.0.0",
             claim_ids=[first_claim],
@@ -484,6 +549,7 @@ def test_patient_card_body_rejects_diagnostic_wording(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="forbidden term"):
         service.create_card_draft(
+            topic_id=_complete_topic(database, paper_id),
             condition_code="COND_VITAMIN_D_DEFICIENCY",
             version="1.0.0",
             claim_ids=[claim_id],
@@ -504,6 +570,7 @@ def test_rejecting_reviewed_evidence_stales_a_published_card(tmp_path) -> None:
     approved = _approved_review()
     service.review_claim(claim_id, reviewer="reviewer-1", review=approved)
     card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],

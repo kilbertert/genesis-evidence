@@ -11,15 +11,17 @@ def test_schema_has_only_two_line_tables_and_stays_under_budget(tmp_path) -> Non
     database.initialize()
 
     tables = set(database.table_names())
-    assert len(tables) == 24
+    assert len(tables) == 26
     assert {
         "conditions",
+        "evidence_topics",
         "papers",
         "claims",
         "studies",
         "study_publications",
         "results",
         "paper_extractions",
+        "paper_extraction_jobs",
         "claim_reviews",
         "evidence_profiles",
         "evidence_profile_results",

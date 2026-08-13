@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..core.store.papers import ObjectStore, PaperStore
-from .ai_extraction import PaperAnalyzer
 from .connectors.base import LiteratureConnector
 from .downloader import FullTextDownloader
 from .integrity import IntegrityStatus, PublicationIntegrityChecker
@@ -19,7 +18,7 @@ class IngestionSummary:
     discovered: int
     stored_papers: int
     downloaded_full_texts: int
-    candidate_claims: int
+    queued_extractions: int
     skipped_full_texts: int
     failed_full_texts: int
 
@@ -32,19 +31,17 @@ class LiteratureIngestionService:
         objects: ObjectStore,
         downloader: FullTextDownloader,
         integrity: PublicationIntegrityChecker,
-        analyzer: PaperAnalyzer,
     ) -> None:
         self._store = store
         self._objects = objects
         self._downloader = downloader
         self._integrity = integrity
-        self._analyzer = analyzer
         self._jats = JatsParser()
 
     def collect(
         self,
         *,
-        condition_code: str,
+        topic_id: str,
         connector: LiteratureConnector,
         query: str,
         limit: int,
@@ -53,7 +50,7 @@ class LiteratureIngestionService:
         query_version: str = "1",
     ) -> IngestionSummary:
         run_id = self._store.start_collection(
-            condition_code=condition_code,
+            topic_id=topic_id,
             source=connector.source.value,
             query=query,
             search_stream=search_stream,
@@ -63,7 +60,7 @@ class LiteratureIngestionService:
             "discovered": 0,
             "stored_papers": 0,
             "downloaded_full_texts": 0,
-            "candidate_claims": 0,
+            "queued_extractions": 0,
             "skipped_full_texts": 0,
             "failed_full_texts": 0,
         }
@@ -103,7 +100,7 @@ class LiteratureIngestionService:
                         continue
                     for candidate in record.full_text_candidates:
                         try:
-                            claims = self._ingest_candidate(paper_id, record, candidate)
+                            result = self._ingest_candidate(run_id, paper_id, candidate)
                         except Exception as exc:
                             counts["failed_full_texts"] += 1
                             self._store.record_event(
@@ -117,11 +114,12 @@ class LiteratureIngestionService:
                                 },
                             )
                         else:
-                            if claims is None:
+                            if result is None:
                                 counts["skipped_full_texts"] += 1
                             else:
                                 counts["downloaded_full_texts"] += 1
-                                counts["candidate_claims"] += claims
+                                counts["queued_extractions"] += 1
+                                break
                 if not page.next_cursor or page.next_cursor == cursor:
                     break
                 cursor = page.next_cursor
@@ -136,8 +134,11 @@ class LiteratureIngestionService:
         return IngestionSummary(run_id=run_id, **counts)
 
     def _ingest_candidate(
-        self, paper_id: str, paper: PaperRecord, candidate: FullTextCandidate
-    ) -> int | None:
+        self,
+        run_id: str,
+        paper_id: str,
+        candidate: FullTextCandidate,
+    ) -> str | None:
         if candidate.format != FullTextFormat.JATS_XML:
             return None
         artifact = self._downloader.download(candidate)
@@ -154,8 +155,7 @@ class LiteratureIngestionService:
             media_type=artifact.media_type or "application/xml",
             rights_status=document.license.rights_status.value,
         )
-        checked = self._analyzer.analyze(paper, document.to_dict())
-        return self._store.save_ai_extraction(paper_id, checked)
+        return self._store.enqueue_extraction(paper_id, collection_run_id=run_id)
 
 
 def _source_url(record: PaperRecord) -> str:

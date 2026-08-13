@@ -11,35 +11,47 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.store import Database, ReviewStore
+from ..core.store import Database, PaperStore, ReviewStore
 from .service import ClaimReviewInput, EvidenceProfileInput, EvidenceReviewService
 
 
 class AdmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reviewer: str = Field(min_length=1, max_length=200)
     condition_codes: list[str] = Field(min_length=1, max_length=12)
     consistency_resolution: str | None = Field(default=None, max_length=5000)
 
 
-class ReviewerRequest(BaseModel):
+class TopicRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reviewer: str = Field(min_length=1, max_length=200)
+    code: str = Field(min_length=1, max_length=100)
+    version: str = Field(min_length=1, max_length=50)
+    condition_code: str
+    review_question: str = Field(min_length=1, max_length=2000)
+    picots: dict[str, str]
+    eligible_study_designs: list[str] = Field(min_length=1)
+    inclusion_criteria: list[str] = Field(min_length=1)
+    exclusion_reasons: list[str] = Field(min_length=1)
+    required_search_streams: list[str] = Field(min_length=1)
+    evidence_cutoff_date: str = Field(pattern=r"\d{4}-\d{2}-\d{2}")
 
 
-class ClaimReviewRequest(ClaimReviewInput):
-    reviewer: str = Field(min_length=1, max_length=200)
+class ScreeningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str
+    decision: str
+    primary_exclusion_reason: str | None = None
 
 
 class CardDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    topic_id: str
     condition_code: str
     version: str
     claim_ids: list[str] = Field(min_length=1)
-    reviewer: str = Field(min_length=1, max_length=200)
     patient_body: str = Field(min_length=1, max_length=20_000)
     profile: EvidenceProfileInput
 
@@ -47,17 +59,20 @@ class CardDraftRequest(BaseModel):
 class CardTransitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reviewer: str = Field(min_length=1, max_length=200)
     target: str
 
 
-def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
+def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> FastAPI:
     normalized_key = api_key.strip()
+    normalized_reviewer = reviewer_id.strip()
     if len(normalized_key) < 24:
         raise ValueError("GENESIS_EVIDENCE_REVIEW_API_KEY must contain at least 24 characters")
+    if not normalized_reviewer or len(normalized_reviewer) > 200:
+        raise ValueError("GENESIS_EVIDENCE_REVIEWER_ID must identify the authenticated reviewer")
     database = Database(database_path)
     database.initialize()
     store = ReviewStore(database)
+    papers_store = PaperStore(database)
     service = EvidenceReviewService(store)
     workbench = Path(__file__).with_name("workbench.html").read_text(encoding="utf-8")
     app = FastAPI(title="Genesis Evidence Review", docs_url=None, redoc_url=None)
@@ -75,9 +90,19 @@ def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    def require_key(x_review_key: str = Header(default="")) -> None:
-        if not secrets.compare_digest(x_review_key, normalized_key):
-            raise HTTPException(status_code=401, detail="invalid review key")
+    def principal(authorization: str = Header(default="")) -> str:
+        scheme, _, token = authorization.partition(" ")
+        if (
+            scheme.casefold() != "bearer"
+            or not token
+            or not secrets.compare_digest(token, normalized_key)
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="invalid bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return normalized_reviewer
 
     @app.exception_handler(ValueError)
     async def invalid_workflow_value(_, exc: ValueError) -> JSONResponse:
@@ -91,7 +116,11 @@ def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
     def index() -> str:
         return workbench
 
-    @app.get("/api/review/conditions", dependencies=[Depends(require_key)])
+    @app.get("/api/review/me")
+    def me(reviewer: str = Depends(principal)) -> dict[str, str]:
+        return {"reviewer_id": reviewer}
+
+    @app.get("/api/review/conditions", dependencies=[Depends(principal)])
     def conditions() -> list[dict[str, object]]:
         return [
             {
@@ -103,56 +132,118 @@ def create_app(*, database_path: Path | str, api_key: str) -> FastAPI:
             for item in database.list_conditions()
         ]
 
-    @app.get("/api/review/papers", dependencies=[Depends(require_key)])
+    @app.get("/api/review/topics", dependencies=[Depends(principal)])
+    def topics() -> list[dict[str, object]]:
+        return papers_store.list_topics()
+
+    @app.post("/api/review/topics")
+    def create_topic(request: TopicRequest, reviewer: str = Depends(principal)) -> dict[str, str]:
+        values = request.model_dump()
+        for field in (
+            "eligible_study_designs",
+            "inclusion_criteria",
+            "exclusion_reasons",
+            "required_search_streams",
+        ):
+            values[field] = tuple(dict.fromkeys(values[field]))
+        topic_id = papers_store.create_topic(reviewer=reviewer, **values)
+        return {"id": topic_id, "status": "draft"}
+
+    @app.post("/api/review/topics/{topic_id}/lock")
+    def lock_topic(topic_id: str, reviewer: str = Depends(principal)) -> dict[str, str]:
+        papers_store.lock_topic(topic_id, reviewer=reviewer)
+        return {"id": topic_id, "status": "locked"}
+
+    @app.get("/api/review/topics/{topic_id}/ledger", dependencies=[Depends(principal)])
+    def topic_ledger(topic_id: str) -> list[dict[str, object]]:
+        return papers_store.list_topic_ledger(topic_id)
+
+    @app.get("/api/review/extraction-jobs", dependencies=[Depends(principal)])
+    def extraction_jobs() -> list[dict[str, object]]:
+        return papers_store.list_extraction_jobs()
+
+    @app.post("/api/review/extraction-jobs/{job_id}/retry")
+    def retry_extraction(job_id: str, reviewer: str = Depends(principal)) -> dict[str, str]:
+        papers_store.retry_extraction(job_id, reviewer=reviewer)
+        return {"id": job_id, "status": "queued"}
+
+    @app.post("/api/review/topics/{topic_id}/runs/{run_id}/papers/{paper_id}/screen")
+    def screen_topic_paper(
+        topic_id: str,
+        run_id: str,
+        paper_id: str,
+        request: ScreeningRequest,
+        reviewer: str = Depends(principal),
+    ) -> dict[str, str]:
+        if run_id not in {row["run_id"] for row in papers_store.list_topic_ledger(topic_id)}:
+            raise HTTPException(status_code=404, detail="topic collection record not found")
+        papers_store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage=request.stage,
+            decision=request.decision,
+            exclusion_reason=request.primary_exclusion_reason,
+            reviewer=reviewer,
+        )
+        return {"status": request.decision}
+
+    @app.get("/api/review/papers", dependencies=[Depends(principal)])
     def papers() -> list[dict[str, object]]:
         return store.list_review_queue()
 
-    @app.get("/api/review/papers/{paper_id}", dependencies=[Depends(require_key)])
+    @app.get("/api/review/papers/{paper_id}", dependencies=[Depends(principal)])
     def paper(paper_id: str) -> dict[str, object]:
         item = store.get_review_item(paper_id)
         if item is None:
             raise HTTPException(status_code=404, detail="paper not found")
         return item
 
-    @app.post("/api/review/papers/{paper_id}/admit", dependencies=[Depends(require_key)])
-    def admit(paper_id: str, request: AdmissionRequest) -> dict[str, str]:
+    @app.post("/api/review/papers/{paper_id}/admit")
+    def admit(
+        paper_id: str, request: AdmissionRequest, reviewer: str = Depends(principal)
+    ) -> dict[str, str]:
         service.admit_paper(
             paper_id,
-            reviewer=request.reviewer,
+            reviewer=reviewer,
             condition_codes=request.condition_codes,
             consistency_resolution=request.consistency_resolution,
         )
         return {"status": "internally_admitted"}
 
-    @app.post("/api/review/papers/{paper_id}/reject", dependencies=[Depends(require_key)])
-    def reject(paper_id: str, request: ReviewerRequest) -> dict[str, str]:
-        service.reject_paper(paper_id, reviewer=request.reviewer)
+    @app.post("/api/review/papers/{paper_id}/reject")
+    def reject(paper_id: str, reviewer: str = Depends(principal)) -> dict[str, str]:
+        service.reject_paper(paper_id, reviewer=reviewer)
         return {"status": "rejected"}
 
-    @app.post("/api/review/claims/{claim_id}", dependencies=[Depends(require_key)])
-    def review_claim(claim_id: str, request: ClaimReviewRequest) -> dict[str, str]:
-        values = request.model_dump(exclude={"reviewer"})
+    @app.post("/api/review/claims/{claim_id}")
+    def review_claim(
+        claim_id: str, request: ClaimReviewInput, reviewer: str = Depends(principal)
+    ) -> dict[str, str]:
         service.review_claim(
             claim_id,
-            reviewer=request.reviewer,
-            review=ClaimReviewInput.model_validate(values),
+            reviewer=reviewer,
+            review=request,
         )
         return {"status": request.decision}
 
-    @app.get("/api/review/cards", dependencies=[Depends(require_key)])
+    @app.get("/api/review/cards", dependencies=[Depends(principal)])
     def cards() -> list[dict[str, object]]:
         return store.list_cards()
 
-    @app.post("/api/review/cards", dependencies=[Depends(require_key)])
-    def create_card(request: CardDraftRequest) -> dict[str, str]:
-        card_id = service.create_card_draft(**request.model_dump())
+    @app.post("/api/review/cards")
+    def create_card(
+        request: CardDraftRequest, reviewer: str = Depends(principal)
+    ) -> dict[str, str]:
+        card_id = service.create_card_draft(reviewer=reviewer, **request.model_dump())
         return {"id": card_id, "status": "draft"}
 
-    @app.post("/api/review/cards/{card_id}/transition", dependencies=[Depends(require_key)])
-    def transition_card(card_id: str, request: CardTransitionRequest) -> dict[str, str]:
+    @app.post("/api/review/cards/{card_id}/transition")
+    def transition_card(
+        card_id: str, request: CardTransitionRequest, reviewer: str = Depends(principal)
+    ) -> dict[str, str]:
         service.transition_card(
             card_id,
-            reviewer=request.reviewer,
+            reviewer=reviewer,
             target=request.target,
         )
         return {"id": card_id, "status": request.target}
@@ -164,6 +255,7 @@ def main() -> None:
     app = create_app(
         database_path=Path(os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3")),
         api_key=_review_api_key(),
+        reviewer_id=os.getenv("GENESIS_EVIDENCE_REVIEWER_ID", ""),
     )
     uvicorn.run(
         app,
@@ -173,9 +265,7 @@ def main() -> None:
 
 
 def _review_api_key() -> str:
-    return os.getenv("GENESIS_EVIDENCE_REVIEW_API_KEY") or os.getenv(
-        "GENESIS_REVIEW_API_KEY", ""
-    )
+    return os.getenv("GENESIS_EVIDENCE_REVIEW_API_KEY") or os.getenv("GENESIS_REVIEW_API_KEY", "")
 
 
 if __name__ == "__main__":

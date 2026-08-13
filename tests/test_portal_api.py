@@ -73,12 +73,25 @@ def _publish_card(path, condition_code: str = "COND_PREDIABETES") -> None:
     with Database(path).transaction() as connection:
         connection.execute(
             """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES ('topic-1', 'test-topic', '1', ?, 'locked', 'Test question', '{}',
+                '[]', '[]', '[]', '[]', '2026-08-11', 'reviewer',
+                '2026-08-11T00:00:00Z', 'reviewer', '2026-08-11T00:00:00Z')
+            """,
+            (condition_code,),
+        )
+        connection.execute(
+            """
             INSERT INTO evidence_profiles(
-                id, condition_code, version, ingredient_name, ingredient_form,
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
                 population, baseline_nutrient_status, dose, comparator, outcome,
                 timepoint, estimate_target, evidence_body_complete, certainty,
                 certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES ('profile-1', ?, '1.0.0', 'Test ingredient', 'Test form',
+            ) VALUES ('profile-1', 'topic-1', ?, '1.0.0', 'Test ingredient', 'Test form',
                 'Adults 40+', 'Not reported', 'Test dose', 'Comparator', 'Outcome',
                 'Timepoint', 'Test target', 1, 'moderate', 'Test-only reviewed profile',
                 '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z',

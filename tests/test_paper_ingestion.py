@@ -6,12 +6,12 @@ import pytest
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore
 from genesis_evidence.literature.ai_extraction import (
-    CheckedPaperExtraction,
     ConsistencyReport,
     PaperClaimCandidate,
     PaperExtraction,
 )
 from genesis_evidence.literature.downloader import DownloadedArtifact
+from genesis_evidence.literature.extraction_worker import LiteratureExtractionWorker
 from genesis_evidence.literature.ingestion import LiteratureIngestionService
 from genesis_evidence.literature.integrity import (
     IntegrityAssessment,
@@ -70,10 +70,17 @@ class FakeIntegrityChecker:
 
 
 class FakeAnalyzer:
-    def analyze(
-        self, paper: PaperRecord, document: dict[str, object]
-    ) -> CheckedPaperExtraction:
+    model = "fake-extractor"
+
+    def __init__(self, *, fail_on_call: int | None = None) -> None:
+        self.calls = 0
+        self.fail_on_call = fail_on_call
+
+    def extract(self, paper: PaperRecord, document: dict[str, object]):
         del paper, document
+        self.calls += 1
+        if self.calls == self.fail_on_call:
+            raise RuntimeError("provider failed")
         extraction = PaperExtraction(
             summary="The paper reports an intervention effect.",
             research_question="Does protein improve muscle strength?",
@@ -113,17 +120,14 @@ class FakeAnalyzer:
                 )
             ],
         )
-        return CheckedPaperExtraction(
-            model="fake-extractor",
-            extraction_run_id="extract-1",
-            extraction=extraction,
-            second_model="fake-extractor-independent",
-            second_run_id="extract-2",
-            second_extraction=extraction,
-            check_model="fake-checker",
-            check_run_id="check-1",
-            consistency=ConsistencyReport(verdict="consistent", issues=[]),
-        )
+        return extraction, f"extract-{self.calls}"
+
+    def check(self, paper, document, extraction, second_extraction):
+        del paper, document, extraction, second_extraction
+        self.calls += 1
+        if self.calls == self.fail_on_call:
+            raise RuntimeError("provider failed")
+        return ConsistencyReport(verdict="consistent", issues=[]), f"check-{self.calls}"
 
 
 def _record(*, source: SourceName = SourceName.EUROPE_PMC, source_id: str = "MED:123"):
@@ -148,6 +152,31 @@ def _record(*, source: SourceName = SourceName.EUROPE_PMC, source_id: str = "MED
         full_text_candidates=(candidate,),
         raw={"license": "CC BY"},
     )
+
+
+def _locked_topic(store: PaperStore) -> str:
+    topic_id = store.create_topic(
+        code="sarcopenia-protein",
+        version="1",
+        condition_code="COND_SARCOPENIA_FRAILTY",
+        review_question="Does protein supplementation improve strength in older adults?",
+        picots={
+            "population": "Older adults",
+            "intervention_or_exposure": "Protein supplementation",
+            "comparator": "Placebo or usual diet",
+            "outcomes": "Muscle strength",
+            "timing": "Any follow-up",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("randomized_controlled_trial",),
+        inclusion_criteria=("Human adults",),
+        exclusion_reasons=("wrong_population", "wrong_intervention", "wrong_design"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    store.lock_topic(topic_id, reviewer="reviewer-1")
+    return topic_id
 
 
 def test_paper_store_deduplicates_the_same_paper_across_sources(tmp_path) -> None:
@@ -187,7 +216,7 @@ def test_object_store_detects_corruption_in_an_existing_digest_path(tmp_path) ->
         objects.read(stored.key)
 
 
-def test_collection_persists_full_text_and_pending_candidate_claims(tmp_path) -> None:
+def test_collection_queues_full_text_then_worker_persists_candidate_claims(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
     store = PaperStore(database)
@@ -196,21 +225,32 @@ def test_collection_persists_full_text_and_pending_candidate_claims(tmp_path) ->
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
-        analyzer=FakeAnalyzer(),
     )
     summary = service.collect(
-        condition_code="COND_SARCOPENIA_FRAILTY",
+        topic_id=_locked_topic(store),
         connector=FakeConnector(_record()),  # type: ignore[arg-type]
         query="sarcopenia AND protein",
         limit=5,
     )
     assert summary.discovered == 1
     assert summary.downloaded_full_texts == 1
-    assert summary.candidate_claims >= 1
+    assert summary.queued_extractions == 1
     with database.connect() as connection:
         paper = connection.execute("SELECT * FROM papers").fetchone()
         assert paper["integrity_status"] == "clear"
         assert connection.execute("SELECT status FROM collection_runs").fetchone()[0] == "completed"
+        assert connection.execute("SELECT processed_at FROM full_texts").fetchone()[0] is None
+        assert (
+            connection.execute("SELECT status FROM paper_extraction_jobs").fetchone()[0]
+            == "queued"
+        )
+    worker = LiteratureExtractionWorker(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        analyzer=FakeAnalyzer(),
+    )
+    assert worker.run_once()
+    with database.connect() as connection:
         assert connection.execute("SELECT processed_at FROM full_texts").fetchone()[0]
         assert connection.execute("SELECT status FROM paper_admissions").fetchone()[0] == "pending"
         assert connection.execute("SELECT count(*) FROM claims").fetchone()[0] >= 1
@@ -218,20 +258,101 @@ def test_collection_persists_full_text_and_pending_candidate_claims(tmp_path) ->
         assert connection.execute("SELECT count(*) FROM studies").fetchone()[0] == 1
         extraction = connection.execute("SELECT * FROM paper_extractions").fetchone()
         assert extraction["second_run_id"] == "extract-2"
+        job = connection.execute("SELECT * FROM paper_extraction_jobs").fetchone()
+        assert job["status"] == "completed"
+        assert job["check_run_id"] == "check-3"
+
+
+def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+    summary = service.collect(
+        topic_id=_locked_topic(store),
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="protein AND ageing",
+        limit=1,
+    )
+    assert summary.downloaded_full_texts == 1
+    assert summary.failed_full_texts == 0
+    worker = LiteratureExtractionWorker(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        analyzer=FakeAnalyzer(fail_on_call=2),
+    )
+    job_id = worker.run_once()
+    assert job_id
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 1
+        job = connection.execute("SELECT * FROM paper_extraction_jobs").fetchone()
+        assert job["status"] == "failed"
+        assert job["stage"] == "extraction_b"
+        assert job["extraction_run_id"] == "extract-1"
+        assert job["second_run_id"] is None
+    store.retry_extraction(job_id, reviewer="reviewer-1")
+    resumed = FakeAnalyzer()
+    assert LiteratureExtractionWorker(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        analyzer=resumed,
+    ).run_once() == job_id
+    assert resumed.calls == 2
+    assert store.get_extraction_job(job_id)["status"] == "completed"
+
+
+def test_interrupted_running_job_is_failed_without_losing_saved_stage(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+    service.collect(
+        topic_id=_locked_topic(store),
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="protein AND ageing",
+        limit=1,
+    )
+    job = store.claim_next_extraction_job()
+    assert job
+    extraction, run_id = FakeAnalyzer().extract(_record(), {})
+    store.save_extraction_channel(
+        str(job["id"]),
+        channel="a",
+        model="fake-extractor",
+        run_id=run_id,
+        extraction_json=extraction.model_dump_json(),
+    )
+
+    assert store.recover_running_extraction_jobs() == 1
+    recovered = store.get_extraction_job(str(job["id"]))
+    assert recovered["status"] == "failed"
+    assert recovered["stage"] == "extraction_b"
+    assert recovered["extraction_run_id"] == "extract-1"
+    assert recovered["error_class"] == "WorkerInterrupted"
 
 
 def test_internal_tdm_full_text_is_processed_but_not_marked_redistributable(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
+    store = PaperStore(database)
     service = LiteratureIngestionService(
-        store=PaperStore(database),
+        store=store,
         objects=ObjectStore(tmp_path / "objects"),
         downloader=InternalTdmDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
-        analyzer=FakeAnalyzer(),
     )
     summary = service.collect(
-        condition_code="COND_SARCOPENIA_FRAILTY",
+        topic_id=_locked_topic(store),
         connector=FakeConnector(_record()),  # type: ignore[arg-type]
         query="protein AND ageing",
         limit=1,
@@ -245,24 +366,22 @@ def test_internal_tdm_full_text_is_processed_but_not_marked_redistributable(tmp_
 def test_retracted_paper_never_enters_full_text_or_claim_processing(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
+    store = PaperStore(database)
     service = LiteratureIngestionService(
-        store=PaperStore(database),
+        store=store,
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(IntegrityStatus.RETRACTED),  # type: ignore[arg-type]
-        analyzer=FakeAnalyzer(),
     )
     summary = service.collect(
-        condition_code="COND_SARCOPENIA_FRAILTY",
+        topic_id=_locked_topic(store),
         connector=FakeConnector(_record()),  # type: ignore[arg-type]
         query="sarcopenia",
         limit=1,
     )
     assert summary.skipped_full_texts == 1
     with database.connect() as connection:
-        integrity_status = connection.execute(
-            "SELECT integrity_status FROM papers"
-        ).fetchone()[0]
+        integrity_status = connection.execute("SELECT integrity_status FROM papers").fetchone()[0]
         assert integrity_status == "retracted"
         assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
         assert connection.execute("SELECT count(*) FROM claims").fetchone()[0] == 0
@@ -271,15 +390,15 @@ def test_retracted_paper_never_enters_full_text_or_claim_processing(tmp_path) ->
 def test_expression_of_concern_is_preserved_for_human_review(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
+    store = PaperStore(database)
     service = LiteratureIngestionService(
-        store=PaperStore(database),
+        store=store,
         objects=ObjectStore(tmp_path / "objects"),
         downloader=FakeDownloader(),  # type: ignore[arg-type]
         integrity=FakeIntegrityChecker(IntegrityStatus.EXPRESSION_OF_CONCERN),  # type: ignore[arg-type]
-        analyzer=FakeAnalyzer(),
     )
     service.collect(
-        condition_code="COND_SARCOPENIA_FRAILTY",
+        topic_id=_locked_topic(store),
         connector=FakeConnector(_record()),  # type: ignore[arg-type]
         query="sarcopenia",
         limit=1,
