@@ -61,4 +61,14 @@ systemctl --user restart genesis-evidence-worker   # 改了 env 后重启 worker
 - `https://genesis-review.ranlei.work` — 旧证据审核工作台
 
 **访问新版一律用 `genesis-evidence*` 域名,不要再用 `genesis-review` / `genesis-health`
-这两个旧域名**,以免混淆。旧服务是否停用见运维决策(未在本文默认处理)。
+这两个旧域名**,以免混淆。
+
+旧 genesis-health 的 6 个 user 服务(`genesis-health-portal`、
+`genesis-health-private-portal`、`genesis-review-api`、`genesis-health-frp`、
+`genesis-health-private-tunnel`、`genesis-health-public-tunnel`)已于
+2026-08-13 全部 `stop + disable`,旧域名返回 404;代码与数据冻结在
+`/home/claude/Projects/genesis-health`,未删除。需要临时恢复时:
+
+```bash
+systemctl --user enable --now genesis-health-frp genesis-health-portal genesis-review-api
+```
