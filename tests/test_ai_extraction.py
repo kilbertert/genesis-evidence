@@ -84,7 +84,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert request.url.path == "/api/v3/chat/completions"
         assert request.headers["authorization"] == "Bearer secret"
         assert body["model"] == "deepseek-v4-flash-ga-260731"
-        assert body["max_tokens"] == 16_384
+        assert body["max_tokens"] == (4096 if calls == 3 else 16_384)
         assert body["temperature"] == 0
         assert body["thinking"] == {"type": "disabled"}
         if calls == 1:
