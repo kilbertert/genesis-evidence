@@ -178,6 +178,7 @@ class ArkPaperAnalyzer:
         model: str = DEFAULT_ARK_MODEL,
         timeout_seconds: float = 180.0,
         max_input_chars: int = 300_000,
+        max_tokens: int = 16_384,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._api_key = api_key.strip()
@@ -185,6 +186,7 @@ class ArkPaperAnalyzer:
         self._model = model.strip() or DEFAULT_ARK_MODEL
         self._timeout = max(5.0, timeout_seconds)
         self._max_input_chars = max(10_000, max_input_chars)
+        self._max_tokens = max(1, max_tokens)
         self._transport = transport
 
     @classmethod
@@ -193,6 +195,7 @@ class ArkPaperAnalyzer:
             api_key=os.getenv("ARK_API_KEY", ""),
             endpoint=os.getenv("ARK_BASE_URL", DEFAULT_ARK_ENDPOINT),
             model=os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL),
+            max_tokens=int(os.getenv("ARK_MAX_TOKENS", "16384")),
         )
 
     def analyze(self, paper: PaperRecord, document: dict[str, object]) -> CheckedPaperExtraction:
@@ -321,7 +324,7 @@ class ArkPaperAnalyzer:
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     json={
                         "model": self._model,
-                        "max_tokens": 8192,
+                        "max_tokens": self._max_tokens,
                         "temperature": 0,
                         "messages": [
                             {"role": "system", "content": system_prompt},
@@ -337,7 +340,9 @@ class ArkPaperAnalyzer:
         except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
             raise PaperAnalysisError("paper analysis provider request failed") from exc
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise PaperAnalysisError("paper analysis provider response is malformed") from exc
+            raise PaperAnalysisError(
+                f"paper analysis provider response is malformed: {exc}"
+            ) from exc
         return content, run_id
 
 
@@ -352,7 +357,10 @@ def _streamed_completion(response: httpx.Response) -> tuple[str, str]:
             continue
         chunk = json.loads(data)
         run_id = run_id or str(chunk.get("id") or "").strip()
-        delta = chunk["choices"][0].get("delta", {})
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        delta = choices[0].get("delta") or {}
         text = delta.get("content")
         if isinstance(text, str):
             content.append(text)

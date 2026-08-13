@@ -10,6 +10,7 @@ from genesis_evidence.literature.ai_extraction import (
     ArkPaperAnalyzer,
     PaperAnalysisError,
     PaperExtraction,
+    _streamed_completion,
 )
 from genesis_evidence.literature.models import PaperRecord, SourceName
 
@@ -83,7 +84,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert request.url.path == "/api/v3/chat/completions"
         assert request.headers["authorization"] == "Bearer secret"
         assert body["model"] == "deepseek-v4-flash-ga-260731"
-        assert body["max_tokens"] == 8192
+        assert body["max_tokens"] == 16_384
         assert body["temperature"] == 0
         if calls == 1:
             source = json.loads(body["messages"][1]["content"])
@@ -211,3 +212,21 @@ def test_ark_analyzer_rejects_evidence_missing_from_full_text() -> None:
             PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
             {"abstract": "This text contains none of the cited excerpts."},
         )
+
+
+def test_streamed_completion_skips_chunks_without_choices() -> None:
+    body = (
+        'data: {"id":"run-1","choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n'
+        'data: {"id":"run-1","choices":[]}\n\n'
+        'data: {"id":"run-1","choices":[{"delta":{"content":"{\\"answer\\":1}"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    content, run_id = _streamed_completion(httpx.Response(200, text=body))
+    assert run_id == "run-1"
+    assert json.loads(content) == {"answer": 1}
+
+
+def test_from_env_honors_ark_max_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("ARK_API_KEY", "k")
+    monkeypatch.setenv("ARK_MAX_TOKENS", "32000")
+    assert ArkPaperAnalyzer.from_env()._max_tokens == 32000
