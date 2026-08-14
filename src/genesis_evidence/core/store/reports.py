@@ -341,16 +341,18 @@ class ReportStore:
                 (report_id,),
             ).fetchall()
             by_id = {row["id"]: row for row in rows}
-            supplied = {item.observation_id for item in confirmations}
-            if len(supplied) != len(confirmations) or supplied != set(by_id):
-                raise ValueError("every observation must be confirmed exactly once")
+            supplied = {item.observation_id: item for item in confirmations}
+            if len(supplied) != len(confirmations):
+                raise ValueError("an observation can only be confirmed once")
+            if not set(supplied).issubset(by_id):
+                raise ValueError("confirmation contains an unknown observation")
             now = _now()
             values = []
-            for item in confirmations:
-                row = by_id[item.observation_id]
-                if item.decision == "excluded":
+            for row in rows:
+                item = supplied.get(row["id"])
+                if item is None or item.decision == "excluded":
                     values.append(
-                        (item.observation_id, "excluded", None, None, None, None, None, now)
+                        (row["id"], "excluded", None, None, None, None, None, now)
                     )
                     continue
                 if item.metric_code not in METRIC_CODES:
@@ -394,8 +396,9 @@ class ReportStore:
                 report_id,
                 "confirmed",
                 {
-                    "confirmed": sum(item.decision != "excluded" for item in confirmations),
-                    "excluded": sum(item.decision == "excluded" for item in confirmations),
+                    "confirmed": sum(item.decision != "excluded" for item in supplied.values()),
+                    "excluded": len(rows)
+                    - sum(item.decision != "excluded" for item in supplied.values()),
                 },
             )
 

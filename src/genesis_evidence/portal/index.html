@@ -21,12 +21,14 @@
     input, select { width: 100%; border: 1px solid #b8c9be; border-radius: 8px; padding: 9px 10px; background: white; }
     input[type=file] { padding: 14px; border-style: dashed; }
     button { border: 0; border-radius: 9px; padding: 10px 16px; background: #26745a; color: white; cursor: pointer; }
+    input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #94c8b3; outline-offset: 2px; }
     button.secondary { background: #697a71; }
     button:disabled { opacity: .55; cursor: wait; }
     .files { margin: 12px 0; padding-left: 24px; }
     .muted { color: #66786e; font-size: 13px; }
     .error { color: #a52b23; }
-    .warning { background: #fff6da; border-color: #e7cd77; }
+    .notice { padding: 12px 14px; margin: 12px 0; border-left: 4px solid #26745a; background: #edf5f0; }
+    .warning { background: #fff6da; border-color: #d6ac26; }
     .observation { border-top: 1px solid #e1e7e3; padding-top: 16px; margin-top: 16px; }
     .grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; }
     .grid label { font-size: 13px; color: #56685e; }
@@ -35,14 +37,17 @@
     .result { border-top: 4px solid #26745a; }
     .source { margin: 8px 0; padding: 9px; border-radius: 8px; background: #f5f7f5; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    details { margin-top: 18px; }
+    summary { cursor: pointer; font-weight: 600; }
+    .other-list { columns: 2; padding-left: 22px; }
     [hidden] { display: none !important; }
-    @media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .steps { font-size: 13px; } }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .steps { font-size: 13px; } .other-list { columns: 1; } }
   </style>
 </head>
 <body>
 <header><h1>体检报告解读与健康风险提示</h1><p>先核对报告指标，再查看有正式知识卡支持的健康提示。</p></header>
 <main>
-  <div class="steps"><div id="step1" class="step active">1. 上传报告</div><div id="step2" class="step">2. 确认指标</div><div id="step3" class="step">3. 查看提示</div></div>
+  <div class="steps"><div id="step1" class="step active">1. 上传报告</div><div id="step2" class="step">2. 确认异常项</div><div id="step3" class="step">3. 查看提示</div></div>
   <section id="uploadPanel" class="panel">
     <h2>上传多份报告文件</h2>
     <p>支持图片、PDF 和常见文档。系统严格按下方顺序处理；请只选择同一人的同一组报告。</p>
@@ -52,11 +57,12 @@
     <p id="uploadStatus" class="muted">模型只抽取原文信息，不会直接生成健康结论。</p>
   </section>
   <section id="confirmPanel" class="panel" hidden>
-    <h2>请逐条确认或修正</h2>
-    <p>核对名称、数值、单位、参考范围和原文证据。待核对项目默认剔除，不会进入后续匹配。</p>
-    <div id="warnings"></div><div id="observations"></div>
-    <div class="actions"><button id="confirm">确认并生成健康提示</button><button id="restart" class="secondary">重新上传</button></div>
-    <p id="confirmStatus" class="muted"></p>
+    <h2>请核对异常项</h2>
+    <div id="summary" class="notice" role="status" aria-live="polite"></div>
+    <div id="warnings"></div><div id="observations"></div><div id="unsupported"></div>
+    <details id="otherDetails"><summary id="otherSummary"></summary><ul id="otherObservations" class="other-list muted"></ul></details>
+    <div class="actions"><button id="confirm">确认异常项并生成健康提示</button><button id="restart" class="secondary">重新上传</button></div>
+    <p id="confirmStatus" class="muted" role="status" aria-live="polite"></p>
   </section>
   <section id="resultPanel" hidden>
     <div class="panel"><h2>结果说明</h2><p>以下内容仅用于健康信息整理与风险提示。若有明显不适或数值显著异常，请及时就医。</p></div>
@@ -67,18 +73,22 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const metricAliases = {totalchol:'totalcholesterol'};
 let metrics = [], report = null, reportId = '', token = '', assessment = null;
 
 async function jsonApi(path, options = {}) {
   const response = await fetch(path, {...options, headers:{'Content-Type':'application/json','X-Report-Token':token,...(options.headers || {})}});
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(errorMessage(body, response.status));
   return body;
 }
+function errorMessage(body, status) { const detail = body?.detail; if (typeof detail === 'string') return detail; if (Array.isArray(detail)) { const messages = detail.map(item => typeof item === 'string' ? item : item?.msg).filter(Boolean); if (messages.length) return messages.join('；'); } return `请求失败（HTTP ${status}）`; }
 function setStep(number) { [1,2,3].forEach(n => $(`step${n}`).classList.toggle('active', n === number)); }
 function setBusy(button, busy) { button.disabled = busy; }
 function metricOptions(selected = '') { return `<option value="">请选择指标</option>` + metrics.map(m => `<option value="${esc(m.code)}" ${m.code === selected ? 'selected' : ''}>${esc(m.label)}</option>`).join(''); }
-function suggestedMetric(name) { const normalized = String(name).replace(/[\s\-_/（）()]/g,'').toLowerCase(); return metrics.find(m => m.label.replace(/[\s\-_/（）()]/g,'').toLowerCase() === normalized)?.code || ''; }
+function normalizedMetricName(value) { const normalized = String(value).replace(/[\s\-_/（）()]/g,'').toLowerCase(); return metricAliases[normalized] || normalized; }
+function suggestedMetric(name) { const normalized = normalizedMetricName(name); return metrics.find(m => normalizedMetricName(m.label) === normalized || normalizedMetricName(m.code) === normalized)?.code || ''; }
+function isAbnormal(item) { const value = Number(item.model_value); return item.model_flag === 'high' || item.model_flag === 'low' || (item.reference_low != null && value < Number(item.reference_low)) || (item.reference_high != null && value > Number(item.reference_high)); }
 
 $('files').onchange = () => { const files = [...$('files').files]; $('fileOrder').innerHTML = files.length ? files.map((f,i) => `<li>${i + 1}. ${esc(f.name)}</li>`).join('') : '<li>尚未选择文件</li>'; };
 $('upload').onclick = async () => {
@@ -87,7 +97,7 @@ $('upload').onclick = async () => {
   try {
     const data = new FormData(); files.forEach(file => data.append('files', file));
     const response = await fetch('/api/reports', {method:'POST', body:data});
-    const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(errorMessage(body, response.status));
     report = body; reportId = body.report_id; token = body.access_token;
     await waitForExtraction();
     metrics = metrics.length ? metrics : await jsonApi('/api/metrics'); renderConfirmation();
@@ -107,12 +117,19 @@ async function waitForExtraction() {
 
 function renderConfirmation() {
   $('uploadPanel').hidden = true; $('confirmPanel').hidden = false; setStep(2);
-  $('warnings').innerHTML = (report.warnings || []).map(w => `<div class="panel warning">${esc(w)}</div>`).join('');
-  $('observations').innerHTML = report.observations.map((item,index) => {
-    const suggested = suggestedMetric(item.original_name);
-    const decision = item.default_decision === 'excluded' ? 'excluded' : 'confirmed';
-    return `<div class="observation" data-id="${esc(item.id)}"><h3>${index + 1}. ${esc(item.original_name)} <span class="tag">文件 ${item.source_file_index} · 第 ${item.source_page} 页</span></h3><p class="evidence">${esc(item.evidence_text)}</p>${(item.validation_issues || []).map(issue => `<span class="tag">${esc(issue)}</span>`).join('')}<div class="grid"><label>处理方式<select name="decision"><option value="confirmed" ${decision === 'confirmed' ? 'selected' : ''}>确认原结果</option><option value="corrected">我已修正</option><option value="excluded" ${decision === 'excluded' ? 'selected' : ''}>剔除</option></select></label><label>指标<select name="metric">${metricOptions(suggested)}</select></label><label>数值<input name="value" type="number" step="any" value="${esc(item.model_value)}"></label><label>单位<input name="unit" value="${esc(item.model_unit)}"></label><label>参考下限<input name="low" type="number" step="any" value="${esc(item.reference_low ?? '')}"></label><label>参考上限<input name="high" type="number" step="any" value="${esc(item.reference_high ?? '')}"></label></div></div>`;
+  $('warnings').innerHTML = (report.warnings || []).map(w => `<div class="notice warning">${esc(w)}</div>`).join('');
+  const abnormal = report.observations.filter(item => item.default_decision !== 'excluded' && isAbnormal(item));
+  const reviewable = abnormal.map(item => [item, suggestedMetric(item.original_name)]).filter(([, metric]) => metric);
+  const unsupported = abnormal.filter(item => !suggestedMetric(item.original_name));
+  const other = report.observations.filter(item => !abnormal.includes(item));
+  $('summary').textContent = `本次识别 ${report.observations.length} 项，发现 ${abnormal.length} 项异常；请核对 ${reviewable.length} 项可进入健康提示的异常指标。`;
+  $('confirm').textContent = reviewable.length ? `确认 ${reviewable.length} 项异常并生成健康提示` : '生成健康提示';
+  $('observations').innerHTML = reviewable.map(([item, suggested],index) => {
+    return `<div class="observation" data-id="${esc(item.id)}"><h3>${index + 1}. ${esc(item.original_name)} <span class="tag">异常</span><span class="tag">文件 ${item.source_file_index} · 第 ${item.source_page} 页</span></h3><p class="evidence">${esc(item.evidence_text)}</p><div class="grid"><label>处理方式<select name="decision"><option value="confirmed" selected>确认原结果</option><option value="corrected">我已修正</option><option value="excluded">剔除</option></select></label><label>指标<select name="metric">${metricOptions(suggested)}</select></label><label>数值<input name="value" type="number" step="any" value="${esc(item.model_value)}"></label><label>单位<input name="unit" value="${esc(item.model_unit)}"></label><label>参考下限<input name="low" type="number" step="any" value="${esc(item.reference_low ?? '')}"></label><label>参考上限<input name="high" type="number" step="any" value="${esc(item.reference_high ?? '')}"></label></div></div>`;
   }).join('');
+  $('unsupported').innerHTML = unsupported.length ? `<div class="notice warning"><strong>另有 ${unsupported.length} 项异常暂未纳入首期健康提示目录</strong>${unsupported.map(item => `<p><strong>${esc(item.original_name)}</strong>：${esc(item.evidence_text)}</p>`).join('')}</div>` : '';
+  $('otherDetails').hidden = !other.length; $('otherSummary').textContent = `查看其余 ${other.length} 项识别结果（不会进入风险匹配）`;
+  $('otherObservations').innerHTML = other.map(item => `<li>${esc(item.original_name)}：${esc(item.model_value)} ${esc(item.model_unit || '')}</li>`).join('');
   document.querySelectorAll('.observation input').forEach(input => input.oninput = () => { input.closest('.observation').querySelector('[name=decision]').value = 'corrected'; });
 }
 
@@ -122,7 +139,7 @@ $('confirm').onclick = async () => {
     const observations = [...document.querySelectorAll('.observation')].map(root => {
       const decision = root.querySelector('[name=decision]').value;
       const payload = {observation_id:root.dataset.id,decision};
-      if (decision !== 'excluded') payload.metric_code = root.querySelector('[name=metric]').value;
+      if (decision !== 'excluded') { payload.metric_code = root.querySelector('[name=metric]').value; if (!payload.metric_code) throw new Error('请为保留的异常项选择指标，或将其剔除。'); }
       if (decision === 'corrected') Object.assign(payload,{value:numberValue(root,'value'),unit:root.querySelector('[name=unit]').value,reference_low:numberValue(root,'low'),reference_high:numberValue(root,'high')});
       return payload;
     });

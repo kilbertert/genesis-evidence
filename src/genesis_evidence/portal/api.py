@@ -64,7 +64,7 @@ METRIC_LABELS = {
 class ConfirmationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    observations: list[ConfirmationInput] = Field(min_length=1, max_length=600)
+    observations: list[ConfirmationInput] = Field(max_length=600)
 
 
 def create_app(
