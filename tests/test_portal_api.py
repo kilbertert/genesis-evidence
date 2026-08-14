@@ -127,6 +127,9 @@ def test_portal_serves_named_no_store_page_and_metric_catalog(tmp_path) -> None:
     assert "体检报告解读与健康风险提示" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert page.headers["referrer-policy"] == "no-referrer"
+    assert "请核对异常项" in page.text
+    assert "function errorMessage" in page.text
+    assert "查看其余" in page.text
     assert client.get("/health").json() == {"status": "ok"}
     metrics = client.get("/api/metrics").json()
     assert {"code": "fasting_glucose", "label": "空腹血糖"} in metrics
@@ -208,6 +211,22 @@ def test_confirmation_and_assessment_return_only_published_card_content(tmp_path
     assert finding["card_id"] == "card-1"
     assert finding["patient_visible_body"] == "这是经过审核的营养健康知识。"
     assert finding["source_observation_ids"] == [observation_id]
+
+
+def test_empty_confirmation_auto_excludes_all_observations(tmp_path) -> None:
+    path, provider, client = _client(tmp_path)
+    uploaded = _upload(client).json()
+    _process(path, tmp_path, provider)
+
+    response = client.post(
+        f"/api/reports/{uploaded['report_id']}/confirm",
+        headers={"X-Report-Token": uploaded["access_token"]},
+        json={"observations": []},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "confirmed"
+    assert response.json()["observations"][0]["decision"] == "excluded"
 
 
 def test_report_endpoints_do_not_accept_missing_or_wrong_token(tmp_path) -> None:

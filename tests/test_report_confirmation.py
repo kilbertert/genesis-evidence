@@ -147,7 +147,7 @@ def test_confirmation_preserves_model_values_and_stores_corrected_values(tmp_pat
     assert confirmed["observations"][1]["final_metric_code"] == "uric_acid"
 
 
-def test_confirmation_requires_every_row_and_source_evidence(tmp_path) -> None:
+def test_confirmation_auto_excludes_omitted_rows_and_requires_source_evidence(tmp_path) -> None:
     store, handle = _store(tmp_path)
     invalid = _observation(
         evidence="报告中没有数值",
@@ -159,8 +159,12 @@ def test_confirmation_requires_every_row_and_source_evidence(tmp_path) -> None:
     report = store.get(handle.report_id, handle.access_token)
     observation_id = report["observations"][0]["id"]
 
-    with pytest.raises(ValueError, match="every observation"):
-        store.confirm(handle.report_id, handle.access_token, ())
+    with pytest.raises(ValueError, match="unknown observation"):
+        store.confirm(
+            handle.report_id,
+            handle.access_token,
+            (ConfirmationInput(observation_id="other-report", decision="excluded"),),
+        )
     with pytest.raises(ValueError, match="source evidence"):
         store.confirm(
             handle.report_id,
@@ -173,12 +177,10 @@ def test_confirmation_requires_every_row_and_source_evidence(tmp_path) -> None:
                 ),
             ),
         )
-    store.confirm(
-        handle.report_id,
-        handle.access_token,
-        (ConfirmationInput(observation_id=observation_id, decision="excluded"),),
-    )
-    assert store.get(handle.report_id, handle.access_token)["status"] == "confirmed"
+    store.confirm(handle.report_id, handle.access_token, ())
+    confirmed = store.get(handle.report_id, handle.access_token)
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["observations"][0]["decision"] == "excluded"
 
 
 def test_report_state_and_file_identity_cannot_be_replayed(tmp_path) -> None:
