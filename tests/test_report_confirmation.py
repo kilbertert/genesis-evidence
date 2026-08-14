@@ -15,6 +15,7 @@ from genesis_evidence.core.store import (
 from genesis_evidence.reports.extraction import (
     PendingObservation,
     PendingReportExtraction,
+    ReportExtractionUnavailable,
     ReportFile,
 )
 
@@ -202,3 +203,15 @@ def test_report_extraction_claim_recovery_and_failure(tmp_path) -> None:
     assert failed["status"] == "abandoned"
     assert failed["warnings"] == ["报告智能解读失败，请重新上传或稍后重试。"]
     assert "provider detail" not in str(failed)
+
+    timeout = store.create(
+        (ReportFile(b"first", "page-1.txt"), ReportFile(b"second", "page-2.txt"))
+    )
+    assert store.claim_next_extraction() == timeout.report_id
+    store.fail_extraction(
+        timeout.report_id,
+        ReportExtractionUnavailable("报告解读超时，请稍后重试。"),
+    )
+    assert store.get(timeout.report_id, timeout.access_token)["warnings"] == [
+        "报告解读超时，请稍后重试。"
+    ]

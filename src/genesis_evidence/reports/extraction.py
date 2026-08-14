@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 DEFAULT_REPORT_MODEL = "gpt-5.6-sol"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_REPORT_TIMEOUT_SECONDS = 600.0
 
 _IMAGE_MEDIA_TYPES = {
     ".gif": "image/gif",
@@ -169,7 +170,7 @@ class HealthReportExtractor:
         max_bytes: int,
         max_files: int = 20,
         max_total_bytes: int = 50 * 1024 * 1024,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = DEFAULT_REPORT_TIMEOUT_SECONDS,
         transport: httpx.AsyncBaseTransport | None = None,
         provider: ReportUnderstandingProvider | None = None,
     ) -> None:
@@ -244,7 +245,7 @@ class OpenAIReportUnderstandingProvider:
         base_url: str = DEFAULT_OPENAI_BASE_URL,
         responses_url: str = "",
         model: str = DEFAULT_REPORT_MODEL,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = DEFAULT_REPORT_TIMEOUT_SECONDS,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key.strip()

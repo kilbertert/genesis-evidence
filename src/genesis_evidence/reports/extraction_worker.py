@@ -12,6 +12,7 @@ from ..core.store import Database, ObjectStore, ReportStore
 from .extraction import (
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_REPORT_MODEL,
+    DEFAULT_REPORT_TIMEOUT_SECONDS,
     HealthReportExtractor,
 )
 
@@ -53,6 +54,12 @@ def main() -> None:
             responses_url=os.getenv("OPENAI_RESPONSES_URL", ""),
             model=os.getenv("OPENAI_REPORT_MODEL", DEFAULT_REPORT_MODEL),
             max_bytes=int(os.getenv("GENESIS_EVIDENCE_REPORT_MAX_BYTES", 20 * 1024 * 1024)),
+            timeout_seconds=float(
+                os.getenv(
+                    "GENESIS_EVIDENCE_REPORT_TIMEOUT_SECONDS",
+                    str(DEFAULT_REPORT_TIMEOUT_SECONDS),
+                )
+            ),
         ),
     )
     lock_path = database_path.with_suffix(f"{database_path.suffix}.report-worker.lock")

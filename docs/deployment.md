@@ -50,7 +50,7 @@ systemctl --user restart genesis-evidence-{report-worker,worker}   # 改了模�
   `ARK_MAX_TOKENS`(抽取输出预算)。
 - `var/portal.env` — 报告门户:
   `GENESIS_EVIDENCE_PORTAL_HOST/PORT`、`OPENAI_API_KEY`、`OPENAI_RESPONSES_URL`、
-  `OPENAI_REPORT_MODEL` 等。上传接口先持久化并返回 `202 uploaded`,报告 worker 完成后
+  `OPENAI_REPORT_MODEL`、`GENESIS_EVIDENCE_REPORT_TIMEOUT_SECONDS` 等。上传接口先持久化并返回 `202 uploaded`,报告 worker 完成后
   状态进入 `pending_confirmation`,前端通过带访问令牌的短请求轮询,不依赖反向代理长连接。
 
 数据:`var/genesis-evidence.sqlite3`(SQLite)、`var/objects`(内容寻址全文)。
