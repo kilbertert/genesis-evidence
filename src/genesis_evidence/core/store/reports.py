@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...reports.extraction import (
     PendingReportExtraction,
+    ReportExtractionError,
+    ReportExtractionUnavailable,
     ReportFile,
     evidence_contains_value,
 )
@@ -177,6 +179,11 @@ class ReportStore:
 
     def fail_extraction(self, report_id: str, error: Exception) -> None:
         now = _now()
+        message = (
+            str(error)
+            if isinstance(error, (ReportExtractionError, ReportExtractionUnavailable))
+            else "报告智能解读失败，请重新上传或稍后重试。"
+        )
         with self.database.transaction() as connection:
             updated = connection.execute(
                 """
@@ -184,7 +191,7 @@ class ReportStore:
                     updated_at = ? WHERE id = ? AND status = 'extracted'
                 """,
                 (
-                    json.dumps(["报告智能解读失败，请重新上传或稍后重试。"], ensure_ascii=False),
+                    json.dumps([message], ensure_ascii=False),
                     now,
                     report_id,
                 ),

@@ -80,6 +80,7 @@ def test_responses_request_preserves_file_order_and_stops_at_confirmation() -> N
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
+        captured["read_timeout"] = request.extensions["timeout"]["read"]
         captured.update(json.loads(request.content))
         return _response(
             _report(
@@ -115,6 +116,7 @@ def test_responses_request_preserves_file_order_and_stops_at_confirmation() -> N
     )
 
     assert captured["url"] == "https://proxy.example/v1/responses"
+    assert captured["read_timeout"] == 600.0
     assert captured["model"] == "gpt-5.6-sol"
     assert captured["store"] is False
     assert "diagnose" in captured["instructions"]
