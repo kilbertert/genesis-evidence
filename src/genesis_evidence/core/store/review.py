@@ -187,7 +187,16 @@ class ReviewStore:
                 "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
             ).fetchone()
             if previous is None:
-                raise ValueError("paper admission item not found")
+                connection.execute(
+                    """
+                    INSERT INTO paper_admissions(paper_id, status, condition_codes_json)
+                    VALUES (?, 'pending', '[]')
+                    """,
+                    (paper_id,),
+                )
+                previous = connection.execute(
+                    "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+                ).fetchone()
             updated = connection.execute(
                 """
                 UPDATE paper_admissions SET status = 'rejected', condition_codes_json = '[]',

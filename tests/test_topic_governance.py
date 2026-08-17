@@ -243,3 +243,47 @@ def test_not_retrieved_report_closes_ledger_without_scientific_exclusion(tmp_pat
     assert missing["full_text_retrieval_status"] == "not_retrieved"
     assert missing["primary_exclusion_reason"] is None
     assert card_id
+
+
+def test_ai_closes_title_abstract_exclusion_without_full_text_or_admission_row(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_store = PaperStore(database)
+    topic_id = _topic(paper_store)
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Title abstract exclusion', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/excluded')",
+            (paper_id, paper_id),
+        )
+    run_id = paper_store.start_collection(topic_id=topic_id, source="test", query="excluded")
+    paper_store.add_to_collection(run_id, paper_id, position=1)
+    paper_store.finish_collection(run_id, status="completed", detail={})
+    paper_store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+
+    result = EvidenceReviewService(ReviewStore(database), paper_store).auto_review_paper(
+        paper_id, requested_by="authenticated-reviewer"
+    )
+
+    assert result == {"status": "completed", "decision": "excluded", "cards": []}
+    with database.connect() as connection:
+        admission = connection.execute(
+            "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+        assert tuple(admission) == ("rejected", "ai:screening-ledger")
+        assert connection.execute(
+            "SELECT count(*) FROM paper_extraction_jobs WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == 0
