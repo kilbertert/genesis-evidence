@@ -6,12 +6,17 @@ genesis-evidence 是阶段二重建项目,与冻结的 `genesis-health` 并排�
 
 | 服务 | 域名 | 本地端口 | 说明 |
 |---|---|---|---|
-| 个人报告门户 | `https://genesis-evidence.ranlei.work` | 127.0.0.1:8125 | 体检报告解读与健康风险提示(主线 B) |
+| 个人报告门户 | `https://genesis-evidence.ranlei.work` | 127.0.0.1:8127 | Health-Flow 体检报告解读与健康风险提示(主线 B) |
 | 论文证据审核工作台 | `https://genesis-evidence-review.ranlei.work` | 127.0.0.1:8126 | 论文采集/抽取/审核/知识卡(主线 A) |
 
-两个域名由 `ops/frp/genesis-evidence.toml` 通过 subdomain 暴露,Nginx
+用户端由 Health-Flow 提供页面与报告 API,并在用户确认指标后调用本机
+`127.0.0.1:8125/api/evidence/matches`;该 Evidence API 不直接暴露为用户域名。两个公网域名由
+`ops/frp/genesis-evidence.toml` 通过 subdomain 暴露,Nginx
 (`/etc/nginx/sites-enabled/frp-demo`)把 `*.ranlei.work` 的 443 转发到本地
 FRP 服务(127.0.0.1:8188),再由 FRP 隧道回落到对应本地端口。
+
+个人报告门户使用 RFC 7617 Basic Auth,凭据仅存在 Health-Flow 的私有
+`var/health-flow.env` 中。因为 Basic Auth 不自带传输加密,只能通过 HTTPS 访问。
 
 ## 审核工作台访问
 
@@ -32,6 +37,7 @@ sessionStorage 并随每次请求发送。
 | `genesis-evidence-review.service` | 审核工作台(FastAPI,8126) |
 | `genesis-evidence-worker.service` | 论文抽取后台 worker,逐条消费 `paper_extraction_jobs` |
 | `genesis-evidence-frp.service` | FRP 隧道,暴露上面两个 HTTP 服务 |
+| `health-flow.service` | Health-Flow 用户端 + 报告 API(FastAPI + React,8127) |
 
 运维命令(均以 `claude` 用户):
 
