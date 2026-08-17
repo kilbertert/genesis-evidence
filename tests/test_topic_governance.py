@@ -110,6 +110,10 @@ def test_profile_rejects_incomplete_required_streams_and_screening(tmp_path) -> 
         paper_id,
         reviewer="reviewer-1",
         condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        differences_confirmed=False,
+        study_design="cohort_study",
+        publication_role="primary",
+        identity_confirmed=True,
     )
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     with pytest.raises(ValueError, match="required search stream"):
@@ -138,6 +142,10 @@ def test_profile_rejects_an_incomplete_screening_ledger(tmp_path) -> None:
         paper_id,
         reviewer="reviewer-1",
         condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        differences_confirmed=False,
+        study_design="cohort_study",
+        publication_role="primary",
+        identity_confirmed=True,
     )
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
     with pytest.raises(ValueError, match="screening ledger"):
