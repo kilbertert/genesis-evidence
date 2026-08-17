@@ -1,14 +1,17 @@
-"""One-reviewer workflow for paper admission, Claim review, and card publication."""
+"""Evidence workflow with autonomous execution and human exception handling."""
 
 from __future__ import annotations
 
 import re
+import sqlite3
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..core.store import ReviewStore
+from ..core.store import PaperStore, ReviewStore
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
+
+AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.0"
 
 StudyDesign = Literal[
     "randomized_controlled_trial",
@@ -29,6 +32,18 @@ StudyDesign = Literal[
     "guideline",
     "other",
     "uncertain",
+]
+
+PublicationRole = Literal[
+    "primary",
+    "protocol",
+    "statistical_analysis_plan",
+    "follow_up",
+    "subgroup",
+    "combined_report",
+    "correction",
+    "retraction",
+    "other",
 ]
 
 
@@ -76,6 +91,7 @@ class ClaimReviewInput(BaseModel):
     risk_of_bias: RiskOfBiasInput | None = None
     applicability: str | None = Field(default=None, max_length=4000)
     condition_code: str | None = None
+    source_verified: bool = False
 
     @model_validator(mode="after")
     def validate_decision(self) -> ClaimReviewInput:
@@ -89,6 +105,8 @@ class ClaimReviewInput(BaseModel):
         )
         if self.decision == "approved" and any(not value for value in required):
             raise ValueError("approved claims require corrected evidence fields")
+        if self.decision == "approved" and not self.source_verified:
+            raise ValueError("approved claims require executing-actor source verification")
         if (
             self.decision == "approved"
             and self.corrected_study_design in OBSERVATIONAL_DESIGNS
@@ -119,8 +137,456 @@ class ClaimReviewInput(BaseModel):
 
 
 class EvidenceReviewService:
-    def __init__(self, store: ReviewStore) -> None:
+    def __init__(self, store: ReviewStore, papers_store: PaperStore | None = None) -> None:
         self.store = store
+        self.papers_store = papers_store
+
+    def auto_review_paper(self, paper_id: str, *, requested_by: str) -> dict[str, object]:
+        requester = _reviewer(requested_by)
+        item = self.store.get_review_item(paper_id)
+        if item is None:
+            raise ValueError("paper not found")
+        if self.papers_store is None:
+            raise RuntimeError("autonomous review requires PaperStore")
+        trace = item.get("extraction_trace") or {}
+        if not trace:
+            guidance = item.get("review_guidance") or {}
+            if guidance.get("terminal_decision") == "not_retrieved":
+                actor = "ai:retrieval-ledger"
+                result = {
+                    "status": "completed",
+                    "decision": "not_retrieved",
+                    "reason": str(guidance.get("next_action") or "full text was not retrieved"),
+                    "cards": [],
+                }
+                self.store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_review_completed",
+                    actor=actor,
+                    detail={
+                        "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                        "requested_by": requester,
+                        "retrieval_records": [
+                            {
+                                key: collection.get(key)
+                                for key in (
+                                    "topic_id",
+                                    "run_id",
+                                    "full_text_retrieval_status",
+                                    "full_text_retrieval_reason",
+                                    "full_text_retrieval_reviewer",
+                                    "full_text_retrieval_recorded_at",
+                                )
+                            }
+                            for collection in item["collections"]
+                            if collection.get("full_text_retrieval_status") == "not_retrieved"
+                        ],
+                        **result,
+                    },
+                )
+                return result
+            job = item.get("extraction_job") or {}
+            if job.get("full_text_available"):
+                if job.get("status") == "failed":
+                    self.papers_store.retry_extraction(
+                        str(job["id"]), reviewer="ai:extraction-worker"
+                    )
+                    status = "queued"
+                elif job.get("status") in {"queued", "running"}:
+                    status = str(job["status"])
+                else:
+                    run_id = next((str(row["run_id"]) for row in item["collections"]), None)
+                    self.papers_store.enqueue_extraction(paper_id, collection_run_id=run_id)
+                    status = "queued"
+                result = {
+                    "status": status,
+                    "stage": "extraction",
+                    "reason": "dual-AI extraction must complete before autonomous review resumes",
+                }
+                self.store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_extraction_queued",
+                    actor="ai:extraction-worker",
+                    detail={
+                        "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                        "requested_by": requester,
+                        **result,
+                    },
+                )
+                return result
+            return self._automation_attention(
+                paper_id,
+                actor="ai:unavailable",
+                requested_by=requester,
+                stage="extraction",
+                reason="paper has no stored full text for dual-AI extraction",
+                trace={},
+            )
+        actor = f"ai:{trace.get('check_model') or trace.get('model')}"
+        context = {
+            "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+            "requested_by": requester,
+            "extraction_trace": trace,
+        }
+        self.store.record_event(
+            "paper", paper_id, "autonomous_review_started", actor=actor, detail=context
+        )
+        if (item.get("admission") or {}).get("status") == "rejected":
+            return self._automation_attention(
+                paper_id,
+                actor=actor,
+                requested_by=requester,
+                stage="admission",
+                reason="a named actor has already rejected this paper",
+                trace=trace,
+            )
+
+        screening_actions: list[dict[str, object]] = []
+        while True:
+            item = self.store.get_review_item(paper_id)
+            assert item is not None
+            suggestion = next(
+                (
+                    (collection, collection.get("screening_suggestion") or {})
+                    for collection in item["collections"]
+                    if (collection.get("screening_suggestion") or {}).get("stage")
+                ),
+                None,
+            )
+            if suggestion is None:
+                break
+            collection, decision = suggestion
+            if decision.get("decision") not in {"included", "excluded"}:
+                return self._automation_attention(
+                    paper_id,
+                    actor=actor,
+                    requested_by=requester,
+                    stage="screening",
+                    reason=str(decision.get("reason") or "screening decision is ambiguous"),
+                    trace=trace,
+                )
+            self.papers_store.screen_collection_paper(
+                str(collection["run_id"]),
+                paper_id,
+                stage=str(decision["stage"]),
+                decision=str(decision["decision"]),
+                exclusion_reason=decision.get("primary_exclusion_reason"),
+                reviewer=actor,
+            )
+            screening_actions.append(
+                {
+                    "topic_id": collection["topic_id"],
+                    "run_id": collection["run_id"],
+                    "stage": decision["stage"],
+                    "decision": decision["decision"],
+                    "primary_exclusion_reason": decision.get("primary_exclusion_reason"),
+                }
+            )
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_screening_completed",
+            actor=actor,
+            detail={**context, "decisions": screening_actions},
+        )
+
+        item = self.store.get_review_item(paper_id)
+        assert item is not None
+        if not item["collections"]:
+            return self._automation_attention(
+                paper_id,
+                actor=actor,
+                requested_by=requester,
+                stage="topic_governance",
+                reason="paper is not linked to a completed collection for a locked topic",
+                trace=trace,
+            )
+        included = [
+            collection
+            for collection in item["collections"]
+            if collection.get("full_text_decision") == "included"
+        ]
+        if not included:
+            self.reject_paper(paper_id, reviewer=actor)
+            result = {"status": "completed", "decision": "excluded", "cards": []}
+            self.store.record_event(
+                "paper",
+                paper_id,
+                "autonomous_review_completed",
+                actor=actor,
+                detail={**context, **result},
+            )
+            return result
+
+        guidance = item["review_guidance"]
+        if guidance["blockers"]:
+            return self._automation_attention(
+                paper_id,
+                actor=actor,
+                requested_by=requester,
+                stage="evidence_gate",
+                reason=str(guidance["blockers"][0]),
+                trace=trace,
+            )
+        suggested = guidance["admission_suggestion"]
+        study_design = str(suggested["study_design"])
+        if study_design == "uncertain":
+            return self._automation_attention(
+                paper_id,
+                actor=actor,
+                requested_by=requester,
+                stage="study_identity",
+                reason="study design remains uncertain after dual-AI review",
+                trace=trace,
+            )
+        consistency_resolution = (item.get("admission") or {}).get("consistency_resolution")
+        if (item.get("consistency") or {}).get("verdict") == "needs_review":
+            consistency_resolution = consistency_resolution or _automatic_resolution(
+                guidance["issues"]
+            )
+        if (item.get("admission") or {}).get("status") != "internally_admitted":
+            self.admit_paper(
+                paper_id,
+                reviewer=actor,
+                condition_codes=list(suggested["condition_codes"]),
+                consistency_resolution=consistency_resolution,
+                differences_confirmed=True,
+                study_design=study_design,
+                publication_role=suggested["publication_role"],
+                identity_confirmed=True,
+            )
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_admission_completed",
+            actor=actor,
+            detail={
+                **context,
+                "condition_codes": suggested["condition_codes"],
+                "study_design": study_design,
+                "publication_role": suggested["publication_role"],
+                "consistency_resolution": consistency_resolution,
+            },
+        )
+
+        item = self.store.get_review_item(paper_id)
+        assert item is not None
+        admitted_conditions = list((item.get("admission") or {}).get("condition_codes") or [])
+        reviewed_claims: list[str] = []
+        for claim in item["claims"]:
+            if claim.get("status") != "candidate":
+                continue
+            review = _automatic_claim_review(
+                claim,
+                issues=guidance["issues"],
+                admitted_conditions=admitted_conditions,
+            )
+            if review is None:
+                return self._automation_attention(
+                    paper_id,
+                    actor=actor,
+                    requested_by=requester,
+                    stage="claim_review",
+                    reason=f"Claim {claim['id']} has ambiguous condition or source evidence",
+                    trace=trace,
+                )
+            self.review_claim(str(claim["id"]), reviewer=actor, review=review)
+            reviewed_claims.append(str(claim["id"]))
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_claim_review_completed",
+            actor=actor,
+            detail={**context, "reviewed_claim_ids": reviewed_claims},
+        )
+
+        cards = self._build_ready_profiles(paper_id, actor=actor, context=context)
+        result = {
+            "status": "completed",
+            "decision": "internally_admitted",
+            "reviewed_claims": len(reviewed_claims),
+            "cards": cards,
+        }
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_review_completed",
+            actor=actor,
+            detail={**context, **result},
+        )
+        return result
+
+    def _build_ready_profiles(
+        self, paper_id: str, *, actor: str, context: dict[str, object]
+    ) -> list[dict[str, object]]:
+        existing = {
+            (str(card["condition_code"]), str(card["version"])): card
+            for card in self.store.list_cards()
+        }
+        results: list[dict[str, object]] = []
+        for candidate in self.store.list_profile_candidates(paper_id):
+            if candidate["status"] != "ready":
+                results.append(
+                    {
+                        "topic_id": candidate["id"],
+                        "status": "waiting_for_complete_evidence_body",
+                        "reason": candidate["reason"],
+                    }
+                )
+                continue
+            groups = candidate["groups"]
+            if not groups:
+                results.append(
+                    {
+                        "topic_id": candidate["id"],
+                        "status": "no_matching_picots_result_scope",
+                        "reason": "approved results do not match the locked topic PICOTS scope",
+                    }
+                )
+                continue
+            for index, group in enumerate(groups):
+                version = _profile_version(str(candidate["version"]), index)
+                key = (str(candidate["condition_code"]), version)
+                profile, patient_body, grade_domains = _automatic_profile(candidate, group)
+                claim_ids = [str(claim["id"]) for claim in group["claims"]]
+                card = existing.get(key)
+                if card and (
+                    str(card["topic_id"]) != str(candidate["id"])
+                    or set(card["claim_ids"]) != set(claim_ids)
+                    or str(card["grade"]) != profile.certainty
+                ):
+                    detail = {
+                        "topic_id": candidate["id"],
+                        "version": version,
+                        "status": "attention_required",
+                        "reason": "knowledge card version already identifies different evidence",
+                        "grade_domains": grade_domains,
+                    }
+                    self.store.record_event(
+                        "paper",
+                        paper_id,
+                        "autonomous_profile_attention_required",
+                        actor=actor,
+                        detail={**context, **detail},
+                    )
+                    results.append(detail)
+                    continue
+                if card and card["status"] in {"rejected", "stale"}:
+                    detail = {
+                        "topic_id": candidate["id"],
+                        "version": version,
+                        "status": "attention_required",
+                        "reason": (
+                            f"existing knowledge card is {card['status']}; create a new version"
+                        ),
+                        "grade_domains": grade_domains,
+                    }
+                    self.store.record_event(
+                        "paper",
+                        paper_id,
+                        "autonomous_profile_attention_required",
+                        actor=actor,
+                        detail={**context, **detail},
+                    )
+                    results.append(detail)
+                    continue
+                card_id = str(card["id"]) if card else ""
+                card_status = str(card["status"]) if card else "draft"
+                try:
+                    if not card:
+                        card_id = self.create_card_draft(
+                            topic_id=str(candidate["id"]),
+                            condition_code=str(candidate["condition_code"]),
+                            version=version,
+                            claim_ids=claim_ids,
+                            reviewer=actor,
+                            patient_body=patient_body,
+                            profile=profile,
+                        )
+                    if card_status == "draft":
+                        self.transition_card(card_id, reviewer=actor, target="in_review")
+                        card_status = "in_review"
+                    if card_status == "in_review":
+                        self.transition_card(card_id, reviewer=actor, target="approved")
+                        card_status = "approved"
+                except (ValueError, sqlite3.IntegrityError) as exc:
+                    detail = {
+                        "topic_id": candidate["id"],
+                        "version": version,
+                        "status": "attention_required",
+                        "reason": str(exc),
+                        "grade_domains": grade_domains,
+                    }
+                    self.store.record_event(
+                        "paper",
+                        paper_id,
+                        "autonomous_profile_attention_required",
+                        actor=actor,
+                        detail={**context, **detail},
+                    )
+                    results.append(detail)
+                    continue
+                status = card_status
+                if card_status == "approved" and profile.certainty in {"high", "moderate"}:
+                    try:
+                        self.transition_card(card_id, reviewer=actor, target="published")
+                        status = "published"
+                    except ValueError as exc:
+                        status = "approved_evidence_limited"
+                        publication_reason = str(exc)
+                detail = {
+                    "card_id": card_id,
+                    "topic_id": candidate["id"],
+                    "version": version,
+                    "status": status,
+                    "certainty": profile.certainty,
+                    "grade_domains": grade_domains,
+                }
+                if status == "approved_evidence_limited":
+                    detail["reason"] = publication_reason
+                self.store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_profile_completed",
+                    actor=actor,
+                    detail={**context, **detail},
+                )
+                results.append(detail)
+                existing[key] = {
+                    "id": card_id,
+                    "topic_id": candidate["id"],
+                    "claim_ids": claim_ids,
+                    "grade": profile.certainty,
+                    "status": status,
+                }
+        return results
+
+    def _automation_attention(
+        self,
+        paper_id: str,
+        *,
+        actor: str,
+        requested_by: str,
+        stage: str,
+        reason: str,
+        trace: dict[str, object],
+    ) -> dict[str, object]:
+        result = {"status": "attention_required", "stage": stage, "reason": reason}
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_review_attention_required",
+            actor=actor,
+            detail={
+                "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                "requested_by": requested_by,
+                "extraction_trace": trace,
+                **result,
+            },
+        )
+        return result
 
     def admit_paper(
         self,
@@ -129,6 +595,10 @@ class EvidenceReviewService:
         reviewer: str,
         condition_codes: list[str],
         consistency_resolution: str | None = None,
+        differences_confirmed: bool,
+        study_design: StudyDesign,
+        publication_role: PublicationRole,
+        identity_confirmed: bool,
     ) -> None:
         self.store.admit_paper(
             paper_id,
@@ -137,6 +607,10 @@ class EvidenceReviewService:
                 dict.fromkeys(code.strip() for code in condition_codes if code.strip())
             ),
             consistency_resolution=(consistency_resolution or "").strip() or None,
+            differences_confirmed=differences_confirmed,
+            study_design=study_design,
+            publication_role=publication_role,
+            identity_confirmed=identity_confirmed,
         )
 
     def reject_paper(self, paper_id: str, *, reviewer: str) -> None:
@@ -183,6 +657,208 @@ class EvidenceReviewService:
 
     def transition_card(self, card_id: str, *, reviewer: str, target: str) -> None:
         self.store.transition_card(card_id, reviewer=_reviewer(reviewer), target=target)
+
+
+def _automatic_resolution(issues: list[dict[str, object]]) -> str:
+    lines = [
+        f"AI consistency adjudication ({AUTONOMOUS_REVIEW_POLICY_VERSION}): "
+        "the primary extraction remains the structured source of record; each checker issue "
+        "is retained below for audit and raises downstream risk-of-bias when material."
+    ]
+    lines.extend(
+        f"[{issue.get('severity', 'unknown')}] {issue.get('field', 'difference')}: "
+        f"{issue.get('message', '')} Evidence: {issue.get('evidence', '')}"
+        for issue in issues
+    )
+    return "\n".join(lines)[:5000]
+
+
+def _automatic_claim_review(
+    claim: dict[str, object],
+    *,
+    issues: list[dict[str, object]],
+    admitted_conditions: list[str],
+) -> ClaimReviewInput | None:
+    suggestion = claim.get("review_suggestion") or {}
+    suggested_decision = str(suggestion.get("decision") or "")
+    if suggested_decision == "rejected":
+        return ClaimReviewInput(decision="rejected")
+    if suggested_decision != "approved":
+        return None
+    condition_code = str(suggestion.get("condition_code") or "")
+    if not condition_code and len(admitted_conditions) == 1:
+        condition_code = admitted_conditions[0]
+    required_source = (
+        "result_id",
+        "evidence_text",
+        "locator",
+        "population",
+        "ingredient_name",
+        "ingredient_form",
+        "dose",
+        "comparator",
+        "outcome",
+        "timepoint",
+        "effect_estimate",
+        "statistical_details",
+    )
+    if condition_code not in admitted_conditions or any(
+        not str(claim.get(field) or "").strip() for field in required_source
+    ):
+        return None
+    design = str(suggestion.get("corrected_study_design") or "uncertain")
+    if design == "uncertain":
+        return None
+    inference = str(suggestion.get("inference") or "descriptive")
+    if design in OBSERVATIONAL_DESIGNS and inference == "causal":
+        inference = "associational"
+    risk = dict(suggestion.get("risk_of_bias") or {})
+    material = [issue for issue in issues if issue.get("priority") == "must_resolve"]
+    risk["overall"] = "high" if material else "some_concerns"
+    risk["rationale"] = (
+        str(risk.get("rationale") or "AI review found no extracted limitations.")
+        + (
+            " Material dual-AI differences were retained in the audit trail, so this result "
+            "is conservatively rated high risk."
+            if material
+            else " Dual-AI source checks found no unresolved material issue for this result."
+        )
+    )[:4000]
+    return ClaimReviewInput(
+        decision="approved",
+        corrected_text=str(suggestion.get("corrected_text") or claim.get("candidate_text") or ""),
+        corrected_study_design=design,
+        inference=inference,
+        risk_of_bias=risk,
+        applicability=str(suggestion.get("applicability") or "AI applicability review completed."),
+        condition_code=condition_code,
+        source_verified=True,
+    )
+
+
+def _profile_version(topic_version: str, index: int) -> str:
+    parts = [int(value) for value in re.findall(r"\d+", topic_version)[:3]]
+    major, minor, patch = (*parts, 0, 0, 0)[:3]
+    return f"{major}.{minor}.{patch + index}"
+
+
+def _automatic_profile(
+    candidate: dict[str, object], group: dict[str, object]
+) -> tuple[EvidenceProfileInput, str, dict[str, str]]:
+    claims = group["claims"]
+    dimensions = group["dimensions"]
+    designs = {str(claim["corrected_study_design"]) for claim in claims}
+    randomized = {
+        "randomized_controlled_trial",
+        "systematic_review_meta_analysis",
+        "controlled_feeding_metabolic_study",
+    }
+    score = 3 if designs <= randomized else 1
+    risk_overall = {str(claim["risk_of_bias"]["overall"]) for claim in claims}
+    risk_domain = (
+        "very_serious"
+        if risk_overall & {"high", "critical"}
+        else (
+            "serious"
+            if risk_overall & {"some_concerns", "uncertain"}
+            else "not_serious"
+        )
+    )
+    missing_scope = any(_not_reported(str(value)) for value in dimensions.values())
+    indirectness = "serious" if missing_scope else "not_serious"
+    precise = all(
+        _has_precision(f"{claim['effect_estimate']} {claim['statistical_details']}")
+        for claim in claims
+    )
+    imprecision = "not_serious" if precise else "serious"
+    paper_count = len({str(claim["paper_id"]) for claim in claims})
+    study_count = len({str(claim["study_id"]) for claim in claims})
+    domains = {
+        "risk_of_bias": risk_domain,
+        "inconsistency": "not_assessable" if paper_count == 1 else "not_serious",
+        "indirectness": indirectness,
+        "imprecision": imprecision,
+        "publication_bias": "not_assessable",
+    }
+    downgrade = {"not_serious": 0, "serious": 1, "very_serious": 2}
+    score = max(
+        0, score - sum(downgrade[value] for value in (risk_domain, indirectness, imprecision))
+    )
+    score = min(score, 1 if study_count == 1 else 2)
+    certainty = {0: "very_low", 1: "low", 2: "moderate"}[score]
+    target = (
+        f"{dimensions['population']}; {dimensions['ingredient_name']} "
+        f"({dimensions['ingredient_form']}, {dimensions['dose']}) versus "
+        f"{dimensions['comparator']}; {dimensions['outcome']} at {dimensions['timepoint']}"
+    )
+    rationale = (
+        f"AI GRADE assessment ({AUTONOMOUS_REVIEW_POLICY_VERSION}): "
+        + "; ".join(f"{key}={value}" for key, value in domains.items())
+        + (
+            "; single-study evidence is capped at low certainty."
+            if study_count == 1
+            else "; AI-only synthesis is capped at moderate certainty."
+        )
+    )
+    certainty_label = {"moderate": "中等", "low": "低", "very_low": "极低"}[certainty]
+    interpretations = {str(claim["id"]): _interpretation(claim) for claim in claims}
+    synthesis = set(interpretations.values())
+    conclusion = (
+        "结果整体支持上述研究关系。"
+        if synthesis == {"supports"}
+        else (
+            "结果未支持上述研究关系。"
+            if synthesis == {"does_not_support"}
+            else "不同结果对上述研究关系的支持并不一致。"
+        )
+    )
+    patient_body = (
+        f"关于{candidate['condition_name']}，截至{candidate['evidence_cutoff_date']}的已审核研究"
+        f"在{dimensions['population']}中评估了{dimensions['ingredient_name']}"
+        f"（{dimensions['ingredient_form']}，{dimensions['dose']}）与"
+        f"{dimensions['outcome']}的关系，比较条件为{dimensions['comparator']}，"
+        f"观察时间为{dimensions['timepoint']}。{conclusion}当前证据确定性为{certainty_label}，"
+        "适用范围以所列研究人群和条件为限。"
+    )
+    profile = EvidenceProfileInput(
+        certainty=certainty,
+        certainty_rationale=rationale,
+        estimate_target=target,
+        interpretations=interpretations,
+    )
+    return profile, patient_body, domains
+
+
+def _interpretation(claim: dict[str, object]) -> str:
+    text = " ".join(
+        str(claim.get(field) or "")
+        for field in ("candidate_text", "effect_estimate", "statistical_details")
+    ).casefold()
+    if any(
+        phrase in text
+        for phrase in (
+            "did not significantly",
+            "not significantly",
+            "no significant",
+            "no association",
+            "not associated",
+            "null effect",
+            "无显著",
+            "未见显著",
+        )
+    ):
+        return "does_not_support"
+    return "mixed" if "mixed" in text or "不一致" in text else "supports"
+
+
+def _not_reported(value: str) -> bool:
+    normalized = value.strip().casefold()
+    return not normalized or normalized in {"未报告", "not reported", "not applicable", "n/a"}
+
+
+def _has_precision(value: str) -> bool:
+    normalized = value.casefold().replace(" ", "")
+    return any(token in normalized for token in ("95%ci", "confidenceinterval", "p<", "p=", "p≤"))
 
 
 def _reviewer(value: str) -> str:
