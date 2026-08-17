@@ -1,4 +1,4 @@
-"""FastAPI workbench for the one-reviewer evidence workflow."""
+"""FastAPI workbench for autonomous and exception-based evidence review."""
 
 from __future__ import annotations
 
@@ -12,7 +12,14 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.store import Database, PaperStore, ReviewStore
-from .service import ClaimReviewInput, EvidenceProfileInput, EvidenceReviewService
+from .service import (
+    AUTONOMOUS_REVIEW_POLICY_VERSION,
+    ClaimReviewInput,
+    EvidenceProfileInput,
+    EvidenceReviewService,
+    PublicationRole,
+    StudyDesign,
+)
 
 
 class AdmissionRequest(BaseModel):
@@ -20,6 +27,10 @@ class AdmissionRequest(BaseModel):
 
     condition_codes: list[str] = Field(min_length=1, max_length=12)
     consistency_resolution: str | None = Field(default=None, max_length=5000)
+    differences_confirmed: bool = False
+    study_design: StudyDesign
+    publication_role: PublicationRole
+    identity_confirmed: bool
 
 
 class TopicRequest(BaseModel):
@@ -73,7 +84,7 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     database.initialize()
     store = ReviewStore(database)
     papers_store = PaperStore(database)
-    service = EvidenceReviewService(store)
+    service = EvidenceReviewService(store, papers_store)
     workbench = Path(__file__).with_name("workbench.html").read_text(encoding="utf-8")
     app = FastAPI(title="Genesis Evidence Review", docs_url=None, redoc_url=None)
 
@@ -191,12 +202,53 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     def papers() -> list[dict[str, object]]:
         return store.list_review_queue()
 
+    @app.post("/api/review/papers/auto-review")
+    def auto_review_all(reviewer: str = Depends(principal)) -> dict[str, object]:
+        results = []
+        for item in store.list_review_queue():
+            paper_id = str(item["id"])
+            try:
+                result = service.auto_review_paper(paper_id, requested_by=reviewer)
+            except (ValueError, RuntimeError) as exc:
+                result = {
+                    "status": "attention_required",
+                    "stage": "workflow_error",
+                    "reason": str(exc),
+                }
+                store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_review_attention_required",
+                    actor="ai:orchestrator",
+                    detail={
+                        "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                        "requested_by": reviewer,
+                        **result,
+                    },
+                )
+            results.append({"paper_id": paper_id, **result})
+        return {
+            "status": "completed",
+            "processed": len(results),
+            "attention_required": sum(
+                result["status"] == "attention_required" for result in results
+            ),
+            "pending_extraction": sum(
+                result["status"] in {"queued", "running"} for result in results
+            ),
+            "results": results,
+        }
+
     @app.get("/api/review/papers/{paper_id}", dependencies=[Depends(principal)])
     def paper(paper_id: str) -> dict[str, object]:
         item = store.get_review_item(paper_id)
         if item is None:
             raise HTTPException(status_code=404, detail="paper not found")
         return item
+
+    @app.post("/api/review/papers/{paper_id}/auto-review")
+    def auto_review_paper(paper_id: str, reviewer: str = Depends(principal)) -> dict[str, object]:
+        return service.auto_review_paper(paper_id, requested_by=reviewer)
 
     @app.post("/api/review/papers/{paper_id}/admit")
     def admit(
@@ -207,6 +259,10 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
             reviewer=reviewer,
             condition_codes=request.condition_codes,
             consistency_resolution=request.consistency_resolution,
+            differences_confirmed=request.differences_confirmed,
+            study_design=request.study_design,
+            publication_role=request.publication_role,
+            identity_confirmed=request.identity_confirmed,
         )
         return {"status": "internally_admitted"}
 

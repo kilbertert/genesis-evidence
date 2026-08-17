@@ -433,7 +433,11 @@ class PaperStore:
                 "collection_paper",
                 f"{run_id}:{paper_id}",
                 f"{stage}_screened",
-                {"decision": decision, "primary_exclusion_reason": reason},
+                {
+                    "from_decision": row[f"{stage}_decision"],
+                    "to_decision": decision,
+                    "primary_exclusion_reason": reason,
+                },
                 actor=reviewer,
             )
 
@@ -465,6 +469,11 @@ class PaperStore:
         }:
             raise ValueError(f"Unsupported integrity status: {status}")
         with self.database.transaction() as connection:
+            paper = connection.execute(
+                "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+            if paper is None:
+                raise ValueError("paper not found")
             connection.execute(
                 "UPDATE papers SET integrity_status = ? WHERE id = ?",
                 (status, paper_id),
@@ -474,7 +483,7 @@ class PaperStore:
                 stale_cards = connection.execute(
                     """
                     UPDATE knowledge_cards SET status = 'stale'
-                    WHERE status = 'published' AND id IN (
+                    WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
                         SELECT cc.card_id FROM card_claims cc
                         JOIN claims c ON c.id = cc.claim_id
                         WHERE c.paper_id = ?
@@ -482,8 +491,18 @@ class PaperStore:
                     """,
                     (paper_id,),
                 ).rowcount
-                detail = {**detail, "stale_cards": stale_cards}
-            self._audit(connection, "paper", paper_id, f"integrity_{status}", detail)
+            self._audit(
+                connection,
+                "paper",
+                paper_id,
+                f"integrity_{status}",
+                {
+                    **detail,
+                    "from_status": paper["integrity_status"],
+                    "to_status": status,
+                    "stale_cards": stale_cards,
+                },
+            )
 
     def save_full_text(
         self,

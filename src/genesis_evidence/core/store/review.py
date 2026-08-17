@@ -1,8 +1,9 @@
-"""Atomic persistence operations for one-reviewer evidence publication."""
+"""Atomic persistence operations for evidence review and publication."""
 
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -21,15 +22,30 @@ class ReviewStore:
         reviewer: str,
         condition_codes: tuple[str, ...],
         consistency_resolution: str | None,
+        differences_confirmed: bool,
+        study_design: str,
+        publication_role: str,
+        identity_confirmed: bool,
     ) -> None:
         with self.database.transaction() as connection:
+            if not identity_confirmed:
+                raise ValueError(
+                    "Study/Publication identity must be verified by the executing actor"
+                )
             paper = connection.execute(
-                "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
+                """
+                SELECT integrity_status,
+                    EXISTS(SELECT 1 FROM paper_sources WHERE paper_id = ?) AS source_available
+                FROM papers WHERE id = ?
+                """,
+                (paper_id, paper_id),
             ).fetchone()
             if paper is None:
                 raise ValueError("paper not found")
             if paper["integrity_status"] != "clear":
                 raise ValueError("paper integrity must be clear before internal admission")
+            if not paper["source_available"]:
+                raise ValueError("paper source identity must be present before internal admission")
             extraction = connection.execute(
                 """
                 SELECT id, consistency_status FROM paper_extractions
@@ -39,22 +55,47 @@ class ReviewStore:
             ).fetchone()
             if extraction is None:
                 raise ValueError("paper has no AI extraction")
-            if extraction["consistency_status"] == "needs_review" and not consistency_resolution:
-                raise ValueError("AI extraction differences require a human resolution")
+            if extraction["consistency_status"] == "needs_review":
+                if not differences_confirmed:
+                    raise ValueError(
+                        "AI extraction differences require executing-actor verification"
+                    )
+                if not consistency_resolution:
+                    raise ValueError("AI extraction differences require a documented resolution")
             studies = connection.execute(
                 """
-                SELECT s.id FROM studies s JOIN study_publications sp ON sp.study_id = s.id
+                SELECT s.id, s.study_design, sp.role
+                FROM studies s JOIN study_publications sp ON sp.study_id = s.id
                 WHERE sp.paper_id = ?
                 """,
                 (paper_id,),
             ).fetchall()
-            if not studies:
-                raise ValueError("paper has no Study/Publication relationship")
+            if len(studies) != 1:
+                raise ValueError("paper requires one resolved Study/Publication relationship")
             result_count = connection.execute(
                 "SELECT count(*) FROM results WHERE paper_id = ?", (paper_id,)
             ).fetchone()[0]
             if result_count == 0:
                 raise ValueError("paper has no structured Result records")
+            included_conditions = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT et.condition_code
+                    FROM collection_papers cp
+                    JOIN collection_runs cr ON cr.id = cp.run_id
+                    JOIN evidence_topics et ON et.id = cr.topic_id
+                    WHERE cp.paper_id = ? AND cp.title_abstract_decision = 'included'
+                        AND cp.full_text_decision = 'included'
+                        AND cr.status = 'completed' AND et.status = 'locked'
+                    """,
+                    (paper_id,),
+                ).fetchall()
+            }
+            if not included_conditions:
+                raise ValueError(
+                    "paper must pass title/abstract and full-text screening before admission"
+                )
             known = {
                 row[0]
                 for row in connection.execute(
@@ -64,6 +105,26 @@ class ReviewStore:
             }
             if known != set(condition_codes):
                 raise ValueError("paper contains an unknown condition code")
+            if not set(condition_codes) <= included_conditions:
+                raise ValueError("paper conditions must match its full-text included topics")
+            previous = connection.execute(
+                "SELECT * FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            evidence_changed = (
+                previous
+                and previous["status"] == "internally_admitted"
+                and (
+                    set(json.loads(previous["condition_codes_json"])) != set(condition_codes)
+                    or (previous["consistency_resolution"] or None) != consistency_resolution
+                    or any(
+                        row["study_design"] != study_design or row["role"] != publication_role
+                        for row in studies
+                    )
+                )
+            )
+            stale_cards = (
+                self._stale_cards_for_paper(connection, paper_id) if evidence_changed else 0
+            )
             connection.execute(
                 """
                 INSERT INTO paper_admissions(
@@ -88,16 +149,18 @@ class ReviewStore:
             reviewed_at = _now()
             connection.execute(
                 """
-                UPDATE studies SET status = 'verified', reviewer = ?, reviewed_at = ?
+                UPDATE studies SET status = 'verified', study_design = ?, reviewer = ?,
+                    reviewed_at = ?
                 WHERE id IN (SELECT study_id FROM study_publications WHERE paper_id = ?)
                 """,
-                (reviewer, reviewed_at, paper_id),
+                (study_design, reviewer, reviewed_at, paper_id),
             )
             connection.execute(
                 """
-                UPDATE study_publications SET reviewer = ?, reviewed_at = ? WHERE paper_id = ?
+                UPDATE study_publications SET role = ?, reviewer = ?, reviewed_at = ?
+                WHERE paper_id = ?
                 """,
-                (reviewer, reviewed_at, paper_id),
+                (publication_role, reviewer, reviewed_at, paper_id),
             )
             self._audit(
                 connection,
@@ -108,11 +171,23 @@ class ReviewStore:
                 {
                     "condition_codes": condition_codes,
                     "consistency_resolution": consistency_resolution,
+                    "differences_confirmed": differences_confirmed,
+                    "study_design": study_design,
+                    "publication_role": publication_role,
+                    "identity_confirmed": True,
+                    "from_status": previous["status"] if previous else None,
+                    "to_status": "internally_admitted",
+                    "stale_cards": stale_cards,
                 },
             )
 
     def reject_paper(self, paper_id: str, *, reviewer: str) -> None:
         with self.database.transaction() as connection:
+            previous = connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if previous is None:
+                raise ValueError("paper admission item not found")
             updated = connection.execute(
                 """
                 UPDATE paper_admissions SET status = 'rejected', condition_codes_json = '[]',
@@ -122,8 +197,19 @@ class ReviewStore:
             ).rowcount
             if updated != 1:
                 raise ValueError("paper admission item not found")
-            self._stale_cards_for_paper(connection, paper_id)
-            self._audit(connection, "paper", paper_id, "admission_rejected", reviewer, {})
+            stale_cards = self._stale_cards_for_paper(connection, paper_id)
+            self._audit(
+                connection,
+                "paper",
+                paper_id,
+                "admission_rejected",
+                reviewer,
+                {
+                    "from_status": previous["status"],
+                    "to_status": "rejected",
+                    "stale_cards": stale_cards,
+                },
+            )
 
     def review_claim(
         self,
@@ -137,15 +223,18 @@ class ReviewStore:
         risk_of_bias: object | None,
         applicability: str | None,
         condition_code: str | None,
+        source_verified: bool,
     ) -> None:
         with self.database.transaction() as connection:
             claim = connection.execute(
                 """
-                SELECT c.paper_id, c.result_id, p.integrity_status,
+                SELECT c.paper_id, c.result_id, c.status AS claim_status,
+                    prior.decision AS prior_decision, p.integrity_status,
                     pa.status AS admission_status,
                     pa.condition_codes_json
                 FROM claims c JOIN papers p ON p.id = c.paper_id
                 LEFT JOIN paper_admissions pa ON pa.paper_id = c.paper_id
+                LEFT JOIN claim_reviews prior ON prior.claim_id = c.id
                 WHERE c.id = ?
                 """,
                 (claim_id,),
@@ -158,6 +247,8 @@ class ReviewStore:
                 raise ValueError("claim cannot be approved while paper integrity is not clear")
             if decision == "approved" and not claim["result_id"]:
                 raise ValueError("claim requires a structured Result before approval")
+            if decision == "approved" and not source_verified:
+                raise ValueError("claim source evidence must be verified by the executing actor")
             if decision == "approved" and condition_code not in json.loads(
                 claim["condition_codes_json"]
             ):
@@ -203,15 +294,15 @@ class ReviewStore:
                 """,
                 ("reviewed" if decision == "approved" else "rejected", claim_id),
             )
-            connection.execute(
+            stale_cards = connection.execute(
                 """
                 UPDATE knowledge_cards SET status = 'stale'
-                WHERE status = 'published' AND id IN (
+                WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
                     SELECT card_id FROM card_claims WHERE claim_id = ?
                 )
                 """,
                 (claim_id,),
-            )
+            ).rowcount
             self._audit(
                 connection,
                 "claim",
@@ -219,9 +310,18 @@ class ReviewStore:
                 f"claim_{decision}",
                 reviewer,
                 {
+                    "corrected_text": corrected_text,
+                    "corrected_study_design": corrected_study_design,
+                    "inference": inference,
                     "condition_code": condition_code,
                     "risk_of_bias": risk_of_bias,
                     "applicability": applicability,
+                    "source_verified": source_verified,
+                    "from_status": claim["claim_status"],
+                    "to_status": "reviewed" if decision == "approved" else "rejected",
+                    "from_decision": claim["prior_decision"],
+                    "to_decision": decision,
+                    "stale_cards": stale_cards,
                 },
             )
 
@@ -245,6 +345,7 @@ class ReviewStore:
                 SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
                     c.candidate_claim_type,
                     cr.decision, cr.condition_code, cr.corrected_study_design,
+                    cr.risk_of_bias_json,
                     p.integrity_status, pa.status AS admission_status
                     , r.population, r.baseline_nutrient_status, r.ingredient_name,
                     r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint
@@ -301,6 +402,13 @@ class ReviewStore:
             ):
                 raise ValueError(
                     "mechanism and case-report results cannot support a patient-visible card"
+                )
+            if profile["certainty"] in {"high", "moderate"} and any(
+                json.loads(row["risk_of_bias_json"])["overall"] in {"high", "critical", "uncertain"}
+                for row in rows
+            ):
+                raise ValueError(
+                    "high or moderate certainty requires resolved non-high risk-of-bias judgments"
                 )
             dimensions = (
                 "population",
@@ -434,6 +542,9 @@ class ReviewStore:
                     "claims": claim_ids,
                     "evidence_profile_id": profile_id,
                     "topic_id": topic_id,
+                    "profile": profile,
+                    "from_status": None,
+                    "to_status": "draft",
                 },
             )
         return card_id
@@ -479,7 +590,7 @@ class ReviewStore:
                 card_id,
                 f"card_{target}",
                 reviewer,
-                {},
+                {"from_status": card["status"], "to_status": target},
             )
 
     def list_published_cards(self, condition_code: str) -> list[dict[str, object]]:
@@ -508,6 +619,23 @@ class ReviewStore:
                     pe.consistency_status,
                     pej.status AS extraction_job_status,
                     pej.stage AS extraction_job_stage,
+                    CASE
+                        WHEN pe.id IS NULL THEN 'blocked'
+                        WHEN p.integrity_status <> 'clear' THEN 'blocked'
+                        WHEN NOT EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                        ) THEN 'blocked'
+                        WHEN pa.status = 'rejected' THEN 'blocked'
+                        WHEN pa.status = 'internally_admitted' AND NOT EXISTS (
+                            SELECT 1 FROM claims pending
+                            WHERE pending.paper_id = p.id AND pending.status = 'candidate'
+                        ) THEN 'completed'
+                        ELSE 'ready_for_automation'
+                    END AS review_state,
                     count(c.id) AS claim_count,
                     sum(CASE WHEN c.status = 'candidate' THEN 1 ELSE 0 END) AS pending_claims
                 FROM papers p
@@ -521,7 +649,8 @@ class ReviewStore:
                     WHERE paper_id = p.id ORDER BY created_at DESC, id DESC LIMIT 1
                 )
                 LEFT JOIN claims c ON c.paper_id = p.id
-                GROUP BY p.id, pa.status, pe.consistency_status, pej.status, pej.stage
+                GROUP BY p.id, pa.status, pa.consistency_resolution, pe.id,
+                    pe.consistency_status, pej.status, pej.stage
                 ORDER BY p.created_at DESC, p.id DESC
                 """
             ).fetchall()
@@ -562,13 +691,24 @@ class ReviewStore:
             collections = connection.execute(
                 """
                 SELECT et.id AS topic_id, et.code AS topic_code, et.version AS topic_version,
-                    et.exclusion_reasons_json, cr.id AS run_id, cr.source, cr.search_stream,
+                    et.condition_code AS topic_condition_code, et.picots_json,
+                    et.eligible_study_designs_json, et.exclusion_reasons_json,
+                    cr.id AS run_id, cr.source, cr.search_stream,
                     cr.status AS run_status, cp.title_abstract_decision,
                     cp.full_text_decision, cp.primary_exclusion_reason
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
                 JOIN evidence_topics et ON et.id = cr.topic_id
                 WHERE cp.paper_id = ? ORDER BY cr.created_at, cr.id
+                """,
+                (paper_id,),
+            ).fetchall()
+            studies = connection.execute(
+                """
+                SELECT s.id, s.status, s.study_design, s.registration_ids_json,
+                    sp.role AS publication_role, sp.reviewer, sp.reviewed_at
+                FROM studies s JOIN study_publications sp ON sp.study_id = s.id
+                WHERE sp.paper_id = ? ORDER BY s.created_at, s.id
                 """,
                 (paper_id,),
             ).fetchall()
@@ -586,48 +726,214 @@ class ReviewStore:
                 """,
                 (paper_id,),
             ).fetchall()
+            audit_events = connection.execute(
+                """
+                SELECT id, entity_type, entity_id, action, actor, detail_json, created_at
+                FROM audit_events
+                WHERE (entity_type = 'paper' AND entity_id = ?)
+                    OR (entity_type = 'claim' AND entity_id IN (
+                        SELECT id FROM claims WHERE paper_id = ?
+                    ))
+                    OR (entity_type = 'collection_paper' AND entity_id LIKE '%:' || ?)
+                ORDER BY id DESC LIMIT 100
+                """,
+                (paper_id, paper_id, paper_id),
+            ).fetchall()
+        extraction_data = json.loads(extraction["extraction_json"]) if extraction else None
+        second_extraction_data = (
+            json.loads(extraction["second_extraction_json"]) if extraction else None
+        )
+        consistency_data = json.loads(extraction["consistency_json"]) if extraction else None
+        admission_data = (
+            {
+                **dict(admission),
+                "condition_codes": json.loads(admission["condition_codes_json"]),
+            }
+            if admission
+            else None
+        )
+        collection_items = [_collection_dict(row, extraction_data or {}) for row in collections]
+        claim_items = [
+            _claim_dict(
+                row,
+                extraction=extraction_data or {},
+                collections=collection_items,
+            )
+            for row in claims
+        ]
+        study_items = [
+            {
+                **{
+                    key: value for key, value in dict(row).items() if key != "registration_ids_json"
+                },
+                "registration_ids": json.loads(row["registration_ids_json"]),
+            }
+            for row in studies
+        ]
         return {
             "paper": dict(paper),
-            "extraction": json.loads(extraction["extraction_json"]) if extraction else None,
-            "second_extraction": (
-                json.loads(extraction["second_extraction_json"]) if extraction else None
-            ),
-            "consistency": json.loads(extraction["consistency_json"]) if extraction else None,
-            "extraction_job": dict(extraction_job) if extraction_job else None,
-            "admission": (
+            "extraction": extraction_data,
+            "second_extraction": second_extraction_data,
+            "consistency": consistency_data,
+            "extraction_trace": (
                 {
-                    **dict(admission),
-                    "condition_codes": json.loads(admission["condition_codes_json"]),
+                    key: extraction[key]
+                    for key in (
+                        "id",
+                        "model",
+                        "extraction_run_id",
+                        "second_model",
+                        "second_run_id",
+                        "check_model",
+                        "check_run_id",
+                    )
                 }
-                if admission
+                if extraction
                 else None
             ),
+            "extraction_job": dict(extraction_job) if extraction_job else None,
+            "admission": admission_data,
             "sources": [dict(row) for row in sources],
-            "collections": [
+            "collections": collection_items,
+            "studies": study_items,
+            "claims": claim_items,
+            "audit_events": [
                 {
-                    **{
-                        key: value
-                        for key, value in dict(row).items()
-                        if key != "exclusion_reasons_json"
-                    },
-                    "exclusion_reasons": json.loads(row["exclusion_reasons_json"]),
+                    **{key: value for key, value in dict(row).items() if key != "detail_json"},
+                    "detail": json.loads(row["detail_json"]),
                 }
-                for row in collections
+                for row in audit_events
             ],
-            "claims": [_claim_dict(row) for row in claims],
+            "review_guidance": _review_guidance(
+                paper=dict(paper),
+                extraction=extraction_data,
+                consistency=consistency_data,
+                admission=admission_data,
+                collections=collection_items,
+                studies=study_items,
+                claims=claim_items,
+                source_count=len(sources),
+            ),
         }
+
+    def list_profile_candidates(self, paper_id: str) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            topics = connection.execute(
+                """
+                SELECT DISTINCT et.id, et.version, et.condition_code, et.evidence_cutoff_date,
+                    et.picots_json, condition.name AS condition_name
+                FROM evidence_topics et
+                JOIN conditions condition ON condition.code = et.condition_code
+                JOIN collection_runs run ON run.topic_id = et.id
+                JOIN collection_papers item ON item.run_id = run.id
+                WHERE item.paper_id = ? AND item.full_text_decision = 'included'
+                ORDER BY et.id
+                """,
+                (paper_id,),
+            ).fetchall()
+            candidates: list[dict[str, object]] = []
+            for topic in topics:
+                base = {
+                    **{key: value for key, value in dict(topic).items() if key != "picots_json"},
+                    "picots": json.loads(topic["picots_json"]),
+                }
+                try:
+                    _require_complete_topic(connection, topic["id"], topic["condition_code"])
+                except ValueError as exc:
+                    candidates.append({**base, "status": "waiting", "reason": str(exc)})
+                    continue
+                rows = connection.execute(
+                    """
+                    SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
+                        cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
+                        r.population, r.baseline_nutrient_status, r.ingredient_name,
+                        r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
+                        r.effect_estimate, r.statistical_details
+                    FROM claims c
+                    JOIN claim_reviews cr ON cr.claim_id = c.id
+                    JOIN results r ON r.id = c.result_id
+                    JOIN papers p ON p.id = c.paper_id
+                    JOIN paper_admissions pa ON pa.paper_id = p.id
+                    WHERE cr.decision = 'approved' AND cr.condition_code = ?
+                        AND p.integrity_status = 'clear' AND p.publication_status = 'formal'
+                        AND pa.status = 'internally_admitted'
+                        AND c.candidate_claim_type <> 'mechanism'
+                        AND cr.corrected_study_design NOT IN (
+                            'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                        )
+                        AND EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs run ON run.id = cp.run_id
+                            WHERE run.topic_id = ? AND cp.paper_id = p.id
+                                AND cp.full_text_decision = 'included'
+                        )
+                    ORDER BY c.id
+                    """,
+                    (topic["condition_code"], topic["id"]),
+                ).fetchall()
+                dimensions = (
+                    "population",
+                    "baseline_nutrient_status",
+                    "ingredient_name",
+                    "ingredient_form",
+                    "dose",
+                    "comparator",
+                    "outcome",
+                    "timepoint",
+                )
+                groups: dict[tuple[str, ...], list[dict[str, object]]] = {}
+                for row in rows:
+                    item = dict(row)
+                    item["risk_of_bias"] = json.loads(item.pop("risk_of_bias_json"))
+                    groups.setdefault(tuple(str(item[field]) for field in dimensions), []).append(
+                        item
+                    )
+                matching_groups = {
+                    key: value
+                    for key, value in groups.items()
+                    if _profile_scope_matches(
+                        base["picots"], dict(zip(dimensions, key, strict=True))
+                    )
+                }
+                candidates.append(
+                    {
+                        **base,
+                        "status": "ready",
+                        "groups": [
+                            {
+                                "dimensions": dict(zip(dimensions, key, strict=True)),
+                                "claims": matching_groups[key],
+                            }
+                            for key in sorted(matching_groups)
+                        ],
+                    }
+                )
+        return candidates
+
+    def record_event(
+        self,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        *,
+        actor: str,
+        detail: object,
+    ) -> None:
+        with self.database.transaction() as connection:
+            self._audit(connection, entity_type, entity_id, action, actor, detail)
 
     def list_cards(self) -> list[dict[str, object]]:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT kc.id, kc.condition_code, kc.version, kc.status, kc.grade,
-                    kc.evidence_profile_id,
+                    kc.evidence_profile_id, ep.topic_id,
                     kc.reviewer, kc.reviewed_at, kc.published_at, kc.patient_visible_body,
                     count(cc.claim_id) AS claim_count,
                     group_concat(cc.claim_id) AS claim_ids,
                     group_concat(DISTINCT c.paper_id) AS paper_ids
                 FROM knowledge_cards kc
+                LEFT JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
                 LEFT JOIN card_claims cc ON cc.card_id = kc.id
                 LEFT JOIN claims c ON c.id = cc.claim_id
                 GROUP BY kc.id ORDER BY kc.created_at DESC, kc.id DESC
@@ -690,17 +996,17 @@ class ReviewStore:
             raise ValueError("knowledge card has ineligible evidence")
 
     @staticmethod
-    def _stale_cards_for_paper(connection, paper_id: str) -> None:
-        connection.execute(
+    def _stale_cards_for_paper(connection, paper_id: str) -> int:
+        return connection.execute(
             """
             UPDATE knowledge_cards SET status = 'stale'
-            WHERE status = 'published' AND id IN (
+            WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
                 SELECT cc.card_id FROM card_claims cc
                 JOIN claims c ON c.id = cc.claim_id WHERE c.paper_id = ?
             )
             """,
             (paper_id,),
-        )
+        ).rowcount
 
     @staticmethod
     def _audit(
@@ -843,11 +1149,569 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
     return topic
 
 
-def _claim_dict(row) -> dict[str, object]:
+_RISK_OF_BIAS_TOOL = {
+    "randomized_controlled_trial": "rob2",
+    "systematic_review_meta_analysis": "robis",
+    "non_randomized_controlled_study": "robins_i",
+    "natural_experiment": "robins_i",
+    "biomarker_validation_study": "diagnostic_accuracy",
+    "cohort_study": "exposure_study",
+    "case_control_study": "exposure_study",
+    "cross_sectional_study": "exposure_study",
+    "ecological_study": "exposure_study",
+    "case_series": "safety_signal",
+    "case_report": "safety_signal",
+}
+
+
+def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
+    item = {
+        **{
+            key: value
+            for key, value in dict(row).items()
+            if key
+            not in {
+                "picots_json",
+                "eligible_study_designs_json",
+                "exclusion_reasons_json",
+            }
+        },
+        "picots": json.loads(row["picots_json"]),
+        "eligible_study_designs": json.loads(row["eligible_study_designs_json"]),
+        "exclusion_reasons": json.loads(row["exclusion_reasons_json"]),
+    }
+    design = str(extraction.get("study_design") or "uncertain")
+    if not item["title_abstract_decision"]:
+        item["screening_suggestion"] = {
+            "stage": "title_abstract",
+            "decision": "included",
+            "primary_exclusion_reason": None,
+            "reason": "题录初筛优先保证召回率；信息不足但可能符合时进入全文筛选。",
+        }
+    elif item["title_abstract_decision"] == "included" and not item["full_text_decision"]:
+        eligible = design in item["eligible_study_designs"]
+        wrong_design = next(
+            (code for code in item["exclusion_reasons"] if "design" in code.casefold()),
+            None,
+        )
+        picots_ready, picots_exclusion = (
+            _picots_exclusion(item, extraction) if eligible else (True, None)
+        )
+        exclusion = picots_exclusion if eligible else wrong_design
+        item["screening_suggestion"] = {
+            "stage": "full_text",
+            "decision": "included"
+            if eligible and picots_ready and not exclusion
+            else ("excluded" if exclusion else ""),
+            "primary_exclusion_reason": exclusion,
+            "reason": (
+                f"AI-A 结构化事实与锁定主题 PICOTS 相符，研究设计为 {design}。"
+                if eligible and picots_ready and not exclusion
+                else (
+                    f"AI-A 结构化事实不符合锁定主题，按 {exclusion} 全文排除。"
+                    if exclusion
+                    else (
+                        "AI-A 缺少完成 PICOTS 判断所需的结构化事实，或主题未配置"
+                        "对应排除原因；进入异常队列。"
+                        if eligible
+                        else (
+                            f"AI-A 研究设计为 {design}，不在主题允许设计中，"
+                            "但主题未配置对应排除原因；进入异常队列。"
+                        )
+                    )
+                )
+            ),
+        }
+    else:
+        item["screening_suggestion"] = None
+    return item
+
+
+def _picots_exclusion(
+    collection: dict[str, object], extraction: dict[str, object]
+) -> tuple[bool, str | None]:
+    picots = collection["picots"]
+    reasons = collection["exclusion_reasons"]
+    checks = (
+        (
+            "population",
+            " ".join(str(value) for value in extraction.get("population", [])),
+            ("population",),
+        ),
+        (
+            "intervention_or_exposure",
+            " ".join(
+                [*(str(value) for value in extraction.get("studied_approach", []))]
+                + [
+                    f"{claim.get('ingredient_name', '')} {claim.get('ingredient_form', '')}"
+                    for claim in extraction.get("claims", [])
+                    if isinstance(claim, dict)
+                ]
+            ),
+            ("intervention", "exposure"),
+        ),
+        (
+            "outcomes",
+            " ".join(
+                [*(str(value) for value in extraction.get("outcomes", []))]
+                + [
+                    str(claim.get("outcome", ""))
+                    for claim in extraction.get("claims", [])
+                    if isinstance(claim, dict)
+                ]
+            ),
+            ("outcome",),
+        ),
+        (
+            "comparator",
+            " ".join(
+                str(claim.get("comparator", ""))
+                for claim in extraction.get("claims", [])
+                if isinstance(claim, dict)
+            ),
+            ("comparator",),
+        ),
+        (
+            "timing",
+            " ".join(
+                str(claim.get("timepoint", ""))
+                for claim in extraction.get("claims", [])
+                if isinstance(claim, dict)
+            ),
+            ("timing", "duration"),
+        ),
+    )
+    for topic_field, extracted_text, reason_tokens in checks:
+        topic_text = str(picots.get(topic_field) or "")
+        if not extracted_text.strip():
+            return False, None
+        if not _picots_text_matches(topic_text, extracted_text):
+            reason = next(
+                (
+                    reason
+                    for reason in reasons
+                    if any(token in str(reason).casefold() for token in reason_tokens)
+                ),
+                None,
+            )
+            return reason is not None, reason
+    candidates = {
+        str(value.get("condition_code"))
+        for value in extraction.get("condition_candidates", [])
+        if isinstance(value, dict)
+    }
+    if not candidates:
+        return False, None
+    if collection["topic_condition_code"] not in candidates:
+        reason = next(
+            (reason for reason in reasons if "outcome" in str(reason).casefold()), None
+        )
+        return reason is not None, reason
+    return True, None
+
+
+def _picots_text_matches(
+    topic_text: str, extracted_text: str, *, require_qualifiers: bool = True
+) -> bool:
+    aliases = {
+        "bp": ("blood", "pressure"),
+        "sbp": ("blood", "pressure"),
+        "dbp": ("blood", "pressure"),
+        "salt": ("sodium",),
+        "fat": ("fatty",),
+        "men": ("adult",),
+        "women": ("adult",),
+        "adults": ("adult",),
+        "25ohd": ("25", "vitamin"),
+        "hydroxyvitamin": ("vitamin",),
+    }
+    stopwords = {
+        "and",
+        "or",
+        "the",
+        "of",
+        "with",
+        "versus",
+        "usual",
+        "alternative",
+        "aged",
+        "older",
+        "serum",
+        "concentration",
+        "dietary",
+    }
+
+    def tokens(value: str) -> set[str]:
+        raw = re.findall(r"[a-z0-9]+", value.casefold())
+        result = set()
+        if {"25", "oh", "d"} <= set(raw):
+            result.update(("25", "vitamin"))
+        for token in raw:
+            if len(token) <= 1 or token in stopwords:
+                continue
+            for canonical in aliases.get(token, (token.rstrip("s"),)):
+                canonical = next(
+                    (
+                        stem
+                        for prefix, stem in (
+                            ("supplement", "supplement"),
+                            ("reduc", "reduce"),
+                            ("modif", "modify"),
+                        )
+                        if canonical.startswith(prefix)
+                    ),
+                    canonical,
+                )
+                result.add(canonical)
+        return result
+
+    topic_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", topic_text.casefold())
+    if topic_age:
+        extracted_age = re.search(
+            r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold()
+        )
+        if not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1)):
+            return False
+    topic_duration = re.search(
+        r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?\s*(?:or|and)\s*(?:longer|more)",
+        topic_text.casefold(),
+    )
+    if topic_duration:
+        extracted_duration = re.search(
+            r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", extracted_text.casefold()
+        )
+        if not extracted_duration:
+            return False
+        weeks = {"day": 1 / 7, "week": 1, "month": 4.345, "year": 52}
+        if (
+            float(extracted_duration.group(1)) * weeks[extracted_duration.group(2)]
+            < float(topic_duration.group(1)) * weeks[topic_duration.group(2)]
+        ):
+            return False
+    topic_tokens = tokens(topic_text)
+    extracted_tokens = tokens(extracted_text)
+    qualifiers = topic_tokens & {"supplement", "reduce", "modify"}
+    return bool(topic_tokens & extracted_tokens) and (
+        not require_qualifiers or qualifiers <= extracted_tokens
+    )
+
+
+def _profile_scope_matches(picots: object, dimensions: dict[str, str]) -> bool:
+    if not isinstance(picots, dict):
+        return False
+    for topic_field, result_field in (
+        ("population", "population"),
+        ("intervention_or_exposure", "ingredient_name"),
+        ("outcomes", "outcome"),
+        ("timing", "timepoint"),
+    ):
+        topic_value = str(picots.get(topic_field) or "").strip()
+        result_value = dimensions[result_field].strip()
+        if topic_value and (
+            not result_value
+            or not _picots_text_matches(topic_value, result_value, require_qualifiers=False)
+        ):
+            return False
+    return True
+
+
+def _claim_dict(
+    row,
+    *,
+    extraction: dict[str, object],
+    collections: list[dict[str, object]],
+) -> dict[str, object]:
     claim = dict(row)
     raw = claim.pop("risk_of_bias_json", None)
     claim["risk_of_bias"] = json.loads(raw) if raw else None
+    extracted_claim = next(
+        (
+            item
+            for item in extraction.get("claims", [])
+            if isinstance(item, dict)
+            and (
+                (
+                    item.get("evidence") == claim.get("evidence_text")
+                    and item.get("locator") == claim.get("locator")
+                )
+                or item.get("text") == claim.get("candidate_text")
+            )
+        ),
+        {},
+    )
+    design = str(claim.get("candidate_study_design") or "uncertain")
+    if design == "uncertain":
+        design = str(extraction.get("study_design") or "uncertain")
+    active_collections = [
+        item
+        for item in collections
+        if item.get("title_abstract_decision") != "excluded"
+        and item.get("full_text_decision") != "excluded"
+    ]
+    dimensions = {
+        field: str(claim.get(field) or "")
+        for field in ("population", "ingredient_name", "outcome", "timepoint")
+    }
+    matching_conditions = list(
+        dict.fromkeys(
+            str(item["topic_condition_code"])
+            for item in active_collections
+            if _profile_scope_matches(item["picots"], dimensions)
+        )
+    )
+    limitations = [str(value) for value in extraction.get("limitations", []) if str(value).strip()]
+    tool = _RISK_OF_BIAS_TOOL.get(design, "other")
+    condition_code = matching_conditions[0] if len(matching_conditions) == 1 else ""
+    suggested_decision = (
+        "approved" if condition_code else ("rejected" if not matching_conditions else "")
+    )
+    claim["review_suggestion"] = {
+        "decision": suggested_decision,
+        "decision_reason": (
+            "Result scope matches one locked topic PICOTS."
+            if suggested_decision == "approved"
+            else (
+                "Result scope does not match any locked topic PICOTS."
+                if suggested_decision == "rejected"
+                else "Result scope matches multiple topic conditions and needs exception review."
+            )
+        ),
+        "corrected_text": claim.get("candidate_text") or "",
+        "corrected_study_design": design,
+        "inference": extracted_claim.get("inference") or "descriptive",
+        "risk_of_bias": {
+            "tool": tool,
+            "overall": "uncertain",
+            "rationale": (
+                "AI 初审提取到的研究局限：" + "；".join(limitations[:4])
+                if limitations
+                else f"AI 未抽取到足够的偏倚判断依据；请按 {tool} 核对全文。"
+            ),
+        },
+        "applicability": (
+            f"AI 初审：研究人群为 {claim.get('population') or '未报告'}；"
+            f"基线营养状态为 {claim.get('baseline_nutrient_status') or '未报告'}。"
+            "请对照锁定主题 PICOTS 确认适用性。"
+        ),
+        "condition_code": condition_code,
+        "human_checks": [
+            "原文定位与摘录",
+            "成分形式、剂量、对照",
+            "结局、时间点、单位、方向、效应量与统计信息",
+            "安全事件、协议偏离及适用性",
+        ],
+    }
     return claim
+
+
+def _review_guidance(
+    *,
+    paper: dict[str, object],
+    extraction: dict[str, object] | None,
+    consistency: dict[str, object] | None,
+    admission: dict[str, object] | None,
+    collections: list[dict[str, object]],
+    studies: list[dict[str, object]],
+    claims: list[dict[str, object]],
+    source_count: int,
+) -> dict[str, object]:
+    admission_status = str((admission or {}).get("status") or "pending")
+    incomplete_screening = any(
+        not item.get("title_abstract_decision")
+        or (
+            item.get("title_abstract_decision") == "included" and not item.get("full_text_decision")
+        )
+        for item in collections
+    )
+    included = [item for item in collections if item.get("full_text_decision") == "included"]
+    all_excluded = bool(collections) and not incomplete_screening and not included
+    result_fields = (
+        "result_id",
+        "evidence_text",
+        "locator",
+        "population",
+        "ingredient_name",
+        "ingredient_form",
+        "dose",
+        "comparator",
+        "outcome",
+        "timepoint",
+        "effect_estimate",
+        "statistical_details",
+    )
+    structured_results = bool(claims) and all(
+        all(str(claim.get(field) or "").strip() for field in result_fields) for claim in claims
+    )
+    issues = [
+        {
+            **issue,
+            "priority": "must_resolve" if _critical_issue(issue) else "verify",
+        }
+        for issue in (consistency or {}).get("issues", [])
+        if isinstance(issue, dict)
+    ]
+    unresolved_consistency = (consistency or {}).get("verdict") == "needs_review" and not str(
+        (admission or {}).get("consistency_resolution") or ""
+    ).strip()
+    untraceable_issues = [
+        issue
+        for issue in issues
+        if issue["priority"] == "must_resolve" and not str(issue.get("evidence") or "").strip()
+    ]
+    pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
+    checks = [
+        {
+            "id": "identity_integrity",
+            "label": "论文身份与完整性",
+            "status": "pass"
+            if paper.get("integrity_status") == "clear" and source_count and len(studies) == 1
+            else "blocked",
+            "detail": "来源、完整性状态和唯一 Study/Publication 关系齐全。"
+            if paper.get("integrity_status") == "clear" and source_count and len(studies) == 1
+            else "完整性必须为 clear，且需要来源和唯一 Study/Publication 关系。",
+        },
+        {
+            "id": "topic_screening",
+            "label": "版本化主题与 PICOTS 筛选",
+            "status": (
+                "blocked" if not collections else ("action" if incomplete_screening else "pass")
+            ),
+            "detail": "已有全文纳入记录。"
+            if included
+            else (
+                "所有关联主题均已全文排除，AI 将保留台账并结束准入。"
+                if all_excluded
+                else (
+                    "AI 将按锁定主题完成题录和全文筛选。"
+                    if collections
+                    else "论文尚未关联已完成采集的锁定主题。"
+                )
+            ),
+        },
+        {
+            "id": "dual_ai",
+            "label": "双 AI 独立抽取与差异",
+            "status": (
+                "blocked"
+                if not extraction or untraceable_issues
+                else ("action" if unresolved_consistency else "pass")
+            ),
+            "detail": (
+                f"{len(untraceable_issues)} 项关键差异缺少原文线索，不能自动裁决。"
+                if untraceable_issues
+                else (
+                    f"AI 将逐项记录并裁决 {len(issues)} 项差异。"
+                    if unresolved_consistency
+                    else ("差异已裁决或两次抽取一致。" if extraction else "尚无完整双 AI 抽取。")
+                )
+            ),
+        },
+        {
+            "id": "structured_results",
+            "label": "Result、Claim 与原文定位",
+            "status": "pass" if structured_results else "blocked",
+            "detail": f"{len(claims)} 条候选均有结构化 Result 和原文定位。"
+            if structured_results
+            else "缺少可核对的结构化 Result、Claim 或原文定位。",
+        },
+        {
+            "id": "executing_actor",
+            "label": "AI 正式执行与具名追溯",
+            "status": (
+                "pass"
+                if admission_status == "internally_admitted" and not pending_claims
+                else ("blocked" if admission_status == "rejected" else "action")
+            ),
+            "detail": "论文准入和全部 Claim 已由具名执行者完成。"
+            if admission_status == "internally_admitted" and not pending_claims
+            else (
+                "论文已被具名执行者拒绝，不能进入内部证据库。"
+                if admission_status == "rejected"
+                else (
+                    f"AI 将继续审核 {len(pending_claims)} 条候选 Claim。"
+                    if admission_status == "internally_admitted"
+                    else "AI 将核验研究设计、版本关系和关键事实后准入。"
+                )
+            ),
+        },
+    ]
+    blockers = [check["detail"] for check in checks if check["status"] == "blocked"]
+    if blockers:
+        state, next_action = "blocked", blockers[0]
+    elif admission_status == "internally_admitted" and not pending_claims:
+        state, next_action = "completed", "论文级证据审核已完成，继续形成 Evidence Profile。"
+    else:
+        state, next_action = (
+            "ready_for_automation",
+            "由 AI 自动执行剩余审核；人工只处理异常或抽查。",
+        )
+    topic_conditions = list(
+        dict.fromkeys(
+            str(item["topic_condition_code"])
+            for item in collections
+            if item.get("title_abstract_decision") != "excluded"
+            and item.get("full_text_decision") != "excluded"
+        )
+    )
+    study = studies[0] if len(studies) == 1 else {}
+    return {
+        "state": state,
+        "next_action": next_action,
+        "checks": checks,
+        "blockers": blockers,
+        "issues": issues,
+        "admission_suggestion": {
+            "condition_codes": topic_conditions,
+            "study_design": str(
+                (extraction or {}).get("study_design")
+                or study.get("study_design")
+                or paper.get("study_design_candidate")
+                or "uncertain"
+            ),
+            "publication_role": str(study.get("publication_role") or "primary"),
+            "consistency_resolution": _resolution_draft(issues),
+        },
+    }
+
+
+def _critical_issue(issue: dict[str, object]) -> bool:
+    value = " ".join(str(issue.get(key) or "") for key in ("field", "message")).casefold()
+    tokens = (
+        "claim",
+        "study_design",
+        "population",
+        "ingredient",
+        "dose",
+        "comparator",
+        "outcome",
+        "effect",
+        "statistical",
+        "safety",
+        "protocol",
+        "registration",
+        "样本",
+        "剂量",
+        "单位",
+        "方向",
+        "效应",
+        "置信区间",
+        "安全",
+        "注册",
+        "协议",
+        "撤稿",
+        "更正",
+    )
+    return issue.get("severity") == "high" or any(token in value for token in tokens)
+
+
+def _resolution_draft(issues: list[dict[str, object]]) -> str:
+    lines = []
+    for issue in issues:
+        line = f"{issue.get('field', '差异')}：{issue.get('message', '')}"
+        if issue.get("evidence"):
+            line += f" 原文线索：{issue['evidence']}"
+        lines.append(line)
+    return "\n".join(lines)[:5000]
 
 
 def _now() -> str:

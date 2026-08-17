@@ -26,6 +26,11 @@ def test_review_api_requires_key_and_serves_workbench(tmp_path) -> None:
     assert 'aria-live="polite"' in page.text
     assert "Promise.all" in page.text
     assert "正在加载论文详情" in page.text
+    assert "AI 正式执行" in page.text
+    assert "AI-A 论文事实摘要" in page.text
+    assert "AI 自动完成当前论文" in page.text
+    assert "AI 处理全部待办" in page.text
+    assert "步骤 1" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert page.headers["x-content-type-options"] == "nosniff"
     assert client.get("/api/review/papers").status_code == 401
@@ -46,12 +51,19 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
 
     queue = client.get("/api/review/papers", headers=HEADERS).json()
     assert [item["id"] for item in queue] == [paper_id]
+    assert queue[0]["review_state"] == "ready_for_automation"
+    detail = client.get(f"/api/review/papers/{paper_id}", headers=HEADERS).json()
+    assert detail["review_guidance"]["state"] == "ready_for_automation"
+    assert detail["claims"][0]["review_suggestion"]["risk_of_bias"]["tool"] == "exposure_study"
     assert (
         client.post(
             f"/api/review/papers/{paper_id}/admit",
             headers=HEADERS,
             json={
                 "condition_codes": ["COND_VITAMIN_D_DEFICIENCY"],
+                "study_design": "cohort_study",
+                "publication_role": "primary",
+                "identity_confirmed": True,
             },
         ).json()["status"]
         == "internally_admitted"
@@ -72,6 +84,7 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
                 },
                 "applicability": "Applies to older adults with measured serum 25(OH)D.",
                 "condition_code": "COND_VITAMIN_D_DEFICIENCY",
+                "source_verified": True,
             },
         ).status_code
         == 200
@@ -108,6 +121,54 @@ def test_review_api_completes_admission_claim_and_card_flow(tmp_path) -> None:
     with database.connect() as connection:
         assert connection.execute("SELECT reviewer FROM claim_reviews").fetchone()[0] == REVIEWER
         assert connection.execute("SELECT reviewer FROM knowledge_cards").fetchone()[0] == REVIEWER
+
+
+def test_review_api_runs_autonomous_paper_flow_and_exposes_audit(tmp_path) -> None:
+    path = tmp_path / "evidence.sqlite3"
+    database = Database(path)
+    database.initialize()
+    paper_id, _ = _review_case(database, consistency="needs_review")
+    client = TestClient(create_app(database_path=path, api_key=API_KEY, reviewer_id=REVIEWER))
+
+    response = client.post(f"/api/review/papers/{paper_id}/auto-review", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    detail = client.get(f"/api/review/papers/{paper_id}", headers=HEADERS).json()
+    assert detail["review_guidance"]["state"] == "completed"
+    assert detail["admission"]["reviewer"] == "ai:checker"
+    assert any(
+        event["action"] == "autonomous_review_completed"
+        and event["detail"]["requested_by"] == REVIEWER
+        for event in detail["audit_events"]
+    )
+
+
+def test_review_api_batch_isolates_one_paper_failure(tmp_path) -> None:
+    path = tmp_path / "evidence.sqlite3"
+    database = Database(path)
+    database.initialize()
+    good_paper, _ = _review_case(database)
+    bad_paper, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM full_texts WHERE paper_id = ?", (bad_paper,))
+        connection.execute(
+            "UPDATE collection_papers SET full_text_decision = NULL WHERE paper_id = ?",
+            (bad_paper,),
+        )
+    client = TestClient(create_app(database_path=path, api_key=API_KEY, reviewer_id=REVIEWER))
+
+    response = client.post("/api/review/papers/auto-review", headers=HEADERS)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["processed"] == 2
+    assert payload["pending_extraction"] == 0
+    assert payload["attention_required"] == 1
+    results = {item["paper_id"]: item for item in payload["results"]}
+    assert results[good_paper]["status"] == "completed"
+    assert results[bad_paper]["status"] == "attention_required"
+    assert results[bad_paper]["stage"] == "workflow_error"
 
 
 def test_review_api_rejects_weak_server_key(tmp_path) -> None:
