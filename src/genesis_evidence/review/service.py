@@ -150,6 +150,42 @@ class EvidenceReviewService:
             raise RuntimeError("autonomous review requires PaperStore")
         trace = item.get("extraction_trace") or {}
         if not trace:
+            guidance = item.get("review_guidance") or {}
+            if guidance.get("terminal_decision") == "not_retrieved":
+                actor = "ai:retrieval-ledger"
+                result = {
+                    "status": "completed",
+                    "decision": "not_retrieved",
+                    "reason": str(guidance.get("next_action") or "full text was not retrieved"),
+                    "cards": [],
+                }
+                self.store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_review_completed",
+                    actor=actor,
+                    detail={
+                        "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                        "requested_by": requester,
+                        "retrieval_records": [
+                            {
+                                key: collection.get(key)
+                                for key in (
+                                    "topic_id",
+                                    "run_id",
+                                    "full_text_retrieval_status",
+                                    "full_text_retrieval_reason",
+                                    "full_text_retrieval_reviewer",
+                                    "full_text_retrieval_recorded_at",
+                                )
+                            }
+                            for collection in item["collections"]
+                            if collection.get("full_text_retrieval_status") == "not_retrieved"
+                        ],
+                        **result,
+                    },
+                )
+                return result
             job = item.get("extraction_job") or {}
             if job.get("full_text_available"):
                 if job.get("status") == "failed":
@@ -305,9 +341,11 @@ class EvidenceReviewService:
                 reason="study design remains uncertain after dual-AI review",
                 trace=trace,
             )
-        consistency_resolution = None
+        consistency_resolution = (item.get("admission") or {}).get("consistency_resolution")
         if (item.get("consistency") or {}).get("verdict") == "needs_review":
-            consistency_resolution = _automatic_resolution(guidance["issues"])
+            consistency_resolution = consistency_resolution or _automatic_resolution(
+                guidance["issues"]
+            )
         if (item.get("admission") or {}).get("status") != "internally_admitted":
             self.admit_paper(
                 paper_id,
@@ -734,6 +772,7 @@ def _automatic_profile(
     )
     imprecision = "not_serious" if precise else "serious"
     paper_count = len({str(claim["paper_id"]) for claim in claims})
+    study_count = len({str(claim["study_id"]) for claim in claims})
     domains = {
         "risk_of_bias": risk_domain,
         "inconsistency": "not_assessable" if paper_count == 1 else "not_serious",
@@ -745,7 +784,7 @@ def _automatic_profile(
     score = max(
         0, score - sum(downgrade[value] for value in (risk_domain, indirectness, imprecision))
     )
-    score = min(score, 2)  # AI-only evidence synthesis is capped at moderate certainty.
+    score = min(score, 1 if study_count == 1 else 2)
     certainty = {0: "very_low", 1: "low", 2: "moderate"}[score]
     target = (
         f"{dimensions['population']}; {dimensions['ingredient_name']} "
@@ -755,7 +794,11 @@ def _automatic_profile(
     rationale = (
         f"AI GRADE assessment ({AUTONOMOUS_REVIEW_POLICY_VERSION}): "
         + "; ".join(f"{key}={value}" for key, value in domains.items())
-        + "; AI-only synthesis is capped at moderate certainty."
+        + (
+            "; single-study evidence is capped at low certainty."
+            if study_count == 1
+            else "; AI-only synthesis is capped at moderate certainty."
+        )
     )
     certainty_label = {"moderate": "中等", "low": "低", "very_low": "极低"}[certainty]
     interpretations = {str(claim["id"]): _interpretation(claim) for claim in claims}

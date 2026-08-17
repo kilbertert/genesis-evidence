@@ -62,9 +62,9 @@ def _review_case(
             if consistency == "consistent"
             else [
                 {
-                    "field": "claims",
+                    "field": "summary.wording",
                     "severity": "medium",
-                    "message": "Independent claim extractions differ.",
+                    "message": "Independent summaries use different wording.",
                     "evidence": "Results",
                 }
             ],
@@ -296,7 +296,7 @@ def test_rejected_paper_remains_blocked_in_review_guidance(tmp_path) -> None:
     assert "已被具名执行者拒绝" in item["review_guidance"]["next_action"]
 
 
-def test_ai_review_guidance_drives_screening_and_autonomous_resolution(tmp_path) -> None:
+def test_ai_review_guidance_drives_screening_and_blocks_material_differences(tmp_path) -> None:
     database, _ = _service(tmp_path)
     paper_id, claim_id = _review_case(database, consistency="needs_review")
     with database.transaction() as connection:
@@ -368,7 +368,7 @@ def test_ai_review_guidance_drives_screening_and_autonomous_resolution(tmp_path)
     store = ReviewStore(database)
     item = store.get_review_item(paper_id)
     assert item is not None
-    assert item["review_guidance"]["state"] == "ready_for_automation"
+    assert item["review_guidance"]["state"] == "blocked"
     assert item["collections"][0]["screening_suggestion"]["stage"] == "title_abstract"
     suggestion = item["claims"][0]["review_suggestion"]
     assert suggestion["inference"] == "associational"
@@ -398,7 +398,7 @@ def test_ai_review_guidance_drives_screening_and_autonomous_resolution(tmp_path)
         reviewer="reviewer-1",
     )
     item = store.get_review_item(paper_id)
-    assert item["review_guidance"]["state"] == "ready_for_automation"
+    assert item["review_guidance"]["state"] == "blocked"
     assert item["review_guidance"]["issues"][0]["priority"] == "must_resolve"
     assert (
         "effect estimate differs"
@@ -540,7 +540,7 @@ def test_ai_completes_review_and_card_without_human_participation(tmp_path) -> N
     assert tuple(admission[:2]) == ("internally_admitted", "ai:checker")
     assert "AI consistency adjudication" in admission["consistency_resolution"]
     assert tuple(claim[:4]) == ("approved", "ai:checker", "cohort_study", "associational")
-    assert json.loads(claim["risk_of_bias_json"])["overall"] == "high"
+    assert json.loads(claim["risk_of_bias_json"])["overall"] == "some_concerns"
     assert tuple(card) == ("approved", "ai:checker")
     assert tuple(screening) == ("ai:checker", "ai:checker")
     actions = {event["action"] for event in events}
@@ -623,7 +623,7 @@ def test_ai_profile_records_a_null_result_as_not_supporting(tmp_path) -> None:
     assert "未支持上述研究关系" in body
 
 
-def test_ai_stops_only_when_a_material_difference_has_no_source_trace(tmp_path) -> None:
+def test_ai_stops_when_a_material_difference_has_a_source_trace(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, _ = _review_case(database, consistency="needs_review")
     with database.transaction() as connection:
@@ -638,7 +638,7 @@ def test_ai_stops_only_when_a_material_difference_has_no_source_trace(tmp_path) 
                                 "field": "claims[0].effect_estimate",
                                 "severity": "high",
                                 "message": "The two estimates conflict.",
-                                "evidence": "",
+                                "evidence": "Results table 2",
                             }
                         ],
                     }
@@ -658,6 +658,53 @@ def test_ai_stops_only_when_a_material_difference_has_no_source_trace(tmp_path) 
             ).fetchone()[0]
             == "pending"
         )
+
+
+def test_ai_caps_a_single_study_profile_at_low_certainty(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database, screened=False)
+    with database.transaction() as connection:
+        extraction = json.loads(
+            connection.execute(
+                "SELECT extraction_json FROM paper_extractions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+        )
+        extraction["study_design"] = "randomized_controlled_trial"
+        connection.execute(
+            "UPDATE paper_extractions SET extraction_json = ?, second_extraction_json = ? "
+            "WHERE paper_id = ?",
+            (json.dumps(extraction), json.dumps(extraction), paper_id),
+        )
+        connection.execute(
+            "UPDATE studies SET study_design = 'randomized_controlled_trial' "
+            "WHERE id IN (SELECT study_id FROM study_publications WHERE paper_id = ?)",
+            (paper_id,),
+        )
+        connection.execute(
+            "UPDATE claims SET candidate_study_design = 'randomized_controlled_trial' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute(
+            "UPDATE results SET dose = '1000 IU/day', "
+            "statistical_details = '95% CI 0.8 to 1.2' WHERE paper_id = ?",
+            (paper_id,),
+        )
+    _complete_topic(
+        database,
+        paper_id,
+        eligible_study_designs=("randomized_controlled_trial",),
+    )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["cards"][0]["certainty"] == "low"
+    with database.connect() as connection:
+        profile = connection.execute(
+            "SELECT certainty, certainty_rationale FROM evidence_profiles"
+        ).fetchone()
+    assert profile["certainty"] == "low"
+    assert "single-study evidence is capped at low certainty" in profile["certainty_rationale"]
 
 
 def test_ai_requeues_failed_extraction_without_human_intervention(tmp_path) -> None:
@@ -809,6 +856,26 @@ def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path
 def test_ai_differences_require_documented_actor_resolution_before_admission(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, _ = _review_case(database, consistency="needs_review")
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_extractions SET consistency_json = ? WHERE paper_id = ?",
+            (
+                json.dumps(
+                    {
+                        "verdict": "needs_review",
+                        "issues": [
+                            {
+                                "field": "claims[0].effect_estimate",
+                                "severity": "high",
+                                "message": "The effect estimate differs.",
+                                "evidence": "Results table 2",
+                            }
+                        ],
+                    }
+                ),
+                paper_id,
+            ),
+        )
     with pytest.raises(ValueError, match="executing-actor verification"):
         _admit(service, paper_id)
     with pytest.raises(ValueError, match="executing-actor verification"):
@@ -827,6 +894,17 @@ def test_ai_differences_require_documented_actor_resolution_before_admission(tmp
         paper_id,
         consistency_resolution="The locator was corrected against the full text.",
     )
+    item = ReviewStore(database).get_review_item(paper_id)
+    assert item is not None
+    assert item["review_guidance"]["state"] == "ready_for_automation"
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "completed"
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT consistency_resolution FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == "The locator was corrected against the full text."
 
 
 def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:

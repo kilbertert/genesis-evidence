@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
@@ -164,7 +166,21 @@ def test_not_retrieved_report_closes_ledger_without_scientific_exclusion(tmp_pat
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
     included_paper, claim_id = _review_case(database)
-    missing_paper, _ = _review_case(database)
+    missing_paper = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, created_at) VALUES (?, 'Unavailable paper', 'now')",
+            (missing_paper,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/unavailable')",
+            (missing_paper, missing_paper),
+        )
+        connection.execute(
+            "INSERT INTO paper_admissions(paper_id, status) VALUES (?, 'pending')",
+            (missing_paper,),
+        )
     from .test_review_workflow import _complete_topic
 
     topic_id = _complete_topic(database, included_paper)
@@ -187,11 +203,29 @@ def test_not_retrieved_report_closes_ledger_without_scientific_exclusion(tmp_pat
         reason="Repository exposes metadata but no legally retrievable full text.",
         reviewer="reviewer-1",
     )
-    service = EvidenceReviewService(ReviewStore(database))
+    service = EvidenceReviewService(ReviewStore(database), paper_store)
+    terminal = service.auto_review_paper(
+        missing_paper, requested_by="authenticated-reviewer"
+    )
+    assert terminal["status"] == "completed"
+    assert terminal["decision"] == "not_retrieved"
+    queue_item = next(
+        row for row in ReviewStore(database).list_review_queue() if row["id"] == missing_paper
+    )
+    assert queue_item["review_state"] == "completed"
+    assert queue_item["full_text_not_retrieved"] == 1
+    detail = ReviewStore(database).get_review_item(missing_paper)
+    assert detail is not None
+    assert detail["review_guidance"]["terminal_decision"] == "not_retrieved"
+    assert detail["review_guidance"]["state"] == "completed"
     service.admit_paper(
         included_paper,
         reviewer="reviewer-1",
         condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+        differences_confirmed=False,
+        study_design="cohort_study",
+        publication_role="primary",
+        identity_confirmed=True,
     )
     service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
 

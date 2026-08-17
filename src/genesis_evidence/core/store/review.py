@@ -615,11 +615,39 @@ class ReviewStore:
                     p.integrity_status, p.study_design_candidate,
                     EXISTS(SELECT 1 FROM full_texts ft WHERE ft.paper_id = p.id)
                         AS full_text_available,
+                    EXISTS(
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs cr ON cr.id = cp.run_id
+                        JOIN evidence_topics et ON et.id = cr.topic_id
+                        WHERE cp.paper_id = p.id
+                            AND cr.status = 'completed' AND et.status = 'locked'
+                            AND cp.full_text_retrieval_status = 'not_retrieved'
+                    ) AS full_text_not_retrieved,
                     COALESCE(pa.status, 'pending') AS admission_status,
                     pe.consistency_status,
                     pej.status AS extraction_job_status,
                     pej.stage AS extraction_job_stage,
                     CASE
+                        WHEN pe.id IS NULL AND EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                                AND cp.full_text_retrieval_status = 'not_retrieved'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                                AND (
+                                    cp.title_abstract_decision IS NULL
+                                    OR (cp.title_abstract_decision = 'included' AND
+                                        COALESCE(cp.full_text_retrieval_status, 'pending')
+                                            <> 'not_retrieved')
+                                )
+                        ) THEN 'completed'
                         WHEN pe.id IS NULL THEN 'blocked'
                         WHEN p.integrity_status <> 'clear' THEN 'blocked'
                         WHEN NOT EXISTS (
@@ -848,7 +876,7 @@ class ReviewStore:
                     """
                     SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
-                        r.population, r.baseline_nutrient_status, r.ingredient_name,
+                        r.study_id, r.population, r.baseline_nutrient_status, r.ingredient_name,
                         r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
                         r.effect_estimate, r.statistical_details
                     FROM claims c
@@ -1207,7 +1235,11 @@ def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
             "primary_exclusion_reason": None,
             "reason": "题录初筛优先保证召回率；信息不足但可能符合时进入全文筛选。",
         }
-    elif item["title_abstract_decision"] == "included" and not item["full_text_decision"]:
+    elif (
+        item["title_abstract_decision"] == "included"
+        and item["full_text_retrieval_status"] != "not_retrieved"
+        and not item["full_text_decision"]
+    ):
         eligible = design in item["eligible_study_designs"]
         wrong_design = next(
             (code for code in item["exclusion_reasons"] if "design" in code.casefold()),
@@ -1535,10 +1567,73 @@ def _review_guidance(
     source_count: int,
 ) -> dict[str, object]:
     admission_status = str((admission or {}).get("status") or "pending")
+    retrieval_records = [
+        item for item in collections if item.get("full_text_retrieval_status") == "not_retrieved"
+    ]
+    retrieval_terminal = bool(retrieval_records) and all(
+        item.get("title_abstract_decision") == "excluded"
+        or item.get("full_text_retrieval_status") == "not_retrieved"
+        for item in collections
+    )
+    if retrieval_terminal and extraction is None:
+        reasons = "；".join(
+            str(item.get("full_text_retrieval_reason") or "未记录原因")
+            for item in retrieval_records
+        )
+        return {
+            "state": "completed",
+            "terminal_decision": "not_retrieved",
+            "next_action": "全文未取得台账已闭合；该结果不构成科学排除，也不进入抽取异常队列。",
+            "checks": [
+                {
+                    "id": "identity_integrity",
+                    "label": "论文题录与来源",
+                    "status": "pass",
+                    "detail": (
+                        f"已记录 {source_count} 个来源；"
+                        f"完整性状态为 {paper.get('integrity_status')}。"
+                    ),
+                },
+                {
+                    "id": "topic_screening",
+                    "label": "版本化主题与全文获取",
+                    "status": "pass",
+                    "detail": f"全文未取得原因已由具名执行者记录：{reasons}",
+                },
+                {
+                    "id": "dual_ai",
+                    "label": "双 AI 独立抽取与差异",
+                    "status": "not_applicable",
+                    "detail": "没有合法取得的全文，双 AI 全文抽取不适用。",
+                },
+                {
+                    "id": "structured_results",
+                    "label": "Result、Claim 与原文定位",
+                    "status": "not_applicable",
+                    "detail": "没有全文抽取结果，不生成 Result 或 Claim。",
+                },
+                {
+                    "id": "executing_actor",
+                    "label": "论文准入与知识卡",
+                    "status": "not_applicable",
+                    "detail": "论文保持未准入状态，也不作为科学排除记录。",
+                },
+            ],
+            "blockers": [],
+            "issues": [],
+            "admission_suggestion": {
+                "condition_codes": [],
+                "study_design": "uncertain",
+                "publication_role": "primary",
+                "consistency_resolution": "",
+            },
+        }
     incomplete_screening = any(
         not item.get("title_abstract_decision")
         or (
-            item.get("title_abstract_decision") == "included" and not item.get("full_text_decision")
+            item.get("title_abstract_decision") == "included"
+            and item.get("full_text_retrieval_status") != "not_retrieved"
+            and not item.get("full_text_decision")
         )
         for item in collections
     )
@@ -1572,11 +1667,8 @@ def _review_guidance(
     unresolved_consistency = (consistency or {}).get("verdict") == "needs_review" and not str(
         (admission or {}).get("consistency_resolution") or ""
     ).strip()
-    untraceable_issues = [
-        issue
-        for issue in issues
-        if issue["priority"] == "must_resolve" and not str(issue.get("evidence") or "").strip()
-    ]
+    material_issues = [issue for issue in issues if issue["priority"] == "must_resolve"]
+    unresolved_material_issues = material_issues if unresolved_consistency else []
     pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
     checks = [
         {
@@ -1612,16 +1704,24 @@ def _review_guidance(
             "label": "双 AI 独立抽取与差异",
             "status": (
                 "blocked"
-                if not extraction or untraceable_issues
+                if not extraction or unresolved_material_issues
                 else ("action" if unresolved_consistency else "pass")
             ),
             "detail": (
-                f"{len(untraceable_issues)} 项关键差异缺少原文线索，不能自动裁决。"
-                if untraceable_issues
+                f"{len(unresolved_material_issues)} 项关键差异必须由具名人工核对原文并裁决。"
+                if unresolved_material_issues
                 else (
-                    f"AI 将逐项记录并裁决 {len(issues)} 项差异。"
+                    f"AI 将逐项记录并裁决 {len(issues)} 项非关键差异。"
                     if unresolved_consistency
-                    else ("差异已裁决或两次抽取一致。" if extraction else "尚无完整双 AI 抽取。")
+                    else (
+                        "关键差异已由具名执行者裁决。"
+                        if material_issues
+                        else (
+                            "差异已裁决或两次抽取一致。"
+                            if extraction
+                            else "尚无完整双 AI 抽取。"
+                        )
+                    )
                 )
             ),
         },
