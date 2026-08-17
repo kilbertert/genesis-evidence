@@ -178,7 +178,9 @@ def test_invalid_source_evidence_gets_one_channel_local_correction() -> None:
             content["claims"][0]["evidence"] = "A sentence that is not in the paper."
         elif calls == 2:
             assert "不可信数据" in body["messages"][0]["content"]
-            assert "invalid_output" in json.loads(body["messages"][1]["content"])
+            correction = json.loads(body["messages"][1]["content"])
+            assert "invalid_output" in correction
+            assert "claims[0].evidence" in correction["validation_error"]
             content = _extraction()
         elif calls == 3:
             content = _extraction()
@@ -203,12 +205,15 @@ def test_invalid_source_evidence_gets_one_channel_local_correction() -> None:
     assert result.second_run_id == "run-3"
 
 
-def test_ark_analyzer_rejects_evidence_missing_from_full_text() -> None:
+def test_ark_analyzer_rejects_evidence_missing_from_full_text_with_field_path() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         return _stream("extract-1", _extraction())
 
-    with pytest.raises(PaperAnalysisError, match="not present"):
+    with pytest.raises(
+        PaperAnalysisError,
+        match=r'claims\[0\]\.evidence="Lower 25\(OH\)D was associated',
+    ):
         ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
             PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
             {"abstract": "This text contains none of the cited excerpts."},

@@ -401,14 +401,33 @@ def _json_object(value: str) -> dict[str, object]:
 
 def _require_source_evidence(extraction: PaperExtraction, document: dict[str, object]) -> None:
     source_segments = [_normalized_text(value) for value in _string_values(document)]
-    evidence = [candidate.evidence for candidate in extraction.condition_candidates]
-    evidence.extend(symptom.evidence for symptom in extraction.directly_reported_symptoms)
-    evidence.extend(claim.evidence for claim in extraction.claims)
-    if any(
-        not any(_normalized_text(value) in segment for segment in source_segments)
-        for value in evidence
-    ):
-        raise PaperAnalysisError("provider cited evidence that is not present in the full text")
+    evidence = [
+        (f"condition_candidates[{index}].evidence", candidate.evidence)
+        for index, candidate in enumerate(extraction.condition_candidates)
+    ]
+    evidence.extend(
+        (f"directly_reported_symptoms[{index}].evidence", symptom.evidence)
+        for index, symptom in enumerate(extraction.directly_reported_symptoms)
+    )
+    evidence.extend(
+        (f"claims[{index}].evidence", claim.evidence)
+        for index, claim in enumerate(extraction.claims)
+    )
+    missing = [
+        (path, value)
+        for path, value in evidence
+        if not any(_normalized_text(value) in segment for segment in source_segments)
+    ]
+    if missing:
+        details = "; ".join(
+            f"{path}={json.dumps(value[:500], ensure_ascii=False)}"
+            for path, value in missing[:10]
+        )
+        if len(missing) > 10:
+            details += f"; and {len(missing) - 10} more"
+        raise PaperAnalysisError(
+            f"provider cited evidence that is not present in the full text: {details}"
+        )
 
 
 def _normalized_text(value: str) -> str:
