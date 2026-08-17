@@ -5,7 +5,7 @@ contract. It does not claim that the product itself is a completed systematic re
 
 | Source | Requirement used here | Concrete mapping |
 | --- | --- | --- |
-| PRISMA 2020 flow diagram and checklist | Report records identified, screened, assessed for eligibility, included and excluded, with reasons | `collection_runs` records each source/search stream; `collection_papers` records title/abstract and full-text decisions plus one primary exclusion reason |
+| PRISMA 2020 flow diagram and checklist | Report records identified, screened, sought for retrieval, not retrieved, assessed for eligibility, included and excluded, with reasons | `collection_runs` records each source/search stream; `collection_papers` records title/abstract decisions, `pending`/`retrieved`/`not_retrieved` full-text retrieval with an audit reason, and separate scientific full-text decisions plus one primary exclusion reason |
 | Cochrane Handbook chapter 4, especially MECIR C41 | Predefine eligibility, document selection for all identified records, retain explicit full-text exclusion reasons, and collate multiple reports by study | Locked `evidence_topics` stores the review question, PICOTS, eligible designs and criteria; DOI/PMID/PMCID deduplication and `studies`/`study_publications` keep publication and study identities separate |
 | AHRQ Evidence-based Practice Center PICOTS framing | Define Population, Intervention or Exposure, Comparator, Outcomes, Timing and Setting before selection | `evidence_topics.picots_json` requires those six named fields before a topic can be created and locked |
 | RFC 6750 section 2.1 | Send bearer credentials in the HTTP `Authorization` header; reject invalid credentials with a Bearer challenge | Review endpoints accept only `Authorization: Bearer <token>`, return `WWW-Authenticate: Bearer` on 401, and derive the audit actor from server-side `GENESIS_EVIDENCE_REVIEWER_ID` |
@@ -17,7 +17,8 @@ contract. It does not claim that the product itself is a completed systematic re
 The Evidence Profile completeness flag is system-derived. Creation is blocked unless the
 topic is locked, every required search stream has a completed run, every discovered record
 has the required screening decisions, every exclusion has one reason from the locked
-catalogue, and every full-text inclusion has completed extraction, internal admission and
+catalogue, every title/abstract inclusion has a completed full-text retrieval outcome, and
+every full-text inclusion has completed extraction, internal admission and
 Claim review. TLS termination remains the deployment boundary required to protect bearer
 tokens in transport.
 

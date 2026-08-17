@@ -150,3 +150,54 @@ def test_profile_rejects_an_incomplete_screening_ledger(tmp_path) -> None:
             patient_body="维生素 D 状态与衰弱之间存在研究关联。",
             profile=_profile(claim_id),
         )
+
+
+def test_not_retrieved_report_closes_ledger_without_scientific_exclusion(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    included_paper, claim_id = _review_case(database)
+    missing_paper, _ = _review_case(database)
+    from .test_review_workflow import _complete_topic
+
+    topic_id = _complete_topic(database, included_paper)
+    paper_store = PaperStore(database)
+    run_id = paper_store.start_collection(topic_id=topic_id, source="test", query="missing")
+    paper_store.add_to_collection(run_id, missing_paper, position=1)
+    paper_store.finish_collection(run_id, status="completed", detail={})
+    paper_store.screen_collection_paper(
+        run_id,
+        missing_paper,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    paper_store.record_full_text_retrieval(
+        run_id,
+        missing_paper,
+        status="not_retrieved",
+        reason="Repository exposes metadata but no legally retrievable full text.",
+        reviewer="reviewer-1",
+    )
+    service = EvidenceReviewService(ReviewStore(database))
+    service.admit_paper(
+        included_paper,
+        reviewer="reviewer-1",
+        condition_codes=["COND_VITAMIN_D_DEFICIENCY"],
+    )
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+
+    card_id = service.create_card_draft(
+        topic_id=topic_id,
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(claim_id),
+    )
+    ledger = paper_store.list_topic_ledger(topic_id)
+    missing = next(row for row in ledger if row["paper_id"] == missing_paper)
+    assert missing["full_text_retrieval_status"] == "not_retrieved"
+    assert missing["primary_exclusion_reason"] is None
+    assert card_id

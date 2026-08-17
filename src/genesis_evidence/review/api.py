@@ -45,6 +45,13 @@ class ScreeningRequest(BaseModel):
     primary_exclusion_reason: str | None = None
 
 
+class FullTextRetrievalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(pattern=r"^(pending|retrieved|not_retrieved)$")
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class CardDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -186,6 +193,25 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
             reviewer=reviewer,
         )
         return {"status": request.decision}
+
+    @app.post("/api/review/topics/{topic_id}/runs/{run_id}/papers/{paper_id}/full-text-retrieval")
+    def record_full_text_retrieval(
+        topic_id: str,
+        run_id: str,
+        paper_id: str,
+        request: FullTextRetrievalRequest,
+        reviewer: str = Depends(principal),
+    ) -> dict[str, str]:
+        if run_id not in {row["run_id"] for row in papers_store.list_topic_ledger(topic_id)}:
+            raise HTTPException(status_code=404, detail="topic collection record not found")
+        papers_store.record_full_text_retrieval(
+            run_id,
+            paper_id,
+            status=request.status,
+            reason=request.reason,
+            reviewer=reviewer,
+        )
+        return {"status": request.status}
 
     @app.get("/api/review/papers", dependencies=[Depends(principal)])
     def papers() -> list[dict[str, object]]:

@@ -420,6 +420,25 @@ class PaperStore:
                 ).fetchone()
                 if full_text is None:
                     raise ValueError("full-text screening requires a stored full text")
+                if row["full_text_retrieval_status"] != "retrieved":
+                    connection.execute(
+                        """
+                        UPDATE collection_papers SET full_text_retrieval_status = 'retrieved',
+                            full_text_retrieval_reason = NULL,
+                            full_text_retrieval_reviewer = ?,
+                            full_text_retrieval_recorded_at = ?
+                        WHERE run_id = ? AND paper_id = ?
+                        """,
+                        (reviewer, now, run_id, paper_id),
+                    )
+                    self._audit(
+                        connection,
+                        "collection_paper",
+                        f"{run_id}:{paper_id}",
+                        "full_text_retrieval_recorded",
+                        {"status": "retrieved", "reason": None},
+                        actor=reviewer,
+                    )
                 connection.execute(
                     """
                     UPDATE collection_papers SET full_text_decision = ?,
@@ -434,6 +453,97 @@ class PaperStore:
                 f"{run_id}:{paper_id}",
                 f"{stage}_screened",
                 {"decision": decision, "primary_exclusion_reason": reason},
+                actor=reviewer,
+            )
+
+    def record_full_text_retrieval(
+        self,
+        run_id: str,
+        paper_id: str,
+        *,
+        status: str,
+        reason: str | None,
+        reviewer: str,
+    ) -> None:
+        if status not in {"pending", "retrieved", "not_retrieved"}:
+            raise ValueError("full-text retrieval status is invalid")
+        normalized_reason = (reason or "").strip() or None
+        if status == "not_retrieved" and normalized_reason is None:
+            raise ValueError("not-retrieved full text requires a reason")
+        if status != "not_retrieved" and normalized_reason is not None:
+            raise ValueError("only not-retrieved full text can have a retrieval reason")
+        if normalized_reason and len(normalized_reason) > 2000:
+            raise ValueError("full-text retrieval reason is too long")
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT cp.title_abstract_decision, cr.status AS run_status,
+                    et.status AS topic_status
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN evidence_topics et ON et.id = cr.topic_id
+                WHERE cp.run_id = ? AND cp.paper_id = ?
+                """,
+                (run_id, paper_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("collection paper was not found")
+            if row["run_status"] != "completed" or row["topic_status"] != "locked":
+                raise ValueError("retrieval recording requires a completed run for a locked topic")
+            if row["title_abstract_decision"] != "included":
+                raise ValueError("full-text retrieval requires title/abstract inclusion")
+            if connection.execute(
+                """
+                SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
+                    ON cr.topic_id = ep.topic_id
+                WHERE cr.id = ? LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone():
+                raise ValueError("retrieval is immutable after evidence profile creation")
+            has_full_text = connection.execute(
+                "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if status == "retrieved" and has_full_text is None:
+                raise ValueError("retrieved status requires a stored full text")
+            if status != "retrieved" and has_full_text is not None:
+                raise ValueError("a stored full text must be recorded as retrieved")
+            now = _now()
+            connection.execute(
+                """
+                UPDATE collection_papers SET full_text_retrieval_status = ?,
+                    full_text_retrieval_reason = ?,
+                    full_text_retrieval_reviewer = ?,
+                    full_text_retrieval_recorded_at = ?,
+                    full_text_decision = CASE WHEN ? = 'retrieved'
+                        THEN full_text_decision ELSE NULL END,
+                    primary_exclusion_reason = CASE WHEN ? = 'retrieved'
+                        THEN primary_exclusion_reason ELSE NULL END,
+                    full_text_reviewer = CASE WHEN ? = 'retrieved'
+                        THEN full_text_reviewer ELSE NULL END,
+                    full_text_reviewed_at = CASE WHEN ? = 'retrieved'
+                        THEN full_text_reviewed_at ELSE NULL END
+                WHERE run_id = ? AND paper_id = ?
+                """,
+                (
+                    status,
+                    normalized_reason,
+                    reviewer,
+                    now,
+                    status,
+                    status,
+                    status,
+                    status,
+                    run_id,
+                    paper_id,
+                ),
+            )
+            self._audit(
+                connection,
+                "collection_paper",
+                f"{run_id}:{paper_id}",
+                "full_text_retrieval_recorded",
+                {"status": status, "reason": normalized_reason},
                 actor=reviewer,
             )
 
@@ -492,7 +602,9 @@ class PaperStore:
         *,
         media_type: str,
         rights_status: str,
+        collection_run_id: str | None = None,
     ) -> None:
+        now = _now()
         with self.database.transaction() as connection:
             connection.execute(
                 """
@@ -504,6 +616,24 @@ class PaperStore:
                     processed_at = NULL
                 """,
                 (paper_id, stored.key, stored.sha256, media_type, rights_status),
+            )
+            retrieval_query = """
+                UPDATE collection_papers SET full_text_retrieval_status = 'retrieved',
+                    full_text_retrieval_reason = NULL,
+                    full_text_retrieval_reviewer = 'system:ingestion',
+                    full_text_retrieval_recorded_at = ?
+                WHERE paper_id = ? AND (? IS NULL OR run_id = ?)
+            """
+            updated = connection.execute(
+                retrieval_query,
+                (now, paper_id, collection_run_id, collection_run_id),
+            ).rowcount
+            self._audit(
+                connection,
+                "paper",
+                paper_id,
+                "full_text_retrieval_recorded",
+                {"status": "retrieved", "collection_records": updated},
             )
 
     def enqueue_extraction(self, paper_id: str, *, collection_run_id: str | None) -> str:

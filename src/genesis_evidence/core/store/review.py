@@ -564,6 +564,8 @@ class ReviewStore:
                 SELECT et.id AS topic_id, et.code AS topic_code, et.version AS topic_version,
                     et.exclusion_reasons_json, cr.id AS run_id, cr.source, cr.search_stream,
                     cr.status AS run_status, cp.title_abstract_decision,
+                    cp.full_text_retrieval_status, cp.full_text_retrieval_reason,
+                    cp.full_text_retrieval_reviewer, cp.full_text_retrieval_recorded_at,
                     cp.full_text_decision, cp.primary_exclusion_reason
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
@@ -751,7 +753,24 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         JOIN collection_runs cr ON cr.id = cp.run_id
         WHERE cr.topic_id = ? AND cr.status = 'completed' AND (
             cp.title_abstract_decision IS NULL
-            OR (cp.title_abstract_decision = 'included' AND cp.full_text_decision IS NULL)
+            OR (cp.title_abstract_decision = 'included' AND (
+                cp.full_text_retrieval_status IS NULL
+                OR cp.full_text_retrieval_status NOT IN ('retrieved', 'not_retrieved')
+                OR (cp.full_text_retrieval_status = 'retrieved' AND (
+                    cp.full_text_decision IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM full_texts ft WHERE ft.paper_id = cp.paper_id
+                    )
+                ))
+                OR (cp.full_text_retrieval_status = 'not_retrieved' AND (
+                    cp.full_text_decision IS NOT NULL
+                    OR cp.full_text_retrieval_reason IS NULL
+                    OR trim(cp.full_text_retrieval_reason) = ''
+                    OR cp.full_text_retrieval_reviewer IS NULL
+                    OR trim(cp.full_text_retrieval_reviewer) = ''
+                    OR cp.full_text_retrieval_recorded_at IS NULL
+                    OR EXISTS (SELECT 1 FROM full_texts ft WHERE ft.paper_id = cp.paper_id)
+                ))
+            ))
             OR (COALESCE(cp.full_text_decision, cp.title_abstract_decision) = 'excluded' AND (
                 cp.primary_exclusion_reason IS NULL OR NOT EXISTS (
                     SELECT 1 FROM json_each(?) reason
