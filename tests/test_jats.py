@@ -11,6 +11,12 @@ JATS_CC_BY = b"""<?xml version="1.0" encoding="UTF-8"?>
     <article-meta>
       <title-group><article-title>Nutrition and ageing</article-title></title-group>
       <abstract><p>This is the abstract.</p></abstract>
+      <funding-group>
+        <funding-statement>Supported by the Nutrition Research Council.</funding-statement>
+      </funding-group>
+      <author-notes>
+        <fn fn-type="COI-statement"><p>Competing interests: None declared.</p></fn>
+      </author-notes>
       <permissions>
         <license xlink:href="https://creativecommons.org/licenses/by/4.0/">
           <license-p>This is an open access article under the CC BY 4.0 license.</license-p>
@@ -20,8 +26,17 @@ JATS_CC_BY = b"""<?xml version="1.0" encoding="UTF-8"?>
   </front>
   <body>
     <sec><title>Introduction</title><p>Introductory text.</p></sec>
-    <sec><title>Methods</title><p>Methods text.</p></sec>
+    <sec><title>Methods</title><p>Methods text.</p>
+      <table-wrap-foot><fn><p>Table-only footnote.</p></fn></table-wrap-foot>
+    </sec>
   </body>
+  <back>
+    <ack><p>Study staff were thanked.</p></ack>
+    <fn-group>
+      <fn><p><bold>Ethics approval:</bold> Approved by the research committee.</p></fn>
+      <fn><p><bold>Patient consent:</bold> Obtained.</p></fn>
+    </fn-group>
+  </back>
 </article>
 """
 
@@ -35,9 +50,18 @@ def test_jats_parser_extracts_sections_and_commercially_usable_license() -> None
         "Introduction",
         "Methods",
     ]
+    assert [(statement.title, statement.text) for statement in document.statements] == [
+        ("Funding", "Supported by the Nutrition Research Council."),
+        ("COI statement", "Competing interests: None declared."),
+        ("Acknowledgements", "Study staff were thanked."),
+        ("Ethics approval", "Ethics approval: Approved by the research committee."),
+        ("Patient consent", "Patient consent: Obtained."),
+    ]
+    assert all("Table-only footnote" not in item.text for item in document.statements)
     assert document.license.code == "CC-BY"
     assert document.license.rights_status == RightsStatus.REDISTRIBUTABLE
     assert document.to_dict()["license"]["rights_status"] == "redistributable"
+    assert document.to_dict()["statements"][0]["title"] == "Funding"
 
 
 def test_noncommercial_license_is_not_approved_for_commercial_persistence() -> None:

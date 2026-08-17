@@ -10,6 +10,7 @@ contract. It does not claim that the product itself is a completed systematic re
 | AHRQ Evidence-based Practice Center PICOTS framing | Define Population, Intervention or Exposure, Comparator, Outcomes, Timing and Setting before selection | `evidence_topics.picots_json` requires those six named fields before a topic can be created and locked |
 | RFC 6750 section 2.1 | Send bearer credentials in the HTTP `Authorization` header; reject invalid credentials with a Bearer challenge | Review endpoints accept only `Authorization: Bearer <token>`, return `WWW-Authenticate: Bearer` on 401, and derive the audit actor from server-side `GENESIS_EVIDENCE_REVIEWER_ID` |
 | Volcengine Ark Chat API | `stream=true` returns incremental Chat completion events | Long-form paper extraction consumes the provider's `data:` event stream and preserves the provider request ID while assembling the same JSON response contract |
+| NISO JATS 1.3 Journal Publishing Tag Library | Funding is represented in `article-meta/funding-group`; article declarations may be represented as footnotes under `author-notes` or the back-matter `fn-group` | `JatsDocument.statements` includes funding groups, author-note footnotes, acknowledgements and direct back-matter footnotes; table footnotes and bibliographic references are excluded from this review-fact channel |
 | SQLite transactions and partial indexes | `BEGIN IMMEDIATE` starts the single write transaction immediately; an index `WHERE` clause limits entries to matching rows | Job claiming uses the existing immediate transaction boundary, and a partial unique index permits at most one queued/running extraction job per paper |
 | systemd service restart policy | `Restart=on-failure` is recommended for long-running services | The user-level extraction worker restarts after unclean exit; inherited running jobs become explicit interrupted failures and retain every previously persisted stage |
 
@@ -33,6 +34,8 @@ Authoritative sources:
 - <https://effectivehealthcare.ahrq.gov/>
 - <https://www.rfc-editor.org/rfc/rfc6750.html>
 - <https://www.volcengine.com/docs/82379/1494384>
+- <https://jats.nlm.nih.gov/publishing/tag-library/1.3/element/funding-group.html>
+- <https://jats.nlm.nih.gov/publishing/tag-library/1.3/element/fn.html>
 - <https://www.sqlite.org/lang_createindex.html>
 - <https://www.sqlite.org/lang_transaction.html>
 - <https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>
