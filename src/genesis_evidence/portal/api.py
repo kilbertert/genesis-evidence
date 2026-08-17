@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 from threading import Lock
@@ -15,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..core.contracts import EvidenceMatchRequest
 from ..core.store import (
     ConfirmationInput,
     Database,
@@ -76,6 +79,7 @@ def create_app(
     max_total_bytes: int = 50 * 1024 * 1024,
     upload_limit: int = 10,
     upload_window_seconds: int = 3600,
+    evidence_api_key: str = "",
 ) -> FastAPI:
     database = Database(database_path)
     database.initialize()
@@ -122,6 +126,31 @@ def create_app(
     @app.get("/api/metrics")
     def metrics() -> list[dict[str, str]]:
         return [{"code": code, "label": label} for code, label in METRIC_LABELS.items()]
+
+    @app.post("/api/evidence/matches")
+    def match_evidence(
+        request: EvidenceMatchRequest,
+        x_genesis_evidence_key: str = Header(default=""),
+        x_correlation_id: str = Header(default=""),
+    ) -> dict[str, object]:
+        configured_key = evidence_api_key.strip()
+        if configured_key and not hmac.compare_digest(configured_key, x_genesis_evidence_key):
+            raise HTTPException(status_code=401, detail="invalid evidence API key")
+        correlation_id = x_correlation_id.strip()
+        if correlation_id:
+            try:
+                correlation_id = str(uuid.UUID(correlation_id))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="correlation ID must be a UUID",
+                ) from exc
+        else:
+            correlation_id = str(uuid.uuid4())
+        return store.match_published_cards(
+            request.observations,
+            correlation_id=correlation_id,
+        )
 
     @app.post("/api/reports", status_code=202)
     async def upload(files: Annotated[list[UploadFile], File()]) -> dict[str, object]:
@@ -195,6 +224,7 @@ def main() -> None:
         max_file_bytes=max_file_bytes,
         upload_limit=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_LIMIT", "10")),
         upload_window_seconds=int(os.getenv("GENESIS_EVIDENCE_UPLOAD_WINDOW_SECONDS", "3600")),
+        evidence_api_key=os.getenv("GENESIS_EVIDENCE_API_KEY", ""),
     )
     uvicorn.run(
         app,

@@ -1,0 +1,188 @@
+from fastapi.testclient import TestClient
+
+from genesis_evidence.core.store import Database
+from genesis_evidence.portal.api import create_app
+
+
+def _client(tmp_path, *, api_key: str = "") -> tuple[Database, TestClient]:
+    path = tmp_path / "evidence.sqlite3"
+    database = Database(path)
+    app = create_app(
+        database_path=path,
+        object_path=tmp_path / "objects",
+        evidence_api_key=api_key,
+    )
+    return database, TestClient(app)
+
+
+def _publish_prediabetes_card(database: Database) -> None:
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES ('topic-1', 'test-topic', '1', 'COND_PREDIABETES', 'locked',
+                'Test question', '{}', '[]', '[]', '[]', '[]', '2026-08-11',
+                'reviewer', '2026-08-11T00:00:00Z', 'reviewer', '2026-08-11T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES ('profile-1', 'topic-1', 'COND_PREDIABETES', '1.0.0', 'Test ingredient',
+                'Test form', 'Adults 40+', 'Not reported', 'Test dose', 'Comparator',
+                'Outcome', 'Timepoint', 'Target', 1, 'moderate', 'Test-only profile',
+                '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO knowledge_cards(
+                id, condition_code, version, status, grade, evidence_profile_id, reviewer,
+                reviewed_at, published_at, patient_visible_body, created_at
+            ) VALUES ('card-1', 'COND_PREDIABETES', '1.0.0', 'published', 'moderate',
+                'profile-1', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
+                '这是经过审核的营养健康知识。', '2026-08-11T00:00:00Z')
+            """
+        )
+
+
+def _observation(**overrides):
+    value = {
+        "observation_id": "metric-1",
+        "confirmation_status": "confirmed",
+        "metric_code": "fasting_glucose",
+        "value": 6.8,
+        "unit": "mmol/L",
+        "reference_low": 3.9,
+        "reference_high": 6.1,
+        "evidence_text": "空腹血糖 6.8 mmol/L 3.9-6.1 H",
+        "source_file_index": 1,
+        "source_page": 2,
+        "source_id": "report-1/page-2",
+    }
+    value.update(overrides)
+    return value
+
+
+def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_prediabetes_card(database)
+    response = client.post(
+        "/api/evidence/matches",
+        headers={"X-Correlation-Id": "00000000-0000-4000-8000-000000000001"},
+        json={
+            "schema_version": "1",
+            "observations": [
+                _observation(),
+                _observation(
+                    observation_id="metric-normal",
+                    value=5.2,
+                    evidence_text="空腹血糖 5.2 mmol/L 3.9-6.1 N",
+                ),
+                _observation(
+                    observation_id="metric-unmatched",
+                    metric_code="uric_acid",
+                    value=500,
+                    unit="umol/L",
+                    reference_low=200,
+                    reference_high=420,
+                    evidence_text="尿酸 500 umol/L 200-420 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correlation_id"] == "00000000-0000-4000-8000-000000000001"
+    assert body["sorting_version"] == "published-card-reference-range-v1"
+    assert body["findings"][0]["condition_code"] == "COND_PREDIABETES"
+    assert body["findings"][0]["source_observation_ids"] == ["metric-1"]
+    assert body["findings"][0]["card"]["status"] == "published"
+    assert body["findings"][0]["card"]["id"] == "card-1"
+    assert body["findings"][0]["source_observations"] == [
+        {
+            "observation_id": "metric-1",
+            "metric_code": "fasting_glucose",
+            "value": 6.8,
+            "unit": "mmol/L",
+            "reference_low": 3.9,
+            "reference_high": 6.1,
+            "evidence_text": "空腹血糖 6.8 mmol/L 3.9-6.1 H",
+            "source_file_index": 1,
+            "source_page": 2,
+            "source_id": "report-1/page-2",
+        }
+    ]
+    assert body["findings"][0]["sorting"] == {
+        "urgency": "routine",
+        "abnormality_severity": 1,
+        "evidence_strength": "moderate",
+        "needs_recheck": True,
+        "department": "内分泌科",
+        "epidemiology_background": "",
+    }
+    assert body["unmatched"] == [
+        {
+            "observation_id": "metric-unmatched",
+            "condition_codes": ["COND_HYPERURICEMIA_RISK"],
+            "reason": "no_published_knowledge_card",
+        }
+    ]
+    assert {item["reason"] for item in body["skipped"]} == {"within_reference_range"}
+    with database.connect() as connection:
+        audit = connection.execute(
+            "SELECT entity_id, action, actor, detail_json FROM audit_events"
+        ).fetchone()
+    assert audit["entity_id"] == "00000000-0000-4000-8000-000000000001"
+    assert audit["action"] == "published_card_match"
+    assert audit["actor"] == "health-flow"
+
+
+def test_evidence_api_requires_key_and_confirmed_status(tmp_path) -> None:
+    _, client = _client(tmp_path, api_key="secret")
+    payload = {"schema_version": "1", "observations": [_observation()]}
+    assert client.post("/api/evidence/matches", json=payload).status_code == 401
+    assert (
+        client.post(
+            "/api/evidence/matches",
+            headers={"X-Genesis-Evidence-Key": "secret"},
+            json={
+                "schema_version": "1",
+                "observations": [_observation(confirmation_status="pending")],
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_evidence_api_rejects_non_opaque_correlation_id(tmp_path) -> None:
+    _, client = _client(tmp_path)
+    response = client.post(
+        "/api/evidence/matches",
+        headers={"X-Correlation-Id": "patient-name"},
+        json={"schema_version": "1", "observations": []},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "correlation ID must be a UUID"
+
+
+def test_evidence_api_rejects_missing_source_number(tmp_path) -> None:
+    _, client = _client(tmp_path)
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "1",
+            "observations": [_observation(evidence_text="空腹血糖 6.8 mmol/L")],
+        },
+    )
+    assert response.status_code == 400
+    assert "source evidence" in response.json()["detail"]
