@@ -123,6 +123,27 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
             "source_id": "report-1/page-2",
         }
     ]
+    assert body["patient_reply"] == {
+        "title": "体检报告解读与健康风险提示",
+        "summary": "根据已确认的报告指标，发现 1 个有正式知识卡支持的健康问题。",
+        "findings": [
+            {
+                "condition_code": "COND_PREDIABETES",
+                "condition_name": "糖尿病前期 / 糖代谢异常",
+                "urgency": "routine",
+                "evidence_strength": "moderate",
+                "needs_recheck": True,
+                "department": "内分泌科",
+                "recheck_direction": "复查空腹血糖与糖化血红蛋白",
+                "card_id": "card-1",
+                "card_version": "1.0.0",
+                "patient_visible_body": "这是经过审核的营养健康知识。",
+                "source_observation_ids": ["metric-1"],
+            }
+        ],
+        "unmatched_count": 1,
+        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
+    }
     assert body["findings"][0]["sorting"] == {
         "urgency": "routine",
         "abnormality_severity": 1,

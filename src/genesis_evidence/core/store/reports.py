@@ -723,6 +723,7 @@ class ReportStore:
                 "skipped": skipped,
                 "message": "" if result_findings else "暂无已审核内容",
             }
+            result["patient_reply"] = _build_patient_reply(result_findings, unmatched)
             for finding in result_findings:
                 finding["sorting"] = {
                     "urgency": finding["urgency"],
@@ -832,6 +833,46 @@ def _sorting_dimensions(item: dict[str, object]) -> dict[str, object]:
         "needs_recheck": item["needs_recheck"],
         "department": item["condition"].department,  # type: ignore[union-attr]
         "epidemiology_background": item["epidemiology"],
+    }
+
+
+def _build_patient_reply(
+    findings: list[dict[str, object]], unmatched: list[dict[str, object]]
+) -> dict[str, object]:
+    """Build a patient-facing envelope from stored card fields only."""
+
+    visible_findings = []
+    for finding in findings:
+        card = finding["card"]
+        visible_findings.append(
+            {
+                "condition_code": finding["condition_code"],
+                "condition_name": finding["condition_name"],
+                "urgency": finding["urgency"],
+                "evidence_strength": finding["evidence_strength"],
+                "needs_recheck": finding["needs_recheck"],
+                "department": finding["department"],
+                "recheck_direction": finding["recheck_direction"],
+                "card_id": card["id"],
+                "card_version": card["version"],
+                "patient_visible_body": card["patient_visible_body"],
+                "source_observation_ids": finding["source_observation_ids"],
+            }
+        )
+    if visible_findings:
+        summary = (
+            f"根据已确认的报告指标，发现 {len(visible_findings)} 个有正式知识卡支持的健康问题。"
+        )
+    elif unmatched:
+        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
+    else:
+        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
+    return {
+        "title": "体检报告解读与健康风险提示",
+        "summary": summary,
+        "findings": visible_findings,
+        "unmatched_count": len(unmatched),
+        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
 
 
