@@ -8,7 +8,7 @@ loginFailExit = false
 name = "genesis-evidence"
 type = "http"
 localIP = "127.0.0.1"
-localPort = 8125
+localPort = 8127
 subdomain = "genesis-evidence"
 
 [[proxies]]
