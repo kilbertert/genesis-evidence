@@ -35,6 +35,7 @@ class JatsDocument:
     title: str
     abstract: str
     sections: tuple[JatsSection, ...]
+    statements: tuple[JatsSection, ...]
     license: LicenseInfo
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,6 +69,7 @@ class JatsParser:
                     section_text = section_text[len(section_title) :].strip()
                 sections.append(JatsSection(title=section_title, text=section_text))
 
+        statements = _review_statements(root)
         license_element = _find_first(root, "license")
         license_text = _normalized_text(license_element) if license_element is not None else ""
         license_url = _extract_license_url(license_element)
@@ -76,6 +78,7 @@ class JatsParser:
             title=title,
             abstract=abstract,
             sections=tuple(sections),
+            statements=statements,
             license=license_info,
         )
 
@@ -139,6 +142,62 @@ def _text_of_first(root: ET.Element, local_name: str) -> str:
 def _text_of_direct_child(root: ET.Element, local_name: str) -> str:
     element = next((child for child in root if _local_name(child.tag) == local_name), None)
     return _normalized_text(element) if element is not None else ""
+
+
+def _review_statements(root: ET.Element) -> tuple[JatsSection, ...]:
+    # JATS 1.3 places funding in article-meta and reviewer declarations in
+    # author-notes or the back-matter fn-group. Table footnotes are excluded.
+    statements: list[JatsSection] = []
+    article_meta = _find_first(root, "article-meta")
+    if article_meta is not None:
+        funding_groups = [
+            element
+            for element in article_meta.iter()
+            if _local_name(element.tag) == "funding-group"
+        ]
+        funding_elements = funding_groups or [
+            element
+            for element in article_meta.iter()
+            if _local_name(element.tag) == "funding-statement"
+        ]
+        statements.extend(_statement("Funding", element) for element in funding_elements)
+        author_notes = next(
+            (child for child in article_meta if _local_name(child.tag) == "author-notes"),
+            None,
+        )
+        if author_notes is not None:
+            statements.extend(
+                _statement(_footnote_title(note), note)
+                for note in author_notes
+                if _local_name(note.tag) == "fn"
+            )
+
+    back = _find_first(root, "back")
+    if back is not None:
+        statements.extend(
+            _statement("Acknowledgements", child)
+            for child in back
+            if _local_name(child.tag) == "ack"
+        )
+        for group in [child for child in back if _local_name(child.tag) == "fn-group"]:
+            statements.extend(
+                _statement(_footnote_title(note), note)
+                for note in group
+                if _local_name(note.tag) == "fn"
+            )
+
+    return tuple(dict.fromkeys(statements))
+
+
+def _statement(title: str, element: ET.Element) -> JatsSection:
+    return JatsSection(title=title, text=_normalized_text(element))
+
+
+def _footnote_title(note: ET.Element) -> str:
+    label = _text_of_first(note, "bold").rstrip(":").strip()
+    if label:
+        return label
+    return note.attrib.get("fn-type", "Article statement").replace("-", " ").strip()
 
 
 def _normalized_text(element: ET.Element | None) -> str:
