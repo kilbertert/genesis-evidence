@@ -118,15 +118,22 @@ after the user confirms the row:
 by this service. The evidence service recalculates abnormality from confirmed
 numeric bounds and reads only `published` cards.
 
+The repository adapter is
+`genesis_evidence.integrations.health_flow.build_evidence_request`. It requires
+the caller to pass `confirmed=True`; pre-confirmation rows produce no request
+observations and are returned in the adapter's `skipped` list. This keeps the
+confirmation gate explicit even though Health-Flow's current `MetricRecord`
+schema does not yet persist a confirmation field.
+
 ## Delivery stages
 
 | Stage | Deliverable | Exit check |
 |---|---|---|
 | 0 | Baseline backup and audit | SHA-256 manifest and preserved legacy worktree |
 | 1 | Evidence API v1 in this branch | Contract tests; published-only and evidence gates pass |
-| 2 | Health-Flow adapter | Multi-file upload and confirmation map to v1 without data loss |
+| 2 | Repository adapter | Deterministic Health-Flow row mapping and contract test pass |
 | 3 | Real canary | De-identified report set, metric accuracy and traceability measured |
-| 4 | Cutover | Health-Flow user path enabled; old portal frozen and rollback documented |
+| 4 | Upstream cutover | Health-Flow confirmation UI calls v1; old portal frozen and rollback documented |
 
 Stage 1 intentionally does not copy Health-Flow code into this repository and
 does not add Milvus, Neo4j, GraphRAG, or a second evidence database.

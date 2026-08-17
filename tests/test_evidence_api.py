@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from genesis_evidence.core.store import Database
+from genesis_evidence.integrations.health_flow import build_evidence_request
 from genesis_evidence.portal.api import create_app
 
 
@@ -186,3 +187,33 @@ def test_evidence_api_rejects_missing_source_number(tmp_path) -> None:
     )
     assert response.status_code == 400
     assert "source evidence" in response.json()["detail"]
+
+
+def test_health_flow_adapter_payload_reaches_published_card_match(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_prediabetes_card(database)
+    adapted = build_evidence_request(
+        [
+            {
+                "metric_name": "空腹血糖",
+                "metric_value": "6.8",
+                "unit": "mmol/L",
+                "reference_range": "3.9-6.1",
+                "page_number": 2,
+                "source_file_index": 1,
+                "source_id": "health-flow/report-1/page-2",
+                "evidence_text": "空腹血糖 6.8 mmol/L 参考范围 3.9-6.1 H",
+            }
+        ],
+        confirmed=True,
+    )
+
+    response = client.post(
+        "/api/evidence/matches",
+        json=adapted.request.model_dump(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["findings"][0]["condition_code"] == "COND_PREDIABETES"
+    assert body["findings"][0]["source_observations"][0]["source_page"] == 2

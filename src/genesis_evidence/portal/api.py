@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..core.contracts import EvidenceMatchRequest
+from ..core.metrics import METRIC_LABELS
 from ..core.store import (
     ConfirmationInput,
     Database,
@@ -30,38 +31,6 @@ from ..reports.extraction import (
     ReportExtractionUnavailable,
     ReportFile,
 )
-
-METRIC_LABELS = {
-    "systolic_blood_pressure": "收缩压",
-    "diastolic_blood_pressure": "舒张压",
-    "fasting_glucose": "空腹血糖",
-    "hba1c": "糖化血红蛋白",
-    "triglycerides": "甘油三酯",
-    "hdl_c": "高密度脂蛋白胆固醇",
-    "ldl_c": "低密度脂蛋白胆固醇",
-    "total_cholesterol": "总胆固醇",
-    "alt": "丙氨酸氨基转移酶",
-    "ast": "天门冬氨酸氨基转移酶",
-    "ggt": "γ-谷氨酰转移酶",
-    "uric_acid": "尿酸",
-    "egfr": "估算肾小球滤过率",
-    "creatinine": "肌酐",
-    "uacr": "尿白蛋白肌酐比",
-    "hemoglobin": "血红蛋白",
-    "mcv": "平均红细胞体积",
-    "ferritin": "铁蛋白",
-    "tsat": "转铁蛋白饱和度",
-    "25_oh_vitamin_d": "25-羟维生素 D",
-    "bone_density_t_score": "骨密度 T 值",
-    "calcium": "钙",
-    "alp": "碱性磷酸酶",
-    "grip_strength": "握力",
-    "walking_speed": "步速",
-    "muscle_mass": "肌肉量",
-    "albumin": "白蛋白",
-    "bmi": "体重指数",
-    "prealbumin": "前白蛋白",
-}
 
 
 class ConfirmationRequest(BaseModel):
