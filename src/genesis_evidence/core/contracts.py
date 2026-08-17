@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Literal
 
@@ -69,3 +70,50 @@ class PatientFinding(BaseModel):
     needs_recheck: bool
     department: str
     epidemiology_background: str = ""
+
+
+class EvidenceMatchObservation(BaseModel):
+    """One user-confirmed Health-Flow observation crossing the service boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str = Field(min_length=1, max_length=160)
+    confirmation_status: Literal["confirmed"]
+    metric_code: str = Field(min_length=1, max_length=100)
+    value: float
+    unit: str = Field(min_length=1, max_length=32)
+    reference_low: float | None = None
+    reference_high: float | None = None
+    evidence_text: str = Field(min_length=1, max_length=600)
+    source_file_index: int = Field(ge=1)
+    source_page: int = Field(ge=1)
+    source_id: str | None = Field(default=None, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_numbers(self) -> EvidenceMatchObservation:
+        numbers = (self.value, self.reference_low, self.reference_high)
+        if any(number is not None and not math.isfinite(number) for number in numbers):
+            raise ValueError("observation values must be finite")
+        if (
+            self.reference_low is not None
+            and self.reference_high is not None
+            and self.reference_low > self.reference_high
+        ):
+            raise ValueError("reference_low cannot exceed reference_high")
+        return self
+
+
+class EvidenceMatchRequest(BaseModel):
+    """Versioned request for deterministic published-card matching."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"]
+    observations: list[EvidenceMatchObservation] = Field(max_length=600)
+
+    @model_validator(mode="after")
+    def unique_observation_ids(self) -> EvidenceMatchRequest:
+        ids = [item.observation_id for item in self.observations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("observation_id must be unique")
+        return self

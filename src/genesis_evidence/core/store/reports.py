@@ -24,6 +24,7 @@ from ...reports.extraction import (
     evidence_contains_value,
 )
 from ..conditions import CONDITIONS
+from ..contracts import EvidenceMatchObservation
 from .database import Database
 from .papers import ObjectStore
 
@@ -436,11 +437,13 @@ class ReportStore:
                     continue
                 conditions = CONDITIONS_BY_METRIC.get(observation["final_metric_code"], ())
                 missing = []
+                matched = False
                 for condition in conditions:
                     card = cards.get(condition.code)
                     if card is None:
                         missing.append(condition.code)
                         continue
+                    matched = True
                     # ponytail: generic reference-range deviations stay level 1/routine until
                     # reviewed metric-specific thresholds are published with the knowledge card.
                     finding = finding_by_condition.setdefault(
@@ -456,7 +459,7 @@ class ReportStore:
                         },
                     )
                     finding["observation_ids"].append(observation["id"])
-                if missing:
+                if missing and not matched:
                     unmatched.append(
                         {
                             "observation_id": observation["id"],
@@ -564,6 +567,191 @@ class ReportStore:
             "message": "" if visible else "暂无已审核内容",
         }
 
+    def match_published_cards(
+        self,
+        observations: Sequence[EvidenceMatchObservation],
+        *,
+        correlation_id: str,
+        actor: str = "health-flow",
+    ) -> dict[str, object]:
+        """Match confirmed external observations without importing report state."""
+
+        with self.database.transaction() as connection:
+            card_rows = connection.execute(
+                """
+                SELECT kc.id, kc.condition_code, kc.version, kc.grade,
+                    kc.published_at, kc.evidence_profile_id, kc.patient_visible_body,
+                    cc.claim_id, cc.evidence_text AS card_evidence, cc.locator,
+                    cl.candidate_text, cl.paper_id, p.title AS paper_title, p.doi
+                FROM knowledge_cards kc
+                LEFT JOIN card_claims cc ON cc.card_id = kc.id
+                LEFT JOIN claims cl ON cl.id = cc.claim_id
+                LEFT JOIN papers p ON p.id = cl.paper_id
+                WHERE kc.status = 'published'
+                ORDER BY kc.published_at DESC, kc.version DESC
+                """
+            ).fetchall()
+            cards: dict[str, dict[str, object]] = {}
+            for row in card_rows:
+                card = cards.setdefault(
+                    row["condition_code"],
+                    {
+                        "id": row["id"],
+                        "condition_code": row["condition_code"],
+                        "version": row["version"],
+                        "status": "published",
+                        "grade": row["grade"],
+                        "published_at": row["published_at"],
+                        "evidence_profile_id": row["evidence_profile_id"],
+                        "patient_visible_body": row["patient_visible_body"],
+                        "sources": [],
+                    },
+                )
+                if row["claim_id"]:
+                    source = {
+                        "claim_id": row["claim_id"],
+                        "paper_id": row["paper_id"],
+                        "paper_title": row["paper_title"],
+                        "doi": row["doi"],
+                        "evidence": row["card_evidence"] or row["candidate_text"] or "",
+                        "locator": row["locator"] or "",
+                    }
+                    if source not in card["sources"]:
+                        card["sources"].append(source)  # type: ignore[union-attr]
+
+            findings_by_condition: dict[str, dict[str, object]] = {}
+            unmatched: list[dict[str, object]] = []
+            skipped: list[dict[str, object]] = []
+            abnormal_count = 0
+            for observation in observations:
+                if observation.metric_code not in METRIC_CODES:
+                    raise ValueError(f"unknown metric_code: {observation.metric_code}")
+                _validate_final_values(
+                    observation.evidence_text,
+                    observation.value,
+                    observation.reference_low,
+                    observation.reference_high,
+                )
+                if observation.reference_low is None and observation.reference_high is None:
+                    skipped.append(
+                        {
+                            "observation_id": observation.observation_id,
+                            "reason": "missing_reference_range",
+                        }
+                    )
+                    continue
+                if not _is_abnormal_external(observation):
+                    skipped.append(
+                        {
+                            "observation_id": observation.observation_id,
+                            "reason": "within_reference_range",
+                        }
+                    )
+                    continue
+                abnormal_count += 1
+                conditions = CONDITIONS_BY_METRIC.get(observation.metric_code, ())
+                missing: list[str] = []
+                matched = False
+                source_observation = {
+                    "observation_id": observation.observation_id,
+                    "metric_code": observation.metric_code,
+                    "value": observation.value,
+                    "unit": observation.unit,
+                    "reference_low": observation.reference_low,
+                    "reference_high": observation.reference_high,
+                    "evidence_text": observation.evidence_text,
+                    "source_file_index": observation.source_file_index,
+                    "source_page": observation.source_page,
+                    "source_id": observation.source_id,
+                }
+                for condition in conditions:
+                    card = cards.get(condition.code)
+                    if card is None:
+                        missing.append(condition.code)
+                        continue
+                    matched = True
+                    finding = findings_by_condition.setdefault(
+                        condition.code,
+                        {
+                            "condition_code": condition.code,
+                            "condition_name": condition.name,
+                            "card": card,
+                            "source_observation_ids": [],
+                            "urgency": "routine",
+                            "abnormality_severity": 1,
+                            "evidence_strength": card["grade"],
+                            "needs_recheck": True,
+                            "department": condition.department,
+                            "recheck_direction": condition.recheck_direction,
+                            "epidemiology_background": "",
+                            "source_observations": [],
+                        },
+                    )
+                    finding["source_observation_ids"].append(observation.observation_id)  # type: ignore[union-attr]
+                    finding["source_observations"].append(source_observation)  # type: ignore[union-attr]
+                # A metric is unmatched only when none of its mapped conditions has
+                # a published card. Partial topic coverage is represented by the
+                # matched finding instead of a contradictory "no content" warning.
+                if missing and not matched:
+                    unmatched.append(
+                        {
+                            "observation_id": observation.observation_id,
+                            "condition_codes": missing,
+                            "reason": "no_published_knowledge_card",
+                        }
+                    )
+
+            findings = sorted(
+                findings_by_condition.values(),
+                key=lambda item: (
+                    {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
+                    -int(item["abnormality_severity"]),
+                    EVIDENCE_RANK[item["evidence_strength"]],
+                    item["department"],
+                ),
+            )
+            result_findings = []
+            for item in findings:
+                card = item.pop("card")
+                result_findings.append({**item, "card": card})
+            result = {
+                "schema_version": "1",
+                "sorting_version": ASSESSMENT_SORTING_VERSION,
+                "correlation_id": correlation_id,
+                "findings": result_findings,
+                "unmatched": unmatched,
+                "skipped": skipped,
+                "message": "" if result_findings else "暂无已审核内容",
+            }
+            result["patient_reply"] = _build_patient_reply(result_findings, unmatched)
+            for finding in result_findings:
+                finding["sorting"] = {
+                    "urgency": finding["urgency"],
+                    "abnormality_severity": finding["abnormality_severity"],
+                    "evidence_strength": finding["evidence_strength"],
+                    "needs_recheck": finding["needs_recheck"],
+                    "department": finding["department"],
+                    "epidemiology_background": finding["epidemiology_background"],
+                }
+            self._audit(
+                connection,
+                correlation_id,
+                "published_card_match",
+                {
+                    "observation_count": len(observations),
+                    "abnormal_count": abnormal_count,
+                    "finding_count": len(result_findings),
+                    "unmatched_count": len(unmatched),
+                    "skipped_count": len(skipped),
+                    "metric_codes": sorted({item.metric_code for item in observations}),
+                    "card_ids": sorted(
+                        {item["card"]["id"] for item in result_findings}  # type: ignore[index]
+                    ),
+                },
+                actor=actor,
+            )
+        return result
+
     @staticmethod
     def _authorized_report(connection, report_id: str, access_token: str):
         report = connection.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
@@ -615,6 +803,16 @@ def _is_abnormal(observation) -> bool:
     return (low is not None and value < low) or (high is not None and value > high)
 
 
+def _is_abnormal_external(observation: EvidenceMatchObservation) -> bool:
+    return (
+        (observation.reference_low is not None and observation.value < observation.reference_low)
+        or (
+            observation.reference_high is not None
+            and observation.value > observation.reference_high
+        )
+    )
+
+
 def _finding_sort_key(item: dict[str, object]) -> tuple[object, ...]:
     urgency_rank = {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}
     return (
@@ -635,6 +833,46 @@ def _sorting_dimensions(item: dict[str, object]) -> dict[str, object]:
         "needs_recheck": item["needs_recheck"],
         "department": item["condition"].department,  # type: ignore[union-attr]
         "epidemiology_background": item["epidemiology"],
+    }
+
+
+def _build_patient_reply(
+    findings: list[dict[str, object]], unmatched: list[dict[str, object]]
+) -> dict[str, object]:
+    """Build a patient-facing envelope from stored card fields only."""
+
+    visible_findings = []
+    for finding in findings:
+        card = finding["card"]
+        visible_findings.append(
+            {
+                "condition_code": finding["condition_code"],
+                "condition_name": finding["condition_name"],
+                "urgency": finding["urgency"],
+                "evidence_strength": finding["evidence_strength"],
+                "needs_recheck": finding["needs_recheck"],
+                "department": finding["department"],
+                "recheck_direction": finding["recheck_direction"],
+                "card_id": card["id"],
+                "card_version": card["version"],
+                "patient_visible_body": card["patient_visible_body"],
+                "source_observation_ids": finding["source_observation_ids"],
+            }
+        )
+    if visible_findings:
+        summary = (
+            f"根据已确认的报告指标，发现 {len(visible_findings)} 个有正式知识卡支持的健康问题。"
+        )
+    elif unmatched:
+        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
+    else:
+        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
+    return {
+        "title": "体检报告解读与健康风险提示",
+        "summary": summary,
+        "findings": visible_findings,
+        "unmatched_count": len(unmatched),
+        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
 
 
