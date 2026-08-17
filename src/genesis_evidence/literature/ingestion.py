@@ -154,6 +154,7 @@ class LiteratureIngestionService:
             stored,
             media_type=artifact.media_type or "application/xml",
             rights_status=document.license.rights_status.value,
+            collection_run_id=run_id,
         )
         return self._store.enqueue_extraction(paper_id, collection_run_id=run_id)
 

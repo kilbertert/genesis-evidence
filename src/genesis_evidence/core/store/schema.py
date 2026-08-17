@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS collection_papers (
         CHECK (title_abstract_decision IN ('included', 'excluded')),
     title_abstract_reviewer TEXT,
     title_abstract_reviewed_at TEXT,
+    full_text_retrieval_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (full_text_retrieval_status IN ('pending', 'retrieved', 'not_retrieved')),
+    full_text_retrieval_reason TEXT,
+    full_text_retrieval_reviewer TEXT,
+    full_text_retrieval_recorded_at TEXT,
     full_text_decision TEXT CHECK (full_text_decision IN ('included', 'excluded')),
     primary_exclusion_reason TEXT,
     full_text_reviewer TEXT,

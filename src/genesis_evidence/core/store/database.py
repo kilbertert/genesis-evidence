@@ -106,6 +106,10 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             "title_abstract_decision TEXT",
             "title_abstract_reviewer TEXT",
             "title_abstract_reviewed_at TEXT",
+            "full_text_retrieval_status TEXT NOT NULL DEFAULT 'pending'",
+            "full_text_retrieval_reason TEXT",
+            "full_text_retrieval_reviewer TEXT",
+            "full_text_retrieval_recorded_at TEXT",
             "full_text_decision TEXT",
             "primary_exclusion_reason TEXT",
             "full_text_reviewer TEXT",
@@ -136,6 +140,22 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             name = definition.split(maxsplit=1)[0]
             if name not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+    connection.execute(
+        """
+        UPDATE collection_papers SET
+            full_text_retrieval_status = 'retrieved',
+            full_text_retrieval_reason = NULL,
+            full_text_retrieval_reviewer = COALESCE(
+                full_text_retrieval_reviewer, 'system:migration'
+            ),
+            full_text_retrieval_recorded_at = COALESCE(
+                full_text_retrieval_recorded_at, datetime('now')
+            )
+        WHERE EXISTS (
+            SELECT 1 FROM full_texts ft WHERE ft.paper_id = collection_papers.paper_id
+        )
+        """
+    )
     connection.execute(
         """
         UPDATE papers SET publication_status = 'preprint'

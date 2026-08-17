@@ -26,6 +26,7 @@ def test_review_api_requires_key_and_serves_workbench(tmp_path) -> None:
     assert 'aria-live="polite"' in page.text
     assert "Promise.all" in page.text
     assert "正在加载论文详情" in page.text
+    assert "保存全文获取结果" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert page.headers["x-content-type-options"] == "nosniff"
     assert client.get("/api/review/papers").status_code == 401
