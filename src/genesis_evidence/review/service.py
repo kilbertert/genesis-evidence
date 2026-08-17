@@ -148,6 +148,40 @@ class EvidenceReviewService:
             raise ValueError("paper not found")
         if self.papers_store is None:
             raise RuntimeError("autonomous review requires PaperStore")
+        terminal_exclusion = bool(item["collections"]) and all(
+            collection.get("title_abstract_decision") == "excluded"
+            or collection.get("full_text_decision") == "excluded"
+            for collection in item["collections"]
+        )
+        if terminal_exclusion:
+            if (item.get("admission") or {}).get("status") != "rejected":
+                self.reject_paper(paper_id, reviewer="ai:screening-ledger")
+            result = {"status": "completed", "decision": "excluded", "cards": []}
+            self.store.record_event(
+                "paper",
+                paper_id,
+                "autonomous_review_completed",
+                actor="ai:screening-ledger",
+                detail={
+                    "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                    "requested_by": requester,
+                    "screening_records": [
+                        {
+                            key: collection.get(key)
+                            for key in (
+                                "topic_id",
+                                "run_id",
+                                "title_abstract_decision",
+                                "full_text_decision",
+                                "primary_exclusion_reason",
+                            )
+                        }
+                        for collection in item["collections"]
+                    ],
+                    **result,
+                },
+            )
+            return result
         trace = item.get("extraction_trace") or {}
         if not trace:
             guidance = item.get("review_guidance") or {}
