@@ -551,6 +551,76 @@ class PaperStore:
                 actor=reviewer,
             )
 
+    def list_pending_full_texts(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT cp.run_id, cp.paper_id, p.pmcid
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN evidence_topics et ON et.id = cr.topic_id
+                JOIN papers p ON p.id = cp.paper_id
+                WHERE cp.title_abstract_decision = 'included'
+                    AND cp.full_text_retrieval_status = 'pending'
+                    AND cr.status = 'completed' AND et.status = 'locked'
+                ORDER BY cp.paper_id, cp.run_id
+                """
+            ).fetchall()
+        pending: dict[str, dict[str, object]] = {}
+        for row in rows:
+            item = pending.setdefault(
+                str(row["paper_id"]),
+                {
+                    "paper_id": str(row["paper_id"]),
+                    "pmcid": str(row["pmcid"] or ""),
+                    "run_ids": [],
+                },
+            )
+            item["run_ids"].append(str(row["run_id"]))  # type: ignore[union-attr]
+        return list(pending.values())
+
+    def supersede_excluded_extraction_failures(self, *, reviewer: str) -> int:
+        with self.database.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job.id, job.paper_id, job.error_class, job.error_message
+                FROM paper_extraction_jobs job
+                WHERE job.status = 'failed'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        WHERE cp.paper_id = job.paper_id
+                            AND cp.title_abstract_decision = 'included'
+                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                    )
+                """
+            ).fetchall()
+            now = _now()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE paper_extraction_jobs SET error_class = 'ScreeningExcluded',
+                        error_message = ?, updated_at = ? WHERE id = ?
+                    """,
+                    (
+                        "No retry is required because screening excluded the paper.",
+                        now,
+                        row["id"],
+                    ),
+                )
+                self._audit(
+                    connection,
+                    "paper_extraction_job",
+                    row["id"],
+                    "extraction_superseded_by_screening",
+                    {
+                        "paper_id": row["paper_id"],
+                        "previous_error_class": row["error_class"],
+                        "previous_error_message": row["error_message"],
+                    },
+                    actor=reviewer,
+                )
+        return len(rows)
+
     def list_topic_ledger(self, topic_id: str) -> list[dict[str, object]]:
         with self.database.connect() as connection:
             rows = connection.execute(
@@ -874,6 +944,7 @@ class PaperStore:
                     pej.completed_at, p.title, p.doi
                 FROM paper_extraction_jobs pej
                 JOIN papers p ON p.id = pej.paper_id
+                WHERE pej.error_class IS NULL OR pej.error_class <> 'ScreeningExcluded'
                 ORDER BY pej.created_at DESC, pej.id DESC LIMIT ?
                 """,
                 (max(1, min(limit, 500)),),

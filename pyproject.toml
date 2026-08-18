@@ -28,6 +28,7 @@ genesis-evidence-portal = "genesis_evidence.portal.api:main"
 genesis-evidence-report-worker = "genesis_evidence.reports.extraction_worker:main"
 genesis-evidence-review = "genesis_evidence.review.api:main"
 genesis-evidence-worker = "genesis_evidence.literature.extraction_worker:main"
+genesis-evidence-backlog = "genesis_evidence.literature.backlog:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genesis_evidence"]

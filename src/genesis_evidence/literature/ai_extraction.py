@@ -146,7 +146,7 @@ class ConsistencyReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     verdict: Literal["consistent", "needs_review"]
-    issues: list[ConsistencyIssue] = Field(max_length=50)
+    issues: list[ConsistencyIssue] = Field(max_length=200)
 
     @model_validator(mode="after")
     def verdict_matches_issues(self) -> ConsistencyReport:
@@ -247,9 +247,7 @@ class ArkPaperAnalyzer:
             },
             ensure_ascii=False,
         )
-        check_text, check_run_id = self._complete(
-            _CONSISTENCY_PROMPT, check_source, max_tokens=min(self._max_tokens, 4096)
-        )
+        check_text, check_run_id = self._complete(_CONSISTENCY_PROMPT, check_source)
         try:
             consistency = ConsistencyReport.model_validate(_json_object(check_text))
         except (ValueError, json.JSONDecodeError) as exc:
