@@ -263,6 +263,139 @@ def test_collection_queues_full_text_then_worker_persists_candidate_claims(tmp_p
         assert job["check_run_id"] == "check-3"
 
 
+def test_pending_full_text_backlog_downloads_and_queues_existing_paper(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _locked_topic(store)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    run_id = store.start_collection(
+        topic_id=topic_id,
+        source="europe_pmc",
+        query="protein AND ageing",
+    )
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="ai:screening",
+    )
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    summary = service.retrieve_pending_full_texts()
+
+    assert summary.pending_papers == 1
+    assert summary.downloaded_full_texts == 1
+    assert summary.queued_extractions == 1
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT full_text_retrieval_status FROM collection_papers"
+        ).fetchone()[0] == "retrieved"
+        assert connection.execute(
+            "SELECT status FROM paper_extraction_jobs"
+        ).fetchone()[0] == "queued"
+
+
+def test_pending_full_text_without_pmcid_closes_retrieval_ledger(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    record = _record()
+    record.pmcid = None
+    paper_id = store.upsert_paper(record, source_url="https://example.test/paper")
+    run_id = store.start_collection(
+        topic_id=_locked_topic(store),
+        source="europe_pmc",
+        query="protein AND ageing",
+    )
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="ai:screening",
+    )
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    summary = service.retrieve_pending_full_texts()
+
+    assert summary.not_retrieved == 1
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT full_text_retrieval_status, full_text_retrieval_reason "
+            "FROM collection_papers"
+        ).fetchone()
+    assert row["full_text_retrieval_status"] == "not_retrieved"
+    assert "identifier is unavailable" in row["full_text_retrieval_reason"]
+
+
+def test_excluded_paper_failure_is_preserved_as_terminal_audit(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    run_id = store.start_collection(
+        topic_id=_locked_topic(store),
+        source="europe_pmc",
+        query="protein AND ageing",
+    )
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_design",
+        reviewer="ai:screening",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, status, stage, error_class, error_message,
+                created_at, updated_at
+            ) VALUES ('job-1', ?, 'failed', 'extraction_a', 'PaperAnalysisError',
+                'invalid extraction', 'now', 'now')
+            """,
+            (paper_id,),
+        )
+
+    assert store.supersede_excluded_extraction_failures(reviewer="ai:retrieval-worker") == 1
+    with database.connect() as connection:
+        job = connection.execute(
+            "SELECT status, error_class, error_message FROM paper_extraction_jobs"
+        ).fetchone()
+        event = connection.execute(
+            "SELECT action, detail_json FROM audit_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert tuple(job) == (
+        "failed",
+        "ScreeningExcluded",
+        "No retry is required because screening excluded the paper.",
+    )
+    assert event["action"] == "extraction_superseded_by_screening"
+    assert "PaperAnalysisError" in event["detail_json"]
+    assert store.list_extraction_jobs() == []
+
+
 def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
@@ -407,3 +540,34 @@ def test_expression_of_concern_is_preserved_for_human_review(tmp_path) -> None:
     with database.connect() as connection:
         status = connection.execute("SELECT integrity_status FROM papers").fetchone()[0]
     assert status == "expression_of_concern"
+
+
+def test_collection_without_completed_integrity_check_preserves_existing_status(tmp_path) -> None:
+    class UncheckedIntegrityChecker:
+        def check(self, paper: dict[str, object]) -> IntegrityAssessment:
+            del paper
+            return IntegrityAssessment(IntegrityStatus.UNKNOWN, (), (), {})
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    store.update_integrity(paper_id, "clear", detail={"checked_sources": ["fake"]})
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=UncheckedIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    service.collect(
+        topic_id=_locked_topic(store),
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="protein AND ageing",
+        limit=1,
+        download_full_text=False,
+    )
+
+    with database.connect() as connection:
+        status = connection.execute("SELECT integrity_status FROM papers").fetchone()[0]
+    assert status == "clear"

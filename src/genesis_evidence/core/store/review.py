@@ -1430,10 +1430,16 @@ def _picots_text_matches(
         extracted_age = re.search(
             r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold()
         )
-        if not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1)):
+        adult_scope = int(topic_age.group(1)) <= 18 and re.search(
+            r"\badults?\b", extracted_text.casefold()
+        )
+        if not adult_scope and (
+            not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1))
+        ):
             return False
     topic_duration = re.search(
-        r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?\s*(?:or|and)\s*(?:longer|more)",
+        r"\b(?:(?:at least|minimum(?: of)?)\s*)?(\d+(?:\.\d+)?)\s*"
+        r"(day|week|month|year)s?(?:\s*(?:or|and)\s*(?:longer|more))?",
         topic_text.casefold(),
     )
     if topic_duration:
@@ -1451,9 +1457,9 @@ def _picots_text_matches(
     topic_tokens = tokens(topic_text)
     extracted_tokens = tokens(extracted_text)
     qualifiers = topic_tokens & {"supplement", "reduce", "modify"}
-    return bool(topic_tokens & extracted_tokens) and (
+    return bool(topic_duration) or (bool(topic_tokens & extracted_tokens) and (
         not require_qualifiers or qualifiers <= extracted_tokens
-    )
+    ))
 
 
 def _profile_scope_matches(picots: object, dimensions: dict[str, str]) -> bool:
@@ -1499,6 +1505,14 @@ def _claim_dict(
         ),
         {},
     )
+    extracted_claim_index = next(
+        (
+            index
+            for index, item in enumerate(extraction.get("claims", []), 1)
+            if item is extracted_claim
+        ),
+        None,
+    )
     design = str(claim.get("candidate_study_design") or "uncertain")
     if design == "uncertain":
         design = str(extraction.get("study_design") or "uncertain")
@@ -1512,6 +1526,14 @@ def _claim_dict(
         field: str(claim.get(field) or "")
         for field in ("population", "ingredient_name", "outcome", "timepoint")
     }
+    dimensions["population"] = " ".join(
+        (
+            dimensions["population"],
+            *(str(value) for value in extraction.get("population", [])),
+        )
+    )
+    if extracted_claim_index:
+        claim["extraction_claim_index"] = extracted_claim_index
     matching_conditions = list(
         dict.fromkeys(
             str(item["topic_condition_code"])
@@ -1677,7 +1699,6 @@ def _review_guidance(
         (admission or {}).get("consistency_resolution") or ""
     ).strip()
     material_issues = [issue for issue in issues if issue["priority"] == "must_resolve"]
-    unresolved_material_issues = material_issues if unresolved_consistency else []
     pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
     checks = [
         {
@@ -1712,25 +1733,16 @@ def _review_guidance(
             "id": "dual_ai",
             "label": "双 AI 独立抽取与差异",
             "status": (
-                "blocked"
-                if not extraction or unresolved_material_issues
-                else ("action" if unresolved_consistency else "pass")
+                "blocked" if not extraction else ("action" if unresolved_consistency else "pass")
             ),
             "detail": (
-                f"{len(unresolved_material_issues)} 项关键差异必须由具名人工核对原文并裁决。"
-                if unresolved_material_issues
+                f"AI 将逐项记录并裁决 {len(issues)} 项差异；"
+                f"{len(material_issues)} 项关键差异会将相关 Claim 保守降为高偏倚风险。"
+                if unresolved_consistency
                 else (
-                    f"AI 将逐项记录并裁决 {len(issues)} 项非关键差异。"
-                    if unresolved_consistency
-                    else (
-                        "关键差异已由具名执行者裁决。"
-                        if material_issues
-                        else (
-                            "差异已裁决或两次抽取一致。"
-                            if extraction
-                            else "尚无完整双 AI 抽取。"
-                        )
-                    )
+                    "关键差异已由具名执行者裁决。"
+                    if material_issues
+                    else ("差异已裁决或两次抽取一致。" if extraction else "尚无完整双 AI 抽取。")
                 )
             ),
         },
@@ -1803,6 +1815,8 @@ def _review_guidance(
 
 
 def _critical_issue(issue: dict[str, object]) -> bool:
+    if str(issue.get("severity") or "").casefold() == "low":
+        return False
     value = " ".join(str(issue.get(key) or "") for key in ("field", "message")).casefold()
     tokens = (
         "claim",

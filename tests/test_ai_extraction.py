@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from genesis_evidence.literature.ai_extraction import (
     ArkPaperAnalyzer,
+    ConsistencyReport,
     PaperAnalysisError,
     PaperExtraction,
     _streamed_completion,
@@ -74,6 +75,25 @@ def test_observational_study_cannot_emit_causal_claim() -> None:
         PaperExtraction.model_validate(_extraction(inference="causal"))
 
 
+def test_consistency_report_keeps_large_auditable_difference_set() -> None:
+    report = ConsistencyReport.model_validate(
+        {
+            "verdict": "needs_review",
+            "issues": [
+                {
+                    "field": f"claims[{index}]",
+                    "severity": "medium",
+                    "message": "Independent extraction differs.",
+                    "evidence": "Source excerpt retained for audit.",
+                }
+                for index in range(81)
+            ],
+        }
+    )
+
+    assert len(report.issues) == 81
+
+
 def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
     calls = 0
 
@@ -84,7 +104,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert request.url.path == "/api/v3/chat/completions"
         assert request.headers["authorization"] == "Bearer secret"
         assert body["model"] == "deepseek-v4-flash-ga-260731"
-        assert body["max_tokens"] == (4096 if calls == 3 else 16_384)
+        assert body["max_tokens"] == 16_384
         assert body["temperature"] == 0
         assert body["thinking"] == {"type": "disabled"}
         if calls == 1:

@@ -9,7 +9,14 @@ from .connectors.base import LiteratureConnector
 from .downloader import FullTextDownloader
 from .integrity import IntegrityStatus, PublicationIntegrityChecker
 from .jats import JatsParser
-from .models import FullTextCandidate, FullTextFormat, PaperRecord, RightsStatus
+from .models import (
+    FullTextCandidate,
+    FullTextFormat,
+    PaperRecord,
+    RightsStatus,
+    SourceAccess,
+    SourceName,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +27,15 @@ class IngestionSummary:
     downloaded_full_texts: int
     queued_extractions: int
     skipped_full_texts: int
+    failed_full_texts: int
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalSummary:
+    pending_papers: int
+    downloaded_full_texts: int
+    queued_extractions: int
+    not_retrieved: int
     failed_full_texts: int
 
 
@@ -90,11 +106,12 @@ class LiteratureIngestionService:
                         position=counts["discovered"],
                     )
                     integrity = self._integrity.check(record.to_dict(include_raw=False))
-                    self._store.update_integrity(
-                        paper_id,
-                        _stored_integrity_status(integrity.status),
-                        detail=integrity.to_dict(),
-                    )
+                    if integrity.checked_sources:
+                        self._store.update_integrity(
+                            paper_id,
+                            _stored_integrity_status(integrity.status),
+                            detail=integrity.to_dict(),
+                        )
                     if integrity.status == IntegrityStatus.RETRACTED or not download_full_text:
                         counts["skipped_full_texts"] += len(record.full_text_candidates)
                         continue
@@ -133,9 +150,86 @@ class LiteratureIngestionService:
         self._store.finish_collection(run_id, status="completed", detail=counts)
         return IngestionSummary(run_id=run_id, **counts)
 
+    def retrieve_pending_full_texts(
+        self, *, reviewer: str = "ai:retrieval-worker"
+    ) -> RetrievalSummary:
+        pending = self._store.list_pending_full_texts()
+        counts = {
+            "downloaded_full_texts": 0,
+            "queued_extractions": 0,
+            "not_retrieved": 0,
+            "failed_full_texts": 0,
+        }
+        for item in pending:
+            paper_id = str(item["paper_id"])
+            run_ids = [str(value) for value in item["run_ids"]]
+            pmcid = str(item["pmcid"] or "").strip().upper()
+            if not pmcid:
+                self._mark_not_retrieved(
+                    run_ids,
+                    paper_id,
+                    reason="Europe PMC open-access full-text identifier is unavailable.",
+                    reviewer=reviewer,
+                )
+                counts["not_retrieved"] += 1
+                continue
+            candidate = FullTextCandidate(
+                source=SourceName.EUROPE_PMC,
+                source_id=pmcid,
+                url=f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML",
+                format=FullTextFormat.JATS_XML,
+                access=SourceAccess.APPROVED_OPEN,
+                rights_status=RightsStatus.UNKNOWN,
+                media_type="application/xml",
+            )
+            try:
+                job_id = self._ingest_candidate(None, paper_id, candidate)
+            except Exception as exc:
+                counts["failed_full_texts"] += 1
+                self._store.record_event(
+                    "paper",
+                    paper_id,
+                    "pending_full_text_failed",
+                    {
+                        "source": candidate.source.value,
+                        "source_id": candidate.source_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                continue
+            if job_id is None:
+                self._mark_not_retrieved(
+                    run_ids,
+                    paper_id,
+                    reason="Retrieved full-text rights do not permit evidence processing.",
+                    reviewer=reviewer,
+                )
+                counts["not_retrieved"] += 1
+                continue
+            counts["downloaded_full_texts"] += 1
+            counts["queued_extractions"] += 1
+        return RetrievalSummary(pending_papers=len(pending), **counts)
+
+    def _mark_not_retrieved(
+        self,
+        run_ids: list[str],
+        paper_id: str,
+        *,
+        reason: str,
+        reviewer: str,
+    ) -> None:
+        for run_id in run_ids:
+            self._store.record_full_text_retrieval(
+                run_id,
+                paper_id,
+                status="not_retrieved",
+                reason=reason,
+                reviewer=reviewer,
+            )
+
     def _ingest_candidate(
         self,
-        run_id: str,
+        run_id: str | None,
         paper_id: str,
         candidate: FullTextCandidate,
     ) -> str | None:
