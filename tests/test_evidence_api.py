@@ -221,6 +221,8 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
     assert body["unmatched"] == [
         {
             "observation_id": "metric-unmatched",
+            "metric_code": "uric_acid",
+            "metric_label": "尿酸",
             "condition_codes": ["COND_HYPERURICEMIA_RISK"],
             "reason": "no_published_knowledge_card",
         }

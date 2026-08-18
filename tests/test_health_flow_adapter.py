@@ -84,3 +84,20 @@ def test_adapter_does_not_reassign_invalid_file_index_to_file_one() -> None:
 
     assert result.request.observations == []
     assert result.skipped == ({"record_index": "1", "reason": "invalid_source_file_index"},)
+
+
+def test_adapter_skips_invalid_bbox_without_losing_other_rows() -> None:
+    result = build_evidence_request(
+        [
+            _record(bbox_normalized=[0, 0, 1001, 10]),
+            _record(
+                metric_name="尿酸",
+                metric_value="430",
+                evidence_text="尿酸 430 mmol/L 参考范围 3.9-6.1 H",
+            ),
+        ],
+        confirmed=True,
+    )
+
+    assert result.skipped == ({"record_index": "1", "reason": "invalid_bbox"},)
+    assert [item.metric_code for item in result.request.observations] == ["uric_acid"]

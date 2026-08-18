@@ -25,6 +25,7 @@ from ...reports.extraction import (
 )
 from ..conditions import CONDITIONS
 from ..contracts import EvidenceMatchObservation
+from ..metrics import METRIC_LABELS
 from .database import Database
 from .papers import ObjectStore
 
@@ -691,6 +692,10 @@ class ReportStore:
                     unmatched.append(
                         {
                             "observation_id": observation.observation_id,
+                            "metric_code": observation.metric_code,
+                            "metric_label": METRIC_LABELS.get(
+                                observation.metric_code, observation.metric_code
+                            ),
                             "condition_codes": missing,
                             "reason": "no_published_knowledge_card",
                         }

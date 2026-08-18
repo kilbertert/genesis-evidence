@@ -220,6 +220,8 @@ class EvidenceUnmatched(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     observation_id: str
+    metric_code: str
+    metric_label: str
     condition_codes: list[str]
     reason: Literal["no_published_knowledge_card"]
 

@@ -82,6 +82,11 @@ def build_evidence_request(
         if file_index is None:
             skipped.append(_skip(position, "invalid_source_file_index"))
             continue
+        raw_bbox = record.get("bbox_normalized")
+        bbox = _bbox(raw_bbox)
+        if raw_bbox is not None and bbox is None:
+            skipped.append(_skip(position, "invalid_bbox"))
+            continue
         observations.append(
             EvidenceMatchObservation(
                 observation_id=f"hf-observation-{position}",
@@ -95,7 +100,7 @@ def build_evidence_request(
                 source_file_index=file_index,
                 source_page=page,
                 source_id=_text(record.get("source_id")) or None,
-                bbox_normalized=record.get("bbox_normalized"),
+                bbox_normalized=bbox,
             )
         )
     return HealthFlowAdapterResult(
@@ -135,6 +140,20 @@ def _positive_int(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number >= 1 else None
+
+
+def _bbox(value: object) -> list[float] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 4:
+        return None
+    try:
+        coordinates = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(item) or not 0 <= item <= 1000 for item in coordinates):
+        return None
+    if coordinates[0] > coordinates[2] or coordinates[1] > coordinates[3]:
+        return None
+    return coordinates
 
 
 def _text(value: object) -> str:
