@@ -11,6 +11,7 @@ def _record(**overrides):
         "source_file_index": 1,
         "evidence_text": "空腹血糖 6.8 mmol/L 参考范围 3.9-6.1 H",
         "source_id": "report-1/page-2",
+        "bbox_normalized": [10, 20, 100, 120],
         "abnormal_flag": "normal",
     }
     value.update(overrides)
@@ -50,6 +51,7 @@ def test_adapter_preserves_sources_and_recomputes_without_model_flag() -> None:
     assert result.request.observations[0].confirmation_status == "confirmed"
     assert result.request.observations[0].source_file_index == 1
     assert result.request.observations[0].source_page == 2
+    assert result.request.observations[0].bbox_normalized == [10, 20, 100, 120]
     assert result.request.observations[1].source_file_index == 2
     assert result.request.observations[1].source_id == "report-2/page-3"
 
@@ -81,6 +83,21 @@ def test_adapter_does_not_reassign_invalid_file_index_to_file_one() -> None:
     )
 
     assert result.request.observations == []
-    assert result.skipped == (
-        {"record_index": "1", "reason": "invalid_source_file_index"},
+    assert result.skipped == ({"record_index": "1", "reason": "invalid_source_file_index"},)
+
+
+def test_adapter_skips_invalid_bbox_without_losing_other_rows() -> None:
+    result = build_evidence_request(
+        [
+            _record(bbox_normalized=[0, 0, 1001, 10]),
+            _record(
+                metric_name="尿酸",
+                metric_value="430",
+                evidence_text="尿酸 430 mmol/L 参考范围 3.9-6.1 H",
+            ),
+        ],
+        confirmed=True,
     )
+
+    assert result.skipped == ({"record_index": "1", "reason": "invalid_bbox"},)
+    assert [item.metric_code for item in result.request.observations] == ["uric_acid"]

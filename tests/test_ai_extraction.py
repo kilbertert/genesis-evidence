@@ -104,7 +104,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert request.url.path == "/api/v3/chat/completions"
         assert request.headers["authorization"] == "Bearer secret"
         assert body["model"] == "deepseek-v4-flash-ga-260731"
-        assert body["max_tokens"] == 16_384
+        assert body["max_tokens"] == (16_384 if calls < 3 else 8_192)
         assert body["temperature"] == 0
         assert body["thinking"] == {"type": "disabled"}
         if calls == 1:
@@ -225,6 +225,42 @@ def test_invalid_source_evidence_gets_one_channel_local_correction() -> None:
     assert result.second_run_id == "run-3"
 
 
+def test_oversized_extraction_uses_bounded_correction() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        del request
+        if calls == 1:
+            content = _extraction()
+            content["claims"] = [*content["claims"], *content["claims"] * 50]
+        elif calls in {2, 3}:
+            content = _extraction()
+        else:
+            content = {"verdict": "consistent", "issues": []}
+        return _stream(f"run-{calls}", content)
+
+    result = ArkPaperAnalyzer(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    ).analyze(
+        PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
+        {
+            "abstract": "Serum 25-hydroxyvitamin D was measured.",
+            "sections": [
+                {
+                    "title": "Results",
+                    "text": "Lower 25(OH)D was associated with higher frailty prevalence.",
+                }
+            ],
+        },
+    )
+
+    assert calls == 4
+    assert result.extraction_run_id == "run-2"
+    assert len(result.extraction.claims) == 1
+
+
 def test_ark_analyzer_rejects_evidence_missing_from_full_text_with_field_path() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         del request
@@ -282,6 +318,51 @@ def test_invalid_consistency_report_preserves_validation_reason() -> None:
                 ],
             },
         )
+
+
+def test_invalid_consistency_report_uses_bounded_correction() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        del request
+        if calls < 3:
+            content = _extraction()
+        elif calls == 3:
+            content = {"verdict": "needs_review"}
+        else:
+            content = {
+                "verdict": "needs_review",
+                "issues": [
+                    {
+                        "field": "claims[0].effect_estimate",
+                        "severity": "medium",
+                        "message": "Effect estimates differ.",
+                        "evidence": "Lower 25(OH)D was associated with higher frailty prevalence.",
+                    }
+                ],
+            }
+        return _stream(f"run-{calls}", content)
+
+    result = ArkPaperAnalyzer(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    ).analyze(
+        PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
+        {
+            "abstract": "Serum 25-hydroxyvitamin D was measured.",
+            "sections": [
+                {
+                    "title": "Results",
+                    "text": "Lower 25(OH)D was associated with higher frailty prevalence.",
+                }
+            ],
+        },
+    )
+
+    assert calls == 4
+    assert result.check_run_id == "run-4"
+    assert result.consistency.verdict == "needs_review"
 
 
 def test_from_env_honors_ark_max_tokens(monkeypatch) -> None:

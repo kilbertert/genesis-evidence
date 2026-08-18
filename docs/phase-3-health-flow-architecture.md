@@ -42,7 +42,7 @@ processes on the same host, but the contract remains the same.
 
 Headers:
 
-- `X-Genesis-Evidence-Key`: required when `GENESIS_EVIDENCE_API_KEY` is set.
+- `X-Genesis-Evidence-Key`: required; both services must share a random key of at least 24 characters.
 - `X-Correlation-Id`: optional RFC 9562 UUID; the server creates one when absent.
   Restricting this value to an opaque UUID keeps patient identifiers out of the
   audit entity key.

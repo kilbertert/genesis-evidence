@@ -14,9 +14,7 @@ from ..reports.extraction import evidence_contains_value
 
 _NUMBER = r"-?\d+(?:\.\d+)?"
 _NUMBER_RE = re.compile(rf"(?<![\d.]){_NUMBER}(?![\d.])")
-_RANGE_RE = re.compile(
-    rf"(?P<low>{_NUMBER})\s*(?:-|~|至|到)\s*(?P<high>{_NUMBER})"
-)
+_RANGE_RE = re.compile(rf"(?P<low>{_NUMBER})\s*(?:-|~|至|到)\s*(?P<high>{_NUMBER})")
 _UPPER_RE = re.compile(rf"(?:<|<=|≤)\s*(?P<high>{_NUMBER})")
 _LOWER_RE = re.compile(rf"(?:>|>=|≥)\s*(?P<low>{_NUMBER})")
 
@@ -43,14 +41,11 @@ def build_evidence_request(
         return HealthFlowAdapterResult(
             request=EvidenceMatchRequest(schema_version="1", observations=[]),
             skipped=tuple(
-                _skip(position, "confirmation_required")
-                for position, _ in enumerate(records, 1)
+                _skip(position, "confirmation_required") for position, _ in enumerate(records, 1)
             ),
         )
 
-    normalized_aliases = {
-        normalize_metric_name(key): value for key, value in aliases.items()
-    }
+    normalized_aliases = {normalize_metric_name(key): value for key, value in aliases.items()}
     observations: list[EvidenceMatchObservation] = []
     skipped: list[dict[str, str]] = []
     for position, record in enumerate(records, start=1):
@@ -87,6 +82,11 @@ def build_evidence_request(
         if file_index is None:
             skipped.append(_skip(position, "invalid_source_file_index"))
             continue
+        raw_bbox = record.get("bbox_normalized")
+        bbox = _bbox(raw_bbox)
+        if raw_bbox is not None and bbox is None:
+            skipped.append(_skip(position, "invalid_bbox"))
+            continue
         observations.append(
             EvidenceMatchObservation(
                 observation_id=f"hf-observation-{position}",
@@ -100,6 +100,7 @@ def build_evidence_request(
                 source_file_index=file_index,
                 source_page=page,
                 source_id=_text(record.get("source_id")) or None,
+                bbox_normalized=bbox,
             )
         )
     return HealthFlowAdapterResult(
@@ -139,6 +140,20 @@ def _positive_int(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number >= 1 else None
+
+
+def _bbox(value: object) -> list[float] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 4:
+        return None
+    try:
+        coordinates = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(item) or not 0 <= item <= 1000 for item in coordinates):
+        return None
+    if coordinates[0] > coordinates[2] or coordinates[1] > coordinates[3]:
+        return None
+    return coordinates
 
 
 def _text(value: object) -> str:
