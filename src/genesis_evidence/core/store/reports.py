@@ -173,9 +173,7 @@ class ReportStore:
                     "UPDATE reports SET status = 'uploaded', updated_at = ? WHERE id = ?",
                     (now, report_id),
                 )
-                self._audit(
-                    connection, report_id, "extraction_recovered", {}, actor="system"
-                )
+                self._audit(connection, report_id, "extraction_recovered", {}, actor="system")
         return len(reports)
 
     def fail_extraction(self, report_id: str, error: Exception) -> None:
@@ -352,9 +350,7 @@ class ReportStore:
             for row in rows:
                 item = supplied.get(row["id"])
                 if item is None or item.decision == "excluded":
-                    values.append(
-                        (row["id"], "excluded", None, None, None, None, None, now)
-                    )
+                    values.append((row["id"], "excluded", None, None, None, None, None, now))
                     continue
                 if item.metric_code not in METRIC_CODES:
                     raise ValueError(f"unknown metric_code: {item.metric_code}")
@@ -362,9 +358,7 @@ class ReportStore:
                 unit = row["model_unit"] if item.decision == "confirmed" else item.unit
                 low = row["reference_low"] if item.decision == "confirmed" else item.reference_low
                 high = (
-                    row["reference_high"]
-                    if item.decision == "confirmed"
-                    else item.reference_high
+                    row["reference_high"] if item.decision == "confirmed" else item.reference_high
                 )
                 _validate_final_values(row["evidence_text"], value, low, high)
                 values.append(
@@ -663,6 +657,7 @@ class ReportStore:
                     "source_file_index": observation.source_file_index,
                     "source_page": observation.source_page,
                     "source_id": observation.source_id,
+                    "bbox_normalized": observation.bbox_normalized,
                 }
                 for condition in conditions:
                     card = cards.get(condition.code)
@@ -805,12 +800,8 @@ def _is_abnormal(observation) -> bool:
 
 def _is_abnormal_external(observation: EvidenceMatchObservation) -> bool:
     return (
-        (observation.reference_low is not None and observation.value < observation.reference_low)
-        or (
-            observation.reference_high is not None
-            and observation.value > observation.reference_high
-        )
-    )
+        observation.reference_low is not None and observation.value < observation.reference_low
+    ) or (observation.reference_high is not None and observation.value > observation.reference_high)
 
 
 def _finding_sort_key(item: dict[str, object]) -> tuple[object, ...]:
@@ -857,6 +848,7 @@ def _build_patient_reply(
                 "card_version": card["version"],
                 "patient_visible_body": card["patient_visible_body"],
                 "source_observation_ids": finding["source_observation_ids"],
+                "source_observations": finding["source_observations"],
             }
         )
     if visible_findings:

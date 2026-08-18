@@ -14,9 +14,7 @@ from ..reports.extraction import evidence_contains_value
 
 _NUMBER = r"-?\d+(?:\.\d+)?"
 _NUMBER_RE = re.compile(rf"(?<![\d.]){_NUMBER}(?![\d.])")
-_RANGE_RE = re.compile(
-    rf"(?P<low>{_NUMBER})\s*(?:-|~|至|到)\s*(?P<high>{_NUMBER})"
-)
+_RANGE_RE = re.compile(rf"(?P<low>{_NUMBER})\s*(?:-|~|至|到)\s*(?P<high>{_NUMBER})")
 _UPPER_RE = re.compile(rf"(?:<|<=|≤)\s*(?P<high>{_NUMBER})")
 _LOWER_RE = re.compile(rf"(?:>|>=|≥)\s*(?P<low>{_NUMBER})")
 
@@ -43,14 +41,11 @@ def build_evidence_request(
         return HealthFlowAdapterResult(
             request=EvidenceMatchRequest(schema_version="1", observations=[]),
             skipped=tuple(
-                _skip(position, "confirmation_required")
-                for position, _ in enumerate(records, 1)
+                _skip(position, "confirmation_required") for position, _ in enumerate(records, 1)
             ),
         )
 
-    normalized_aliases = {
-        normalize_metric_name(key): value for key, value in aliases.items()
-    }
+    normalized_aliases = {normalize_metric_name(key): value for key, value in aliases.items()}
     observations: list[EvidenceMatchObservation] = []
     skipped: list[dict[str, str]] = []
     for position, record in enumerate(records, start=1):
@@ -100,6 +95,7 @@ def build_evidence_request(
                 source_file_index=file_index,
                 source_page=page,
                 source_id=_text(record.get("source_id")) or None,
+                bbox_normalized=record.get("bbox_normalized"),
             )
         )
     return HealthFlowAdapterResult(
