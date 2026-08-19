@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS evidence_profiles (
     id TEXT PRIMARY KEY,
     topic_id TEXT NOT NULL REFERENCES evidence_topics(id),
     condition_code TEXT NOT NULL REFERENCES conditions(code),
+    scope_key TEXT NOT NULL DEFAULT '',
     version TEXT NOT NULL,
     ingredient_name TEXT NOT NULL,
     ingredient_form TEXT NOT NULL,
