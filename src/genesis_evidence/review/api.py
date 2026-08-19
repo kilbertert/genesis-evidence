@@ -176,6 +176,12 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     def topic_ledger(topic_id: str) -> list[dict[str, object]]:
         return papers_store.list_topic_ledger(topic_id)
 
+    @app.post("/api/review/topics/{topic_id}/ledger/reconcile")
+    def reconcile_topic_ledger(
+        topic_id: str, reviewer: str = Depends(principal)
+    ) -> dict[str, object]:
+        return papers_store.reconcile_topic_ledger(topic_id, reviewer=reviewer)
+
     @app.get("/api/review/extraction-jobs", dependencies=[Depends(principal)])
     def extraction_jobs() -> list[dict[str, object]]:
         return papers_store.list_extraction_jobs()

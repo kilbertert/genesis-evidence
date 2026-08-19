@@ -33,7 +33,7 @@ packages = ["src/genesis_evidence"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["."]
+pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
