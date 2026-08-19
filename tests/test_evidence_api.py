@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from genesis_evidence.core.contracts import EvidenceMatchResponse
 from genesis_evidence.core.store import Database
 from genesis_evidence.integrations.health_flow import build_evidence_request
 from genesis_evidence.portal.api import create_app
@@ -400,11 +401,12 @@ def test_health_flow_adapter_payload_reaches_published_card_match(tmp_path) -> N
     assert body["findings"][0]["source_observations"][0]["source_page"] == 2
 
 
-def test_evidence_api_exposes_versioned_response_schema(tmp_path) -> None:
+def test_evidence_api_keeps_versioned_response_contract_private(tmp_path) -> None:
     _, client = _client(tmp_path)
-    schema = client.get("/openapi.json").json()
-    response = schema["paths"]["/api/evidence/matches"]["post"]["responses"]["200"]
 
-    assert response["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/EvidenceMatchResponse"
+    assert client.get("/openapi.json").status_code == 404
+    assert EvidenceMatchResponse.model_json_schema()["properties"]["schema_version"] == {
+        "const": "2",
+        "title": "Schema Version",
+        "type": "string",
     }
