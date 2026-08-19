@@ -22,6 +22,12 @@ every full-text inclusion has completed extraction, internal admission and
 Claim review. TLS termination remains the deployment boundary required to protect bearer
 tokens in transport.
 
+An Evidence Profile is grouped by a stable outcome scope within one locked topic. When the
+outcome is a first-batch report metric, the scope key is its canonical `metric_code`;
+otherwise it is derived from the locked PICOTS outcome text. Study-specific population,
+form, dose, comparator wording and timepoint remain attached to each Result and do not
+split semantically equivalent outcome evidence into separate profiles.
+
 The first-stage product intentionally uses one authenticated human reviewer. It therefore
 does not implement Cochrane MECIR C39's two-person independent full-text selection and must
 not be represented as a Cochrane review. The persisted decisions and reasons preserve the

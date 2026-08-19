@@ -91,11 +91,12 @@ def _publish_card(database: Database, condition_code: str, *, grade: str, versio
         connection.execute(
             """
             INSERT INTO evidence_profiles(
-                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                id, topic_id, condition_code, scope_key, version, ingredient_name, ingredient_form,
                 population, baseline_nutrient_status, dose, comparator, outcome,
                 timepoint, estimate_target, evidence_body_complete, certainty,
                 certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES (?, ?, ?, ?, 'Test ingredient', 'Test form', 'Adults 40+',
+            ) VALUES (?, ?, ?, 'metric:fasting_glucose', ?, 'Test ingredient',
+                'Test form', 'Adults 40+',
                 'Not reported', 'Test dose', 'Comparator', 'Outcome', 'Timepoint',
                 'Test target', 1, ?, 'Test-only reviewed profile', '2026-08-11',
                 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
