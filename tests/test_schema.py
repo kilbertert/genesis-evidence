@@ -46,6 +46,19 @@ def test_initialization_seeds_only_the_first_twelve_conditions(tmp_path) -> None
     assert conditions[0].code == "COND_ANEMIA_PATTERN"
 
 
+def test_evidence_profile_has_stable_outcome_scope_key(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    with database.connect() as connection:
+        column = next(
+            row
+            for row in connection.execute("PRAGMA table_info(evidence_profiles)")
+            if row["name"] == "scope_key"
+        )
+    assert column["notnull"] == 1
+    assert column["dflt_value"] == "''"
+
+
 @pytest.mark.parametrize("identifier", ["doi", "pmid", "pmcid"])
 def test_papers_are_deduplicated_by_stable_identifier(tmp_path, identifier) -> None:
     database = Database(tmp_path / "evidence.sqlite3")

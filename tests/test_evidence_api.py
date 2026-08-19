@@ -21,7 +21,17 @@ def _client(tmp_path, *, api_key: str = API_KEY) -> tuple[Database, TestClient]:
     )
 
 
-def _publish_prediabetes_card(database: Database) -> None:
+def _publish_scoped_card(
+    database: Database,
+    *,
+    condition_code: str = "COND_PREDIABETES",
+    scope_key: str = "metric:fasting_glucose",
+    card_id: str = "card-1",
+    profile_id: str = "profile-1",
+    topic_id: str = "topic-1",
+    claim_id: str = "claim-1",
+    paper_id: str = "paper-1",
+) -> None:
     with database.transaction() as connection:
         connection.execute(
             """
@@ -30,30 +40,33 @@ def _publish_prediabetes_card(database: Database) -> None:
                 eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
                 required_search_streams_json, evidence_cutoff_date, created_by, created_at,
                 locked_by, locked_at
-            ) VALUES ('topic-1', 'test-topic', '1', 'COND_PREDIABETES', 'locked',
+            ) VALUES (?, ?, '1', ?, 'locked',
                 'Test question', '{}', '[]', '[]', '[]', '[]', '2026-08-11',
                 'reviewer', '2026-08-11T00:00:00Z', 'reviewer', '2026-08-11T00:00:00Z')
-            """
+            """,
+            (topic_id, f"test-topic-{topic_id}", condition_code),
         )
         connection.execute(
             """
             INSERT INTO evidence_profiles(
-                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                id, topic_id, condition_code, scope_key, version, ingredient_name, ingredient_form,
                 population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
                 estimate_target, evidence_body_complete, certainty, certainty_rationale,
                 evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES ('profile-1', 'topic-1', 'COND_PREDIABETES', '1.0.0', 'Test ingredient',
+            ) VALUES (?, ?, ?, ?, '1.0.0', 'Test ingredient',
                 'Test form', 'Adults 40+', 'Not reported', 'Test dose', 'Comparator',
                 'Outcome', 'Timepoint', 'Target', 1, 'moderate', 'Test-only profile',
                 '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
-            """
+            """,
+            (profile_id, topic_id, condition_code, scope_key),
         )
         connection.execute(
             """
             INSERT INTO papers(id, title, abstract, doi, created_at)
-            VALUES ('paper-1', 'Test paper', 'Test abstract', '10.1000/test-paper',
+            VALUES (?, 'Test paper', 'Test abstract', '10.1000/test-paper',
                 '2026-08-11T00:00:00Z')
-            """
+            """,
+            (paper_id,),
         )
         connection.execute(
             """
@@ -61,47 +74,56 @@ def _publish_prediabetes_card(database: Database) -> None:
                 id, paper_id, model, extraction_run_id, extraction_json,
                 second_model, second_run_id, second_extraction_json,
                 check_model, check_run_id, consistency_status, consistency_json, created_at
-            ) VALUES ('extraction-1', 'paper-1', 'test-model', 'run-a', '{}',
+            ) VALUES ('extraction-1', ?, 'test-model', 'run-a', '{}',
                 'test-model-b', 'run-b', '{}', 'check-model', 'check-run',
                 'consistent', '{}', '2026-08-11T00:00:00Z')
-            """
+            """,
+            (paper_id,),
         )
         connection.execute(
             """
             INSERT INTO claims(
                 id, paper_id, extraction_id, candidate_text, evidence_text, locator,
                 candidate_study_design, status, created_at
-            ) VALUES ('claim-1', 'paper-1', 'extraction-1', 'Test claim', 'Test evidence',
+            ) VALUES (?, ?, 'extraction-1', 'Test claim', 'Test evidence',
                 'p. 4', 'randomized_controlled_trial', 'reviewed',
                 '2026-08-11T00:00:00Z')
-            """
+            """,
+            (claim_id, paper_id),
         )
         connection.execute(
             """
             INSERT INTO claim_reviews(
                 claim_id, decision, corrected_text, corrected_study_design, inference,
                 risk_of_bias_json, applicability, condition_code, reviewer, reviewed_at
-            ) VALUES ('claim-1', 'approved', 'Test claim', 'randomized_controlled_trial',
-                'causal', '{}', 'Adults 40+', 'COND_PREDIABETES', 'reviewer',
+            ) VALUES (?, 'approved', 'Test claim', 'randomized_controlled_trial',
+                'causal', '{}', 'Adults 40+', ?, 'reviewer',
                 '2026-08-11T00:00:00Z')
-            """
+            """,
+            (claim_id, condition_code),
         )
         connection.execute(
             """
             INSERT INTO knowledge_cards(
                 id, condition_code, version, status, grade, evidence_profile_id, reviewer,
                 reviewed_at, published_at, patient_visible_body, created_at
-            ) VALUES ('card-1', 'COND_PREDIABETES', '1.0.0', 'published', 'moderate',
-                'profile-1', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
+            ) VALUES (?, ?, '1.0.0', 'published', 'moderate',
+                ?, 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
                 '这是经过审核的营养健康知识。', '2026-08-11T00:00:00Z')
-            """
+            """,
+            (card_id, condition_code, profile_id),
         )
         connection.execute(
             """
             INSERT INTO card_claims(card_id, claim_id, evidence_text, locator)
-            VALUES ('card-1', 'claim-1', 'Test evidence', 'p. 4')
-            """
+            VALUES (?, ?, 'Test evidence', 'p. 4')
+            """,
+            (card_id, claim_id),
         )
+
+
+def _publish_prediabetes_card(database: Database) -> None:
+    _publish_scoped_card(database)
 
 
 def _observation(**overrides):
@@ -159,6 +181,7 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
     assert body["findings"][0]["source_observation_ids"] == ["metric-1"]
     assert body["findings"][0]["card"]["status"] == "published"
     assert body["findings"][0]["card"]["id"] == "card-1"
+    assert body["findings"][0]["card"]["scope_key"] == "metric:fasting_glucose"
     assert body["findings"][0]["source_observations"] == [
         {
             "observation_id": "metric-1",
@@ -182,13 +205,25 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
                 "condition_code": "COND_PREDIABETES",
                 "condition_name": "糖尿病前期 / 糖代谢异常",
                 "urgency": "routine",
+                "abnormality_severity": 1,
                 "evidence_strength": "moderate",
                 "needs_recheck": True,
                 "department": "内分泌科",
                 "recheck_direction": "复查空腹血糖与糖化血红蛋白",
                 "card_id": "card-1",
                 "card_version": "1.0.0",
+                "evidence_profile_id": "profile-1",
                 "patient_visible_body": "这是经过审核的营养健康知识。",
+                "sources": [
+                    {
+                        "claim_id": "claim-1",
+                        "paper_id": "paper-1",
+                        "paper_title": "Test paper",
+                        "doi": "10.1000/test-paper",
+                        "evidence": "Test evidence",
+                        "locator": "p. 4",
+                    }
+                ],
                 "source_observation_ids": ["metric-1"],
                 "source_observations": [
                     {
@@ -235,6 +270,63 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
     assert audit["entity_id"] == "00000000-0000-4000-8000-000000000001"
     assert audit["action"] == "published_card_match"
     assert audit["actor"] == "health-flow"
+
+
+def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:ldl_c",
+        card_id="card-ldl",
+        profile_id="profile-ldl",
+        topic_id="topic-ldl",
+        claim_id="claim-ldl",
+        paper_id="paper-ldl",
+    )
+    triglycerides = _observation(
+        metric_code="triglycerides",
+        value=2.4,
+        unit="mmol/L",
+        reference_low=0.3,
+        reference_high=1.7,
+        evidence_text="甘油三酯 2.4 mmol/L 0.3-1.7 H",
+        observation_id="metric-triglycerides",
+        source_page=1,
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={"schema_version": "1", "observations": [triglycerides]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["findings"] == []
+    assert body["unmatched"] == [
+        {
+            "observation_id": "metric-triglycerides",
+            "metric_code": "triglycerides",
+            "metric_label": "甘油三酯",
+            "condition_codes": ["COND_DYSLIPIDEMIA", "COND_MASLD_RISK"],
+            "reason": "no_published_knowledge_card",
+        }
+    ]
+
+    ldl = _observation(
+        metric_code="ldl_c",
+        value=4.2,
+        reference_low=0,
+        reference_high=3.4,
+        evidence_text="低密度脂蛋白胆固醇 4.2 mmol/L 0-3.4 H",
+        observation_id="metric-ldl",
+        source_page=1,
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={"schema_version": "1", "observations": [ldl]},
+    )
+    assert response.status_code == 200
+    assert response.json()["findings"][0]["card"]["scope_key"] == "metric:ldl_c"
 
 
 def test_evidence_api_requires_key_and_confirmed_status(tmp_path) -> None:

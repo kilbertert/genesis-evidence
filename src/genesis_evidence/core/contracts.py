@@ -178,6 +178,7 @@ class PublishedEvidenceCard(BaseModel):
 
     id: str
     condition_code: str
+    scope_key: str = Field(min_length=1)
     version: str
     status: Literal["published"]
     grade: Literal["high", "moderate", "low", "very_low"]
@@ -247,13 +248,16 @@ class PatientReplyFinding(BaseModel):
     condition_code: str
     condition_name: str
     urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: Literal["high", "moderate", "low", "very_low"]
     needs_recheck: bool
     department: str
     recheck_direction: str
     card_id: str
     card_version: str
+    evidence_profile_id: str
     patient_visible_body: str
+    sources: list[EvidenceSourceReference] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[EvidenceSourceObservation]
 

@@ -7,13 +7,14 @@ import pytest
 from pydantic import ValidationError
 
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
-from genesis_evidence.core.store.review import _picots_text_matches
+from genesis_evidence.core.store.review import _picots_text_matches, _profile_scopes
 from genesis_evidence.review.service import (
     ClaimReviewInput,
     EvidenceProfileInput,
     EvidenceReviewService,
     RiskOfBiasInput,
     _issue_applies_to_claim,
+    _next_profile_version,
 )
 
 
@@ -36,15 +37,11 @@ def _review_case(
             "population": ["Adults aged 60 years and older"],
             "studied_approach": ["Measured serum 25(OH)D"],
             "outcomes": ["Frailty prevalence"],
-            "condition_candidates": [
-                {"condition_code": "COND_VITAMIN_D_DEFICIENCY"}
-            ],
+            "condition_candidates": [{"condition_code": "COND_VITAMIN_D_DEFICIENCY"}],
             "claims": [
                 {
                     "text": "Lower vitamin D was associated with frailty.",
-                    "evidence": (
-                        "Lower 25(OH)D was associated with higher frailty prevalence."
-                    ),
+                    "evidence": ("Lower 25(OH)D was associated with higher frailty prevalence."),
                     "locator": "Results",
                     "inference": "associational",
                     "ingredient_name": "Vitamin D",
@@ -75,10 +72,11 @@ def _review_case(
     with database.transaction() as connection:
         connection.execute(
             """
-            INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
-            VALUES (?, 'Vitamin D and frailty', ?, ?, '2026-08-11T00:00:00Z')
+            INSERT INTO papers(
+                id, title, doi, publication_status, integrity_status, created_at
+            ) VALUES (?, 'Vitamin D and frailty', ?, ?, ?, '2026-08-11T00:00:00Z')
             """,
-            (paper_id, publication_status, integrity),
+            (paper_id, f"10.1000/test-vitamin-d-{paper_id}", publication_status, integrity),
         )
         connection.execute(
             """
@@ -251,8 +249,9 @@ def _complete_topic(
         with database.transaction() as connection:
             connection.execute(
                 """
-                INSERT INTO full_texts(paper_id, object_key, sha256, media_type, rights_status)
-                VALUES (?, ?, ?, 'application/xml', 'redistributable')
+                INSERT INTO full_texts(
+                    paper_id, object_key, sha256, media_type, rights_status, processed_at
+                ) VALUES (?, ?, ?, 'application/xml', 'redistributable', '2026-08-11T00:00:00Z')
                 ON CONFLICT(paper_id) DO NOTHING
                 """,
                 (paper_id, f"test/{paper_id}.xml", "0" * 64),
@@ -374,9 +373,7 @@ def test_ai_review_guidance_drives_screening_and_downgrades_material_differences
                         "population": ["Adults aged 60 years and older"],
                         "studied_approach": ["Measured serum 25(OH)D"],
                         "outcomes": ["Frailty prevalence"],
-                        "condition_candidates": [
-                            {"condition_code": "COND_VITAMIN_D_DEFICIENCY"}
-                        ],
+                        "condition_candidates": [{"condition_code": "COND_VITAMIN_D_DEFICIENCY"}],
                         "limitations": ["Residual confounding remains possible."],
                         "claims": [
                             {
@@ -511,9 +508,12 @@ def test_ai_full_text_screening_stops_when_picots_evidence_is_missing(tmp_path) 
     assert result["status"] == "attention_required"
     assert result["stage"] == "screening"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT full_text_decision FROM collection_papers WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] is None
+        assert (
+            connection.execute(
+                "SELECT full_text_decision FROM collection_papers WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            is None
+        )
 
 
 def test_ai_full_text_screening_enforces_topic_minimum_age(tmp_path) -> None:
@@ -564,6 +564,32 @@ def test_picots_duration_normalizes_days_and_weeks() -> None:
     assert not _picots_text_matches("At least 3 weeks", "After 1 week of intervention")
 
 
+def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> None:
+    picots = {
+        "population": "Adults aged 18 and older",
+        "intervention_or_exposure": "Dietary oils and solid fats",
+        "comparator": "Alternative dietary oil or solid fat",
+        "outcomes": "LDL cholesterol, HDL cholesterol, triglycerides, or total cholesterol",
+        "timing": "At least 3 weeks",
+    }
+    dimensions = {
+        "population": "Adults aged 50-75 years",
+        "ingredient_name": "Coconut oil",
+        "outcome": "LDL-C levels",
+        "timepoint": "After 4 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {
+        "metric:ldl_c": "低密度脂蛋白胆固醇"
+    }
+    dimensions["outcome"] = "Change in TC/HDL-C ratio and non-HDL-C"
+    assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
+
+
+def test_profile_version_is_monotonic_within_the_topic_series() -> None:
+    assert _next_profile_version("4", {"3.0.9", "4.0.0", "4.0.2"}) == "4.0.3"
+
+
 def test_claim_picots_uses_the_paper_population_context(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
@@ -602,8 +628,7 @@ def test_ai_reopens_only_its_own_claim_rejection(tmp_path) -> None:
         decisions = {
             row["claim_id"]: tuple(row)[1:]
             for row in connection.execute(
-                "SELECT claim_id, decision, reviewer FROM claim_reviews "
-                "WHERE claim_id IN (?, ?)",
+                "SELECT claim_id, decision, reviewer FROM claim_reviews WHERE claim_id IN (?, ?)",
                 (ai_claim, human_claim),
             ).fetchall()
         }
@@ -728,9 +753,7 @@ def test_ai_profile_records_a_null_result_as_not_supporting(tmp_path) -> None:
         profile_result = connection.execute(
             "SELECT interpretation FROM evidence_profile_results"
         ).fetchone()[0]
-        body = connection.execute(
-            "SELECT patient_visible_body FROM knowledge_cards"
-        ).fetchone()[0]
+        body = connection.execute("SELECT patient_visible_body FROM knowledge_cards").fetchone()[0]
     assert profile_result == "does_not_support"
     assert "未支持上述研究关系" in body
 
@@ -769,9 +792,7 @@ def test_ai_closes_material_difference_with_conservative_risk_downgrade(tmp_path
             (paper_id,),
         ).fetchone()
         risk = json.loads(
-            connection.execute(
-                "SELECT risk_of_bias_json FROM claim_reviews"
-            ).fetchone()[0]
+            connection.execute("SELECT risk_of_bias_json FROM claim_reviews").fetchone()[0]
         )
         card = connection.execute("SELECT status, grade FROM knowledge_cards").fetchone()
     assert admission["status"] == "internally_admitted"
@@ -1039,8 +1060,7 @@ def test_ai_publishes_a_moderate_profile_from_two_randomized_studies(tmp_path) -
                 (paper_id,),
             )
             connection.execute(
-                "UPDATE results SET statistical_details = '95% CI 0.8 to 1.2' "
-                "WHERE paper_id = ?",
+                "UPDATE results SET statistical_details = '95% CI 0.8 to 1.2' WHERE paper_id = ?",
                 (paper_id,),
             )
     _complete_topic(
@@ -1071,8 +1091,12 @@ def test_ai_requeues_failed_extraction_without_human_intervention(tmp_path) -> N
         )
         connection.execute(
             """
-            INSERT INTO full_texts(paper_id, object_key, sha256, media_type, rights_status)
-            VALUES ('paper-1', 'paper.xml', ?, 'application/xml', 'internal_tdm_only')
+            INSERT INTO full_texts(
+                paper_id, object_key, sha256, media_type, rights_status, processed_at
+            ) VALUES (
+                'paper-1', 'paper.xml', ?, 'application/xml', 'internal_tdm_only',
+                '2026-08-11T00:00:00Z'
+            )
             """,
             ("0" * 64,),
         )
@@ -1180,6 +1204,28 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
         assert connection.execute("SELECT grade FROM knowledge_cards").fetchone()[0] == "moderate"
 
 
+def test_patient_card_requires_doi_and_processed_full_text(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(claim_id),
+    )
+    for target in ("in_review", "approved"):
+        service.transition_card(card_id, reviewer="reviewer-1", target=target)
+    with database.transaction() as connection:
+        connection.execute("UPDATE papers SET doi = NULL WHERE id = ?", (paper_id,))
+    with pytest.raises(ValueError, match="ineligible evidence"):
+        service.transition_card(card_id, reviewer="reviewer-1", target="published")
+
+
 def test_non_published_and_stale_cards_are_invisible_to_patient_queries(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
@@ -1258,9 +1304,13 @@ def test_ai_differences_require_documented_actor_resolution_before_admission(tmp
 
     assert result["status"] == "completed"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT consistency_resolution FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "The locator was corrected against the full text."
+        assert (
+            connection.execute(
+                "SELECT consistency_resolution FROM paper_admissions WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()[0]
+            == "The locator was corrected against the full text."
+        )
 
 
 def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:

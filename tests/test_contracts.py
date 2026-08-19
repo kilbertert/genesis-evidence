@@ -89,6 +89,7 @@ def test_published_evidence_card_requires_a_claim_source() -> None:
         PublishedEvidenceCard(
             id="card-1",
             condition_code="COND_DYSLIPIDEMIA",
+            scope_key="metric:ldl_c",
             version="1.0.0",
             status="published",
             grade="moderate",
