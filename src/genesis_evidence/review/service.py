@@ -155,8 +155,11 @@ class EvidenceReviewService:
             for collection in item["collections"]
         )
         if terminal_exclusion:
-            if (item.get("admission") or {}).get("status") != "rejected":
-                self.reject_paper(paper_id, reviewer="ai:screening-ledger")
+            admission = item.get("admission") or {}
+            self.reject_paper(
+                paper_id,
+                reviewer=str(admission.get("reviewer") or "ai:screening-ledger"),
+            )
             result = {"status": "completed", "decision": "excluded", "cards": []}
             self.store.record_event(
                 "paper",

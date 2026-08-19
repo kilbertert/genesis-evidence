@@ -209,6 +209,48 @@ class ReviewStore:
             ).rowcount
             if updated != 1:
                 raise ValueError("paper admission item not found")
+            rejected_at = _now()
+            candidate_claims = connection.execute(
+                "SELECT id FROM claims WHERE paper_id = ? AND status = 'candidate'",
+                (paper_id,),
+            ).fetchall()
+            if candidate_claims:
+                connection.executemany(
+                    """
+                    INSERT INTO claim_reviews(claim_id, decision, reviewer, reviewed_at)
+                    VALUES (?, 'rejected', ?, ?)
+                    ON CONFLICT(claim_id) DO UPDATE SET
+                        decision = 'rejected', corrected_text = NULL,
+                        corrected_study_design = NULL, inference = NULL,
+                        risk_of_bias_json = NULL, applicability = NULL,
+                        condition_code = NULL, reviewer = excluded.reviewer,
+                        reviewed_at = excluded.reviewed_at
+                    """,
+                    [(row["id"], reviewer, rejected_at) for row in candidate_claims],
+                )
+                connection.execute(
+                    "UPDATE claims SET status = 'rejected' "
+                    "WHERE paper_id = ? AND status = 'candidate'",
+                    (paper_id,),
+                )
+                connection.execute(
+                    "UPDATE results SET status = 'rejected' "
+                    "WHERE paper_id = ? AND status = 'candidate'",
+                    (paper_id,),
+                )
+                for claim in candidate_claims:
+                    self._audit(
+                        connection,
+                        "claim",
+                        claim["id"],
+                        "claim_rejected_by_paper",
+                        reviewer,
+                        {
+                            "paper_id": paper_id,
+                            "from_status": "candidate",
+                            "to_status": "rejected",
+                        },
+                    )
             stale_cards = self._stale_cards_for_paper(connection, paper_id)
             self._audit(
                 connection,
@@ -219,6 +261,7 @@ class ReviewStore:
                 {
                     "from_status": previous["status"],
                     "to_status": "rejected",
+                    "rejected_candidate_claim_ids": [row["id"] for row in candidate_claims],
                     "stale_cards": stale_cards,
                 },
             )

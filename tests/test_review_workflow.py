@@ -289,12 +289,25 @@ def test_paper_requires_completed_full_text_screening_before_admission(tmp_path)
 
 def test_rejected_paper_remains_blocked_in_review_guidance(tmp_path) -> None:
     database, service = _service(tmp_path)
-    paper_id, _ = _review_case(database)
+    paper_id, claim_id = _review_case(database)
     service.reject_paper(paper_id, reviewer="reviewer-1")
     item = ReviewStore(database).get_review_item(paper_id)
     assert item is not None
     assert item["review_guidance"]["state"] == "blocked"
     assert "已被具名执行者拒绝" in item["review_guidance"]["next_action"]
+    with database.connect() as connection:
+        claim = connection.execute(
+            "SELECT c.status, cr.decision, cr.reviewer FROM claims c "
+            "JOIN claim_reviews cr ON cr.claim_id = c.id WHERE c.id = ?",
+            (claim_id,),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT action, actor FROM audit_events WHERE entity_type = 'claim' "
+            "AND entity_id = ? ORDER BY id DESC LIMIT 1",
+            (claim_id,),
+        ).fetchone()
+    assert tuple(claim) == ("rejected", "rejected", "reviewer-1")
+    assert tuple(audit) == ("claim_rejected_by_paper", "reviewer-1")
 
 
 def test_ai_screening_rejection_is_reopened_for_a_new_topic_version(tmp_path) -> None:
@@ -331,6 +344,38 @@ def test_ai_screening_rejection_is_reopened_for_a_new_topic_version(tmp_path) ->
             "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?", (paper_id,)
         ).fetchone()
     assert tuple(admission) == ("internally_admitted", "ai:checker")
+
+
+def test_ai_closes_legacy_candidate_claims_for_an_already_rejected_paper(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'excluded', "
+            "full_text_decision = NULL WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute(
+            "UPDATE paper_admissions SET status = 'rejected', reviewer = 'reviewer-1' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["decision"] == "excluded"
+    with database.connect() as connection:
+        claim = connection.execute(
+            "SELECT c.status, cr.decision, cr.reviewer FROM claims c "
+            "JOIN claim_reviews cr ON cr.claim_id = c.id WHERE c.id = ?",
+            (claim_id,),
+        ).fetchone()
+        admission = connection.execute(
+            "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+    assert tuple(claim) == ("rejected", "rejected", "reviewer-1")
+    assert tuple(admission) == ("rejected", "reviewer-1")
 
 
 def test_ai_does_not_reopen_a_named_rejection(tmp_path) -> None:
