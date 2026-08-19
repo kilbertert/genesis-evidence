@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..core.store import PaperStore, ReviewStore
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 
-AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.1"
+AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.2"
 
 StudyDesign = Literal[
     "randomized_controlled_trial",
@@ -237,7 +237,10 @@ class EvidenceReviewService:
                 result = {
                     "status": status,
                     "stage": "extraction",
-                    "reason": "dual-AI extraction must complete before autonomous review resumes",
+                    "reason": (
+                        "two independent extraction runs must complete before autonomous "
+                        "review resumes"
+                    ),
                 }
                 self.store.record_event(
                     "paper",
@@ -256,7 +259,7 @@ class EvidenceReviewService:
                 actor="ai:unavailable",
                 requested_by=requester,
                 stage="extraction",
-                reason="paper has no stored full text for dual-AI extraction",
+                reason="paper has no stored full text for independent extraction",
                 trace={},
             )
         actor = f"ai:{trace.get('check_model') or trace.get('model')}"
@@ -392,13 +395,40 @@ class EvidenceReviewService:
                     "reason": "a non-excluded collection exists for a new screening evaluation",
                 },
             )
-        if guidance["blockers"]:
+        consistency_resolution = (item.get("admission") or {}).get("consistency_resolution")
+        automatically_adjudicated = False
+        if (item.get("consistency") or {}).get("verdict") == "needs_review":
+            automatically_adjudicated = not bool(consistency_resolution)
+            consistency_resolution = consistency_resolution or _automatic_resolution(
+                guidance["issues"]
+            )
+            if automatically_adjudicated:
+                self.store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_consistency_adjudicated",
+                    actor=actor,
+                    detail={
+                        **context,
+                        "issues": guidance["issues"],
+                        "consistency_resolution": consistency_resolution,
+                    },
+                )
+        blockers = list(guidance["blockers"])
+        if automatically_adjudicated:
+            dual_ai_blockers = {
+                str(check["detail"])
+                for check in guidance["checks"]
+                if check["id"] == "dual_ai"
+            }
+            blockers = [blocker for blocker in blockers if blocker not in dual_ai_blockers]
+        if blockers:
             return self._automation_attention(
                 paper_id,
                 actor=actor,
                 requested_by=requester,
                 stage="evidence_gate",
-                reason=str(guidance["blockers"][0]),
+                reason=str(blockers[0]),
                 trace=trace,
             )
         suggested = guidance["admission_suggestion"]
@@ -409,13 +439,8 @@ class EvidenceReviewService:
                 actor=actor,
                 requested_by=requester,
                 stage="study_identity",
-                reason="study design remains uncertain after dual-AI review",
+                reason="study design remains uncertain after independent extraction review",
                 trace=trace,
-            )
-        consistency_resolution = (item.get("admission") or {}).get("consistency_resolution")
-        if (item.get("consistency") or {}).get("verdict") == "needs_review":
-            consistency_resolution = consistency_resolution or _automatic_resolution(
-                guidance["issues"]
             )
         if (item.get("admission") or {}).get("status") != "internally_admitted":
             self.admit_paper(
@@ -464,10 +489,38 @@ class EvidenceReviewService:
                 and not ai_approval_recheck
             ):
                 continue
+            suggestion = claim.get("review_suggestion") or {}
+            source_verification = None
+            if suggestion.get("decision") == "approved":
+                source_verification = _automatic_source_verification(
+                    claim,
+                    extraction=item.get("extraction"),
+                    trace=trace,
+                )
+                self.store.record_event(
+                    "claim",
+                    str(claim["id"]),
+                    "autonomous_claim_source_verification",
+                    actor=actor,
+                    detail={**context, **source_verification},
+                )
+                if not source_verification["verified"]:
+                    return self._automation_attention(
+                        paper_id,
+                        actor=actor,
+                        requested_by=requester,
+                        stage="claim_source_verification",
+                        reason=(
+                            f"Claim {claim['id']} cannot be verified: "
+                            f"{'; '.join(source_verification['failures'])}"
+                        ),
+                        trace=trace,
+                    )
             review = _automatic_claim_review(
                 claim,
                 issues=guidance["issues"],
                 admitted_conditions=admitted_conditions,
+                source_verified=bool(source_verification and source_verification["verified"]),
             )
             if review is None:
                 return self._automation_attention(
@@ -749,6 +802,7 @@ def _automatic_claim_review(
     *,
     issues: list[dict[str, object]],
     admitted_conditions: list[str],
+    source_verified: bool,
 ) -> ClaimReviewInput | None:
     suggestion = claim.get("review_suggestion") or {}
     suggested_decision = str(suggestion.get("decision") or "")
@@ -805,10 +859,14 @@ def _automatic_claim_review(
     risk["rationale"] = (
         str(risk.get("rationale") or "AI review found no extracted limitations.")
         + (
-            " Material dual-AI differences were retained in the audit trail, so this result "
+            " Material independent-extraction differences were retained in the audit trail, so "
+            "this result "
             "is conservatively rated high risk."
             if material
-            else " Dual-AI source checks found no unresolved material issue for this result."
+            else (
+                " Independent extraction source checks found no unresolved material issue for "
+                "this result."
+            )
         )
     )[:4000]
     return ClaimReviewInput(
@@ -819,8 +877,64 @@ def _automatic_claim_review(
         risk_of_bias=risk,
         applicability=str(suggestion.get("applicability") or "AI applicability review completed."),
         condition_code=condition_code,
-        source_verified=True,
+        source_verified=source_verified,
     )
+
+
+def _automatic_source_verification(
+    claim: dict[str, object],
+    *,
+    extraction: object,
+    trace: dict[str, object],
+) -> dict[str, object]:
+    """Verify the persisted source chain before an autonomous Claim approval."""
+
+    failures: list[str] = []
+    result_id = str(claim.get("result_id") or "").strip()
+    evidence = _source_text(claim.get("evidence_text"))
+    locator = _source_text(claim.get("locator"))
+    if not result_id:
+        failures.append("missing structured Result")
+    if not evidence or not locator:
+        failures.append("missing Claim evidence or locator")
+    if evidence != _source_text(claim.get("result_evidence_text")) or locator != _source_text(
+        claim.get("result_locator")
+    ):
+        failures.append("Claim does not match its structured Result source")
+    extraction_id = str(trace.get("id") or "").strip()
+    if extraction_id != str(claim.get("extraction_id") or "").strip() or extraction_id != str(
+        claim.get("result_extraction_id") or ""
+    ).strip():
+        failures.append("Claim and Result are not linked to the current extraction")
+    required_runs = (
+        "model",
+        "extraction_run_id",
+        "second_model",
+        "second_run_id",
+        "check_model",
+        "check_run_id",
+    )
+    if any(not str(trace.get(name) or "").strip() for name in required_runs):
+        failures.append("missing persisted extraction provider run")
+    extracted_claims = extraction.get("claims", []) if isinstance(extraction, dict) else []
+    if not any(
+        isinstance(extracted, dict)
+        and evidence in _source_text(extracted.get("evidence"))
+        and locator == _source_text(extracted.get("locator"))
+        for extracted in extracted_claims
+    ):
+        failures.append("evidence excerpt is absent from the primary stored extraction")
+    return {
+        "verified": not failures,
+        "verification_policy": AUTONOMOUS_REVIEW_POLICY_VERSION,
+        "result_id": result_id,
+        "evidence_source": "paper_extractions.extraction_json",
+        "failures": failures,
+    }
+
+
+def _source_text(value: object) -> str:
+    return re.sub(r"\\s+", " ", str(value or "")).strip().casefold()
 
 
 def _next_profile_version(topic_version: str, used_versions: set[str]) -> str:

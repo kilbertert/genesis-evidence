@@ -694,6 +694,10 @@ def test_ai_completes_review_and_card_without_human_participation(tmp_path) -> N
     assert trace["extraction_run_id"] == "extract-run-a"
     assert trace["second_run_id"] == "extract-run-b"
     assert trace["check_run_id"] == "check-run"
+    verification = next(
+        event for event in events if event["action"] == "autonomous_claim_source_verification"
+    )
+    assert json.loads(verification["detail_json"])["verified"] is True
     service.review_claim(
         claim_id,
         reviewer="human-exception-reviewer",
@@ -701,6 +705,41 @@ def test_ai_completes_review_and_card_without_human_participation(tmp_path) -> N
     )
     with database.connect() as connection:
         assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "stale"
+
+
+def test_ai_stops_when_claim_is_not_linked_to_current_extraction(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extractions(
+                id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json, created_at
+            )
+            SELECT 'new-extraction', paper_id, model, 'new-extract-run', extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json,
+                '2026-08-12T00:00:00Z'
+            FROM paper_extractions WHERE paper_id = ?
+            """,
+            (paper_id,),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "attention_required"
+    assert result["stage"] == "claim_source_verification"
+    with database.connect() as connection:
+        event = connection.execute(
+            "SELECT detail_json FROM audit_events WHERE entity_type = 'claim' AND entity_id = ? "
+            "AND action = 'autonomous_claim_source_verification'",
+            (claim_id,),
+        ).fetchone()
+    detail = json.loads(event["detail_json"])
+    assert detail["verified"] is False
+    assert "Claim and Result are not linked to the current extraction" in detail["failures"]
 
 
 def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None:

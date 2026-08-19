@@ -11,6 +11,8 @@ def _record(**overrides):
         "source_file_index": 1,
         "evidence_text": "空腹血糖 6.8 mmol/L 参考范围 3.9-6.1 H",
         "source_id": "report-1/page-2",
+        "source_url": "/api/health/report/7/files/1/pages/2",
+        "bbox": [120, 240, 800, 960],
         "bbox_normalized": [10, 20, 100, 120],
         "abnormal_flag": "normal",
     }
@@ -52,6 +54,8 @@ def test_adapter_preserves_sources_and_recomputes_without_model_flag() -> None:
     assert result.request.observations[0].source_file_index == 1
     assert result.request.observations[0].source_page == 2
     assert result.request.observations[0].bbox_normalized == [10, 20, 100, 120]
+    assert result.request.observations[0].bbox == [120, 240, 800, 960]
+    assert result.request.observations[0].source_url == "/api/health/report/7/files/1/pages/2"
     assert result.request.observations[1].source_file_index == 2
     assert result.request.observations[1].source_id == "report-2/page-3"
 

@@ -586,6 +586,7 @@ class PaperStore:
                 SELECT job.id, job.paper_id, job.error_class, job.error_message
                 FROM paper_extraction_jobs job
                 WHERE job.status = 'failed'
+                    AND job.error_class <> 'ScreeningExcluded'
                     AND NOT EXISTS (
                         SELECT 1 FROM collection_papers cp
                         WHERE cp.paper_id = job.paper_id

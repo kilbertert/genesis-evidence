@@ -65,7 +65,11 @@ def create_app(
         require_api_key(x_genesis_evidence_key)
         return [{"code": code, "label": label} for code, label in METRIC_LABELS.items()]
 
-    @app.post("/api/evidence/matches", response_model=EvidenceMatchResponse)
+    @app.post(
+        "/api/evidence/matches",
+        response_model=EvidenceMatchResponse,
+        response_model_exclude_none=True,
+    )
     def match_evidence(
         request: EvidenceMatchRequest,
         x_genesis_evidence_key: str = Header(default=""),

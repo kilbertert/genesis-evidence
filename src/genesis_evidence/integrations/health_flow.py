@@ -87,6 +87,11 @@ def build_evidence_request(
         if raw_bbox is not None and bbox is None:
             skipped.append(_skip(position, "invalid_bbox"))
             continue
+        raw_pixel_bbox = record.get("bbox")
+        pixel_bbox = _bbox(raw_pixel_bbox, upper=None)
+        if raw_pixel_bbox is not None and pixel_bbox is None:
+            skipped.append(_skip(position, "invalid_bbox"))
+            continue
         observations.append(
             EvidenceMatchObservation(
                 observation_id=f"hf-observation-{position}",
@@ -100,6 +105,8 @@ def build_evidence_request(
                 source_file_index=file_index,
                 source_page=page,
                 source_id=_text(record.get("source_id")) or None,
+                source_url=_text(record.get("source_url")) or None,
+                bbox=pixel_bbox,
                 bbox_normalized=bbox,
             )
         )
@@ -142,14 +149,19 @@ def _positive_int(value: object) -> int | None:
     return number if number >= 1 else None
 
 
-def _bbox(value: object) -> list[float] | None:
+def _bbox(value: object, *, upper: float | None = 1000) -> list[float] | None:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 4:
         return None
     try:
         coordinates = [float(item) for item in value]
     except (TypeError, ValueError):
         return None
-    if any(not math.isfinite(item) or not 0 <= item <= 1000 for item in coordinates):
+    if any(
+        not math.isfinite(item)
+        or item < 0
+        or (upper is not None and item > upper)
+        for item in coordinates
+    ):
         return None
     if coordinates[0] > coordinates[2] or coordinates[1] > coordinates[3]:
         return None

@@ -394,6 +394,12 @@ def test_excluded_paper_failure_is_preserved_as_terminal_audit(tmp_path) -> None
     assert event["action"] == "extraction_superseded_by_screening"
     assert "PaperAnalysisError" in event["detail_json"]
     assert store.list_extraction_jobs() == []
+    assert store.supersede_excluded_extraction_failures(reviewer="ai:retrieval-worker") == 0
+    with database.connect() as connection:
+        event_count = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'extraction_superseded_by_screening'"
+        ).fetchone()[0]
+    assert event_count == 1
 
 
 def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:

@@ -73,9 +73,11 @@ def test_observation_bbox_is_bounded_and_ordered() -> None:
         evidence_text="空腹血糖 6.8 mmol/L 3.9-6.1",
         source_file_index=1,
         source_page=1,
+        bbox=[120, 240, 800, 960],
         bbox_normalized=[10, 20, 100, 120],
     )
     assert observation.bbox_normalized == [10, 20, 100, 120]
+    assert observation.bbox == [120, 240, 800, 960]
     with pytest.raises(ValidationError):
         EvidenceMatchObservation(
             **observation.model_dump(exclude={"bbox_normalized"}),

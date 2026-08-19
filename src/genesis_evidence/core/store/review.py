@@ -763,7 +763,9 @@ class ReviewStore:
                     cr.condition_code, cr.reviewer, cr.reviewed_at,
                     r.population, r.baseline_nutrient_status, r.ingredient_name,
                     r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
-                    r.effect_estimate, r.statistical_details
+                    r.effect_estimate, r.statistical_details,
+                    r.evidence_text AS result_evidence_text, r.locator AS result_locator,
+                    r.extraction_id AS result_extraction_id
                 FROM claims c LEFT JOIN claim_reviews cr ON cr.claim_id = c.id
                 LEFT JOIN results r ON r.id = c.result_id
                 WHERE c.paper_id = ? ORDER BY c.created_at, c.id
@@ -1771,9 +1773,9 @@ def _review_guidance(
                 },
                 {
                     "id": "dual_ai",
-                    "label": "双 AI 独立抽取与差异",
+                    "label": "两次独立同模型抽取与差异",
                     "status": "not_applicable",
-                    "detail": "没有合法取得的全文，双 AI 全文抽取不适用。",
+                    "detail": "没有合法取得的全文，两次独立全文抽取不适用。",
                 },
                 {
                     "id": "structured_results",
@@ -1869,7 +1871,7 @@ def _review_guidance(
         },
         {
             "id": "dual_ai",
-            "label": "双 AI 独立抽取与差异",
+            "label": "两次独立同模型抽取与差异",
             "status": (
                 "blocked" if not extraction else ("action" if unresolved_consistency else "pass")
             ),
@@ -1880,7 +1882,7 @@ def _review_guidance(
                 else (
                     "关键差异已由具名执行者裁决。"
                     if material_issues
-                    else ("差异已裁决或两次抽取一致。" if extraction else "尚无完整双 AI 抽取。")
+                    else ("差异已裁决或两次抽取一致。" if extraction else "尚无完整独立抽取。")
                 )
             ),
         },

@@ -668,6 +668,10 @@ class ReportStore:
                     "source_id": observation.source_id,
                     "bbox_normalized": observation.bbox_normalized,
                 }
+                if observation.source_url:
+                    source_observation["source_url"] = observation.source_url
+                if observation.bbox is not None:
+                    source_observation["bbox"] = observation.bbox
                 for condition in conditions:
                     expected_scope = f"metric:{observation.metric_code}"
                     card = cards.get((condition.code, expected_scope))
