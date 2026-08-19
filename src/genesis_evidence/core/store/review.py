@@ -571,7 +571,10 @@ class ReviewStore:
         }
         with self.database.transaction() as connection:
             card = connection.execute(
-                "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
+                "SELECT kc.*, ep.scope_key FROM knowledge_cards kc "
+                "JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id "
+                "WHERE kc.id = ?",
+                (card_id,),
             ).fetchone()
             if card is None:
                 raise ValueError("knowledge card not found")
@@ -587,8 +590,11 @@ class ReviewStore:
                     """
                     UPDATE knowledge_cards SET status = 'stale'
                     WHERE condition_code = ? AND status = 'published' AND id <> ?
+                        AND evidence_profile_id IN (
+                            SELECT id FROM evidence_profiles WHERE scope_key = ?
+                        )
                     """,
-                    (card["condition_code"], card_id),
+                    (card["condition_code"], card_id, card["scope_key"]),
                 )
             connection.execute(
                 """

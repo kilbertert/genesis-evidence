@@ -613,6 +613,72 @@ def test_profile_scope_does_not_treat_concentrations_as_ratio() -> None:
     }
 
 
+def test_publishing_card_only_stales_the_same_outcome_scope(tmp_path, monkeypatch) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES ('topic', 'lipid-scopes', '1', 'COND_DYSLIPIDEMIA', 'locked',
+                'Test question', '{}', '[]', '[]', '[]', '[]', '2026-08-12', 'reviewer',
+                '2026-08-12T00:00:00Z', 'reviewer', '2026-08-12T00:00:00Z')
+            """
+        )
+        for profile_id, scope_key, version in (
+            ("profile-old", "metric:ldl_c", "1.0.0"),
+            ("profile-other", "metric:hdl_c", "1.0.1"),
+            ("profile-new", "metric:ldl_c", "1.0.2"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO evidence_profiles(
+                    id, topic_id, condition_code, scope_key, version,
+                    ingredient_name, ingredient_form,
+                    population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                    estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                    evidence_cutoff_date, reviewer, reviewed_at, created_at
+                ) VALUES (?, 'topic', 'COND_DYSLIPIDEMIA', ?, ?,
+                    'Dietary fat', 'As reported',
+                    'Adults', 'Mixed', 'As reported', 'Comparator', 'Lipid outcome',
+                    'Follow-up', 'Target', 1, 'moderate', 'Test profile', '2026-08-12',
+                    'reviewer', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+                """,
+                (profile_id, scope_key, version),
+            )
+        for card_id, profile_id, status, version in (
+            ("card-old", "profile-old", "published", "1.0.0"),
+            ("card-other", "profile-other", "published", "1.0.1"),
+            ("card-new", "profile-new", "approved", "1.0.2"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO knowledge_cards(
+                    id, condition_code, version, status, grade, evidence_profile_id, reviewer,
+                    reviewed_at, published_at, patient_visible_body, created_at
+                ) VALUES (?, 'COND_DYSLIPIDEMIA', ?, ?, 'moderate', ?, 'reviewer',
+                    '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z', 'Test card',
+                    '2026-08-12T00:00:00Z')
+                """,
+                (card_id, version, status, profile_id),
+            )
+    monkeypatch.setattr(ReviewStore, "_require_publishable", lambda *_: None)
+
+    ReviewStore(database).transition_card("card-new", reviewer="reviewer", target="published")
+
+    with database.connect() as connection:
+        statuses = dict(connection.execute("SELECT id, status FROM knowledge_cards").fetchall())
+    assert statuses == {
+        "card-new": "published",
+        "card-old": "stale",
+        "card-other": "published",
+    }
+
+
 def test_profile_version_is_monotonic_within_the_topic_series() -> None:
     assert _next_profile_version("4", {"3.0.9", "4.0.0", "4.0.2"}) == "4.0.3"
 
