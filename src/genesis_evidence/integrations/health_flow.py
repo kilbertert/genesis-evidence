@@ -1,4 +1,4 @@
-"""Deterministic adapter from Health-Flow metric rows to Evidence API v1."""
+"""Deterministic adapter from Health-Flow metric rows to Evidence API v2."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.contracts import EvidenceMatchObservation, EvidenceMatchRequest
-from ..core.metrics import METRIC_ALIASES, normalize_metric_name
-from ..reports.extraction import evidence_contains_value
+from ..core.metrics import METRIC_ALIASES, evidence_contains_value, normalize_metric_name
 
 _NUMBER = r"-?\d+(?:\.\d+)?"
 _NUMBER_RE = re.compile(rf"(?<![\d.]){_NUMBER}(?![\d.])")

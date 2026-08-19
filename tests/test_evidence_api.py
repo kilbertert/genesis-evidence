@@ -10,9 +10,9 @@ API_KEY = "test-evidence-key-0123456789"
 def _client(tmp_path, *, api_key: str = API_KEY) -> tuple[Database, TestClient]:
     path = tmp_path / "evidence.sqlite3"
     database = Database(path)
+    database.initialize()
     app = create_app(
         database_path=path,
-        object_path=tmp_path / "objects",
         evidence_api_key=api_key,
     )
     return database, TestClient(

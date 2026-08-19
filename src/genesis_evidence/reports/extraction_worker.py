@@ -8,7 +8,9 @@ import os
 import time
 from pathlib import Path
 
-from ..core.store import Database, ObjectStore, ReportStore
+from ..core.store.database import Database
+from ..core.store.papers import ObjectStore
+from ..core.store.reports import ReportStore
 from .extraction import (
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_REPORT_MODEL,

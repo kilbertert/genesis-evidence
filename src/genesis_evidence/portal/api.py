@@ -1,4 +1,4 @@
-"""FastAPI portal for report upload, confirmation, and reviewed-card matching."""
+"""Authenticated, read-only API for published evidence matching."""
 
 from __future__ import annotations
 
@@ -12,13 +12,23 @@ from fastapi.responses import JSONResponse
 
 from ..core.contracts import EvidenceMatchRequest, EvidenceMatchResponse
 from ..core.metrics import METRIC_LABELS
-from ..core.store import Database, ObjectStore, ReportStore
+from ..core.store import Database, EvidenceStore
+
+_REQUIRED_EVIDENCE_TABLES = frozenset(
+    {
+        "audit_events",
+        "card_claims",
+        "claims",
+        "evidence_profiles",
+        "knowledge_cards",
+        "papers",
+    }
+)
 
 
 def create_app(
     *,
     database_path: os.PathLike[str] | str,
-    object_path: os.PathLike[str] | str,
     evidence_api_key: str,
 ) -> FastAPI:
     configured_key = evidence_api_key.strip()
@@ -27,8 +37,14 @@ def create_app(
     if len(configured_key) < 24:
         raise ValueError("GENESIS_EVIDENCE_API_KEY must be at least 24 characters")
     database = Database(database_path)
-    database.initialize()
-    store = ReportStore(database, ObjectStore(object_path))
+    if not database.path.is_file():
+        raise ValueError("evidence database must be initialized before starting the API")
+    missing_tables = _REQUIRED_EVIDENCE_TABLES - set(database.table_names())
+    if missing_tables:
+        raise ValueError(
+            "evidence database is missing required tables: " + ", ".join(sorted(missing_tables))
+        )
+    store = EvidenceStore(database)
     app = FastAPI(title="Genesis Evidence API", docs_url=None, redoc_url=None)
 
     @app.middleware("http")
@@ -100,7 +116,6 @@ def create_app(
 def main() -> None:
     app = create_app(
         database_path=os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3"),
-        object_path=os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects"),
         evidence_api_key=os.getenv("GENESIS_EVIDENCE_API_KEY", ""),
     )
     uvicorn.run(
