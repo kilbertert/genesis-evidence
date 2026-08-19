@@ -586,6 +586,33 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
 
+def test_adult_40_plus_scope_accepts_explicit_postmenopausal_population() -> None:
+    assert _picots_text_matches(
+        "Adults aged 40 and older", "Postmenopausal women", require_qualifiers=False
+    )
+    assert not _picots_text_matches(
+        "Adults aged 40 and older", "Women", require_qualifiers=False
+    )
+
+
+def test_profile_scope_does_not_treat_concentrations_as_ratio() -> None:
+    picots = {
+        "population": "Adults aged 40 and older",
+        "intervention_or_exposure": "Vitamin D supplementation",
+        "outcomes": "25-hydroxyvitamin D serum concentration",
+        "timing": "8 weeks or longer",
+    }
+    dimensions = {
+        "population": "Postmenopausal women",
+        "ingredient_name": "Vitamin D",
+        "outcome": "Mean serum 25(OH)D concentrations",
+        "timepoint": "After 12 weeks of treatment",
+    }
+    assert _profile_scopes(picots, "COND_VITAMIN_D_DEFICIENCY", dimensions) == {
+        "metric:25_oh_vitamin_d": "25-羟维生素 D"
+    }
+
+
 def test_profile_version_is_monotonic_within_the_topic_series() -> None:
     assert _next_profile_version("4", {"3.0.9", "4.0.0", "4.0.2"}) == "4.0.3"
 

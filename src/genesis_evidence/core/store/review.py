@@ -1434,10 +1434,17 @@ def _picots_text_matches(
     topic_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", topic_text.casefold())
     if topic_age:
         extracted_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold())
+        extracted_folded = extracted_text.casefold()
         adult_scope = int(topic_age.group(1)) <= 18 and re.search(
-            r"\badults?\b", extracted_text.casefold()
+            r"\badults?\b", extracted_folded
         )
-        if not adult_scope and (
+        # A locked adult-40+ topic may receive an explicit postmenopausal
+        # population label; this is a bounded adult proxy, not a generic
+        # inference for women or older-sounding text.
+        postmenopausal_scope = int(topic_age.group(1)) >= 40 and re.search(
+            r"\bpostmenopausal\b", extracted_folded
+        )
+        if not adult_scope and not postmenopausal_scope and (
             not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1))
         ):
             return False
@@ -1558,7 +1565,7 @@ def _profile_scopes(
     topic_outcome = str(picots.get("outcomes") or "").strip()
     result_outcome = values.get("outcome", "")
     compact_result = _compact_text(result_outcome)
-    if "ratio" in result_outcome.casefold() or "nonhdl" in compact_result:
+    if re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result:
         return {}
     condition = CONDITION_BY_CODE.get(condition_code)
     scopes = {
