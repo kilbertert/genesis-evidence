@@ -120,7 +120,7 @@ class EvidenceMatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     observations: list[EvidenceMatchObservation] = Field(max_length=600)
 
     @model_validator(mode="after")
@@ -277,7 +277,7 @@ class EvidenceMatchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     sorting_version: Literal["published-card-reference-range-v1"]
     correlation_id: str
     findings: list[EvidenceFinding]

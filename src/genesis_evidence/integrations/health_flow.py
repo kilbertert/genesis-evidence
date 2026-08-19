@@ -39,7 +39,7 @@ def build_evidence_request(
 
     if not confirmed:
         return HealthFlowAdapterResult(
-            request=EvidenceMatchRequest(schema_version="1", observations=[]),
+            request=EvidenceMatchRequest(schema_version="2", observations=[]),
             skipped=tuple(
                 _skip(position, "confirmation_required") for position, _ in enumerate(records, 1)
             ),
@@ -104,7 +104,7 @@ def build_evidence_request(
             )
         )
     return HealthFlowAdapterResult(
-        request=EvidenceMatchRequest(schema_version="1", observations=observations),
+        request=EvidenceMatchRequest(schema_version="2", observations=observations),
         skipped=tuple(skipped),
     )
 

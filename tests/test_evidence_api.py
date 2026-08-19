@@ -152,7 +152,7 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
         "/api/evidence/matches",
         headers={"X-Correlation-Id": "00000000-0000-4000-8000-000000000001"},
         json={
-            "schema_version": "1",
+            "schema_version": "2",
             "observations": [
                 _observation(),
                 _observation(
@@ -296,7 +296,7 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     )
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "1", "observations": [triglycerides]},
+        json={"schema_version": "2", "observations": [triglycerides]},
     )
 
     assert response.status_code == 200
@@ -323,7 +323,7 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     )
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "1", "observations": [ldl]},
+        json={"schema_version": "2", "observations": [ldl]},
     )
     assert response.status_code == 200
     assert response.json()["findings"][0]["card"]["scope_key"] == "metric:ldl_c"
@@ -331,14 +331,14 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
 
 def test_evidence_api_requires_key_and_confirmed_status(tmp_path) -> None:
     _, client = _client(tmp_path, api_key="secret-key-012345678901234")
-    payload = {"schema_version": "1", "observations": [_observation()]}
+    payload = {"schema_version": "2", "observations": [_observation()]}
     unauthenticated = TestClient(client.app)
     assert unauthenticated.post("/api/evidence/matches", json=payload).status_code == 401
     assert (
         client.post(
             "/api/evidence/matches",
             json={
-                "schema_version": "1",
+                "schema_version": "2",
                 "observations": [_observation(confirmation_status="pending")],
             },
         ).status_code
@@ -351,7 +351,7 @@ def test_evidence_api_rejects_non_opaque_correlation_id(tmp_path) -> None:
     response = client.post(
         "/api/evidence/matches",
         headers={"X-Correlation-Id": "patient-name"},
-        json={"schema_version": "1", "observations": []},
+        json={"schema_version": "2", "observations": []},
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "correlation ID must be a UUID"
@@ -362,7 +362,7 @@ def test_evidence_api_rejects_missing_source_number(tmp_path) -> None:
     response = client.post(
         "/api/evidence/matches",
         json={
-            "schema_version": "1",
+            "schema_version": "2",
             "observations": [_observation(evidence_text="空腹血糖 6.8 mmol/L")],
         },
     )

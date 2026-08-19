@@ -36,7 +36,7 @@ def test_evidence_endpoints_require_key_and_legacy_reports_are_gone(tmp_path) ->
     assert (
         unauthenticated.post(
             "/api/evidence/matches",
-            json={"schema_version": "1", "observations": []},
+            json={"schema_version": "2", "observations": []},
         ).status_code
         == 401
     )

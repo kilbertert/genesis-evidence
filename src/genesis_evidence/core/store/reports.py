@@ -724,7 +724,7 @@ class ReportStore:
                 card = item.pop("card")
                 result_findings.append({**item, "card": card})
             result = {
-                "schema_version": "1",
+                "schema_version": "2",
                 "sorting_version": ASSESSMENT_SORTING_VERSION,
                 "correlation_id": correlation_id,
                 "findings": result_findings,
