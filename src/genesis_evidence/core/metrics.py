@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 
@@ -43,8 +44,17 @@ def normalize_metric_name(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", normalized)
 
 
+def evidence_contains_value(evidence: str, value: float) -> bool:
+    """Return whether a finite numeric value appears verbatim in source text."""
+
+    normalized = unicodedata.normalize("NFKC", evidence)
+    return any(
+        math.isclose(float(match.group()), value, rel_tol=1e-9, abs_tol=1e-12)
+        for match in re.finditer(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])", normalized)
+    )
+
+
 METRIC_ALIASES = {
     **{normalize_metric_name(code): code for code in METRIC_LABELS},
     **{normalize_metric_name(label): code for code, label in METRIC_LABELS.items()},
 }
-

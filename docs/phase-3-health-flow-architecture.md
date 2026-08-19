@@ -36,7 +36,7 @@ The boundary is HTTP/JSON. No shared SQLite file, ORM model, vector index, or
 LLM prompt is shared between the services. A local deployment may put both
 processes on the same host, but the contract remains the same.
 
-## Evidence API v1
+## Evidence API v2
 
 `POST /api/evidence/matches`
 
@@ -51,7 +51,7 @@ Request (only confirmed observations are accepted):
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "observations": [
     {
       "observation_id": "hf-metric-1",
@@ -130,10 +130,10 @@ schema does not yet persist a confirmation field.
 | Stage | Deliverable | Exit check |
 |---|---|---|
 | 0 | Baseline backup and audit | SHA-256 manifest and preserved legacy worktree |
-| 1 | Evidence API v1 in this branch | Contract tests; published-only and evidence gates pass |
+| 1 | Evidence API v2 in this branch | Contract tests; published-only and evidence gates pass |
 | 2 | Repository adapter | Deterministic Health-Flow row mapping and contract test pass |
 | 3 | Real canary | De-identified report set, metric accuracy and traceability measured |
-| 4 | Upstream cutover | Health-Flow confirmation UI calls v1; old portal frozen and rollback documented |
+| 4 | Upstream cutover | Health-Flow confirmation UI calls v2; old portal frozen and rollback documented |
 
 Stage 1 intentionally does not copy Health-Flow code into this repository and
 does not add Milvus, Neo4j, GraphRAG, or a second evidence database.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from genesis_evidence.core.store import Database, ObjectStore, ReportStore
+from genesis_evidence.core.store import Database, ObjectStore
+from genesis_evidence.core.store.reports import ReportStore
 from genesis_evidence.reports.extraction import (
     HealthReportExtractor,
     ModelObservation,

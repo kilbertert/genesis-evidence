@@ -4,10 +4,9 @@ from dataclasses import replace
 
 import pytest
 
-from genesis_evidence.core.store import (
+from genesis_evidence.core.store import Database, ObjectStore
+from genesis_evidence.core.store.reports import (
     ConfirmationInput,
-    Database,
-    ObjectStore,
     ReportAccessDenied,
     ReportHandle,
     ReportStore,

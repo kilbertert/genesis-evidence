@@ -19,6 +19,21 @@ ReportStatus = Literal[
 ]
 
 
+def _validate_bbox(value: list[float] | None, *, upper: float | None, field: str) -> None:
+    if value is None:
+        return
+    if any(
+        not math.isfinite(coordinate)
+        or coordinate < 0
+        or (upper is not None and coordinate > upper)
+        for coordinate in value
+    ):
+        suffix = f" in 0..{upper:g}" if upper is not None else ""
+        raise ValueError(f"{field} coordinates must be finite values{suffix}")
+    if value[0] > value[2] or value[1] > value[3]:
+        raise ValueError(f"{field} must be ordered as x1,y1,x2,y2")
+
+
 class ClaimReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +103,8 @@ class EvidenceMatchObservation(BaseModel):
     source_file_index: int = Field(ge=1)
     source_page: int = Field(ge=1)
     source_id: str | None = Field(default=None, max_length=240)
+    source_url: str | None = Field(default=None, max_length=500)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(default=None, min_length=4, max_length=4)
 
     @model_validator(mode="after")
@@ -101,17 +118,8 @@ class EvidenceMatchObservation(BaseModel):
             and self.reference_low > self.reference_high
         ):
             raise ValueError("reference_low cannot exceed reference_high")
-        if self.bbox_normalized is not None:
-            if any(
-                not math.isfinite(coordinate) or not 0 <= coordinate <= 1000
-                for coordinate in self.bbox_normalized
-            ):
-                raise ValueError("bbox_normalized coordinates must be finite values in 0..1000")
-            if (
-                self.bbox_normalized[0] > self.bbox_normalized[2]
-                or self.bbox_normalized[1] > self.bbox_normalized[3]
-            ):
-                raise ValueError("bbox_normalized must be ordered as x1,y1,x2,y2")
+        _validate_bbox(self.bbox, upper=None, field="bbox")
+        _validate_bbox(self.bbox_normalized, upper=1000, field="bbox_normalized")
         return self
 
 
@@ -120,7 +128,7 @@ class EvidenceMatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     observations: list[EvidenceMatchObservation] = Field(max_length=600)
 
     @model_validator(mode="after")
@@ -144,21 +152,14 @@ class EvidenceSourceObservation(BaseModel):
     source_file_index: int = Field(ge=1)
     source_page: int = Field(ge=1)
     source_id: str | None = None
+    source_url: str | None = None
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(default=None, min_length=4, max_length=4)
 
     @model_validator(mode="after")
     def validate_bbox(self) -> EvidenceSourceObservation:
-        if self.bbox_normalized is not None:
-            if any(
-                not math.isfinite(coordinate) or not 0 <= coordinate <= 1000
-                for coordinate in self.bbox_normalized
-            ):
-                raise ValueError("bbox_normalized coordinates must be finite values in 0..1000")
-            if (
-                self.bbox_normalized[0] > self.bbox_normalized[2]
-                or self.bbox_normalized[1] > self.bbox_normalized[3]
-            ):
-                raise ValueError("bbox_normalized must be ordered as x1,y1,x2,y2")
+        _validate_bbox(self.bbox, upper=None, field="bbox")
+        _validate_bbox(self.bbox_normalized, upper=1000, field="bbox_normalized")
         return self
 
 
@@ -178,6 +179,7 @@ class PublishedEvidenceCard(BaseModel):
 
     id: str
     condition_code: str
+    scope_key: str = Field(min_length=1)
     version: str
     status: Literal["published"]
     grade: Literal["high", "moderate", "low", "very_low"]
@@ -247,13 +249,16 @@ class PatientReplyFinding(BaseModel):
     condition_code: str
     condition_name: str
     urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: Literal["high", "moderate", "low", "very_low"]
     needs_recheck: bool
     department: str
     recheck_direction: str
     card_id: str
     card_version: str
+    evidence_profile_id: str
     patient_visible_body: str
+    sources: list[EvidenceSourceReference] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[EvidenceSourceObservation]
 
@@ -273,7 +278,7 @@ class EvidenceMatchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     sorting_version: Literal["published-card-reference-range-v1"]
     correlation_id: str
     findings: list[EvidenceFinding]

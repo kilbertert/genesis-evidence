@@ -32,7 +32,7 @@ sessionStorage 并随每次请求发送。
 
 | unit | 作用 |
 |---|---|
-| `genesis-evidence-portal.service` | 只读 Evidence API(FastAPI,8125) |
+| `genesis-evidence-portal.service` | 只读 Evidence API(FastAPI,8125)；不承载报告上传/解析 |
 | `genesis-evidence-review.service` | 审核工作台(FastAPI,8126) |
 | `genesis-evidence-worker.service` | 论文抽取后台 worker,逐条消费 `paper_extraction_jobs` |
 | `genesis-evidence-frp.service` | FRP 隧道,暴露上面两个 HTTP 服务 |
@@ -60,7 +60,7 @@ systemctl --user restart genesis-evidence-worker   # 改了模型 env 后重启
   `POST /api/evidence/matches`，并通过 `X-Genesis-Evidence-Key` 认证；上传接口先持久化并返回 `202 processing`,当前进程内后台解析完成后
   状态进入 `pending_confirmation`,前端通过带访问令牌的短请求轮询,不依赖反向代理长连接。持久化报告队列在后续阶段补齐。
 
-数据:`var/genesis-evidence.sqlite3`(SQLite)、`var/objects`(内容寻址全文)。
+数据:`var/genesis-evidence.sqlite3`(SQLite)。Evidence API 不读取报告对象存储。
 
 ## 与 genesis-health 的关系
 

@@ -575,10 +575,12 @@ class ReportStore:
             card_rows = connection.execute(
                 """
                 SELECT kc.id, kc.condition_code, kc.version, kc.grade,
-                    kc.published_at, kc.evidence_profile_id, kc.patient_visible_body,
+                    kc.published_at, kc.evidence_profile_id, ep.scope_key,
+                    kc.patient_visible_body,
                     cc.claim_id, cc.evidence_text AS card_evidence, cc.locator,
                     cl.candidate_text, cl.paper_id, p.title AS paper_title, p.doi
                 FROM knowledge_cards kc
+                JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
                 LEFT JOIN card_claims cc ON cc.card_id = kc.id
                 LEFT JOIN claims cl ON cl.id = cc.claim_id
                 LEFT JOIN papers p ON p.id = cl.paper_id
@@ -586,13 +588,19 @@ class ReportStore:
                 ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall()
-            cards: dict[str, dict[str, object]] = {}
+            cards: dict[tuple[str, str], dict[str, object]] = {}
             for row in card_rows:
+                scope_key = str(row["scope_key"] or "").strip()
+                # Legacy cards without an explicit outcome scope are deliberately
+                # not eligible for external metric matching.
+                if not scope_key:
+                    continue
                 card = cards.setdefault(
-                    row["condition_code"],
+                    (row["condition_code"], scope_key),
                     {
                         "id": row["id"],
                         "condition_code": row["condition_code"],
+                        "scope_key": scope_key,
                         "version": row["version"],
                         "status": "published",
                         "grade": row["grade"],
@@ -660,8 +668,13 @@ class ReportStore:
                     "source_id": observation.source_id,
                     "bbox_normalized": observation.bbox_normalized,
                 }
+                if observation.source_url:
+                    source_observation["source_url"] = observation.source_url
+                if observation.bbox is not None:
+                    source_observation["bbox"] = observation.bbox
                 for condition in conditions:
-                    card = cards.get(condition.code)
+                    expected_scope = f"metric:{observation.metric_code}"
+                    card = cards.get((condition.code, expected_scope))
                     if card is None:
                         missing.append(condition.code)
                         continue
@@ -715,7 +728,7 @@ class ReportStore:
                 card = item.pop("card")
                 result_findings.append({**item, "card": card})
             result = {
-                "schema_version": "1",
+                "schema_version": "2",
                 "sorting_version": ASSESSMENT_SORTING_VERSION,
                 "correlation_id": correlation_id,
                 "findings": result_findings,
@@ -845,13 +858,16 @@ def _build_patient_reply(
                 "condition_code": finding["condition_code"],
                 "condition_name": finding["condition_name"],
                 "urgency": finding["urgency"],
+                "abnormality_severity": finding["abnormality_severity"],
                 "evidence_strength": finding["evidence_strength"],
                 "needs_recheck": finding["needs_recheck"],
                 "department": finding["department"],
                 "recheck_direction": finding["recheck_direction"],
                 "card_id": card["id"],
                 "card_version": card["version"],
+                "evidence_profile_id": card["evidence_profile_id"],
                 "patient_visible_body": card["patient_visible_body"],
+                "sources": card["sources"],
                 "source_observation_ids": finding["source_observation_ids"],
                 "source_observations": finding["source_observations"],
             }
