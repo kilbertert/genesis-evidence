@@ -81,7 +81,7 @@ def test_exclusion_requires_one_catalogued_primary_reason(tmp_path) -> None:
     database.initialize()
     store = PaperStore(database)
     topic_id = _topic(store)
-    paper_id, _ = _review_case(database)
+    paper_id, _ = _review_case(database, screened=False)
     run_id = store.start_collection(topic_id=topic_id, source="test", query="vitamin D")
     store.add_to_collection(run_id, paper_id, position=1)
     store.finish_collection(run_id, status="completed", detail={})
@@ -287,3 +287,113 @@ def test_ai_closes_title_abstract_exclusion_without_full_text_or_admission_row(t
         assert connection.execute(
             "SELECT count(*) FROM paper_extraction_jobs WHERE paper_id = ?", (paper_id,)
         ).fetchone()[0] == 0
+
+
+def test_screening_and_retrieval_propagate_across_runs_for_one_topic(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database, screened=False)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO full_texts(paper_id, object_key, sha256, media_type, rights_status) "
+            "VALUES (?, 'objects/paper.xml', 'hash', 'application/xml', 'internal_tdm_only')",
+            (paper_id,),
+        )
+    store.record_full_text_retrieval(
+        first_run,
+        paper_id,
+        status="retrieved",
+        reason=None,
+        reviewer="reviewer-1",
+    )
+
+    rows = store.list_topic_ledger(topic_id)
+    assert {row["run_id"] for row in rows} == {first_run, second_run}
+    assert all(row["title_abstract_decision"] == "included" for row in rows)
+    assert all(row["full_text_retrieval_status"] == "retrieved" for row in rows)
+
+
+def test_reconcile_topic_ledger_reports_real_conflicts_without_guessing(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'excluded', "
+            "primary_exclusion_reason = 'wrong_population' WHERE run_id = ? AND paper_id = ?",
+            (second_run, paper_id),
+        )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert result["normalized_records"] == 0
+    assert result["conflicts"] == [
+        {
+            "paper_id": paper_id,
+            "title_abstract_decisions": ["excluded", "included"],
+            "full_text_decisions": [],
+        }
+    ]
+    rows = store.list_topic_ledger(topic_id)
+    assert {row["title_abstract_decision"] for row in rows} == {"included", "excluded"}
+
+
+def test_reconcile_topic_ledger_copies_one_known_decision_to_duplicates(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert result["conflicts"] == []
+    assert result["normalized_records"] == 2
+    assert all(
+        row["title_abstract_decision"] == "included"
+        for row in store.list_topic_ledger(topic_id)
+    )

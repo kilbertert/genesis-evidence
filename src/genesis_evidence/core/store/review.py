@@ -519,6 +519,36 @@ class ReviewStore:
             now = _now()
             profile_id = str(uuid.uuid4())
             dimensions = _synthesis_dimensions(picots, scope_label)
+            predecessors = connection.execute(
+                """
+                SELECT kc.id, kc.status FROM knowledge_cards kc
+                JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
+                WHERE kc.condition_code = ? AND ep.scope_key = ?
+                    AND kc.status IN ('draft', 'in_review', 'approved')
+                """,
+                (condition_code, scope_key),
+            ).fetchall()
+            if predecessors:
+                connection.execute(
+                    "UPDATE knowledge_cards SET status = 'stale' WHERE id IN ({})".format(
+                        _placeholders(tuple(str(row["id"]) for row in predecessors))
+                    ),
+                    tuple(str(row["id"]) for row in predecessors),
+                )
+                for predecessor in predecessors:
+                    self._audit(
+                        connection,
+                        "knowledge_card",
+                        str(predecessor["id"]),
+                        "card_superseded",
+                        reviewer,
+                        {
+                            "from_status": predecessor["status"],
+                            "to_status": "stale",
+                            "replacement_card_id": card_id,
+                            "scope_key": scope_key,
+                        },
+                    )
             connection.execute(
                 """
                 INSERT INTO evidence_profiles(

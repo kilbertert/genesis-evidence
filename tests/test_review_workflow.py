@@ -1203,7 +1203,7 @@ def test_ai_can_publish_a_moderate_systematic_review_profile(tmp_path) -> None:
             "SELECT version, status, grade FROM knowledge_cards ORDER BY version"
         ).fetchall()
     assert [tuple(card) for card in cards] == [
-        ("1.0.0", "approved", "low"),
+        ("1.0.0", "stale", "low"),
         ("1.0.1", "published", "moderate"),
     ]
 

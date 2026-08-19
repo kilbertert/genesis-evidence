@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -373,7 +374,7 @@ class PaperStore:
         with self.database.transaction() as connection:
             row = connection.execute(
                 """
-                SELECT cp.*, cr.status AS run_status, et.status AS topic_status,
+                SELECT cp.*, cr.status AS run_status, cr.topic_id, et.status AS topic_status,
                     et.exclusion_reasons_json
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
@@ -402,15 +403,18 @@ class PaperStore:
                 raise ValueError("an included record cannot have an exclusion reason")
             now = _now()
             if stage == "title_abstract":
-                connection.execute(
+                updated = connection.execute(
                     """
                     UPDATE collection_papers SET title_abstract_decision = ?,
                         title_abstract_reviewer = ?, title_abstract_reviewed_at = ?,
                         full_text_decision = NULL, full_text_reviewer = NULL,
                         full_text_reviewed_at = NULL, primary_exclusion_reason = ?
-                    WHERE run_id = ? AND paper_id = ?
+                    WHERE paper_id = ? AND run_id IN (
+                            SELECT id FROM collection_runs
+                            WHERE topic_id = ? AND status = 'completed'
+                    )
                     """,
-                    (decision, reviewer, now, reason, run_id, paper_id),
+                    (decision, reviewer, now, reason, paper_id, row["topic_id"]),
                 )
             else:
                 if row["title_abstract_decision"] != "included":
@@ -427,9 +431,12 @@ class PaperStore:
                             full_text_retrieval_reason = NULL,
                             full_text_retrieval_reviewer = ?,
                             full_text_retrieval_recorded_at = ?
-                        WHERE run_id = ? AND paper_id = ?
+                        WHERE paper_id = ? AND run_id IN (
+                            SELECT id FROM collection_runs
+                            WHERE topic_id = ? AND status = 'completed'
+                        )
                         """,
-                        (reviewer, now, run_id, paper_id),
+                        (reviewer, now, paper_id, row["topic_id"]),
                     )
                     self._audit(
                         connection,
@@ -439,13 +446,16 @@ class PaperStore:
                         {"status": "retrieved", "reason": None},
                         actor=reviewer,
                     )
-                connection.execute(
+                updated = connection.execute(
                     """
                     UPDATE collection_papers SET full_text_decision = ?,
                         primary_exclusion_reason = ?, full_text_reviewer = ?,
-                        full_text_reviewed_at = ? WHERE run_id = ? AND paper_id = ?
+                        full_text_reviewed_at = ? WHERE paper_id = ? AND run_id IN (
+                            SELECT id FROM collection_runs
+                            WHERE topic_id = ? AND status = 'completed'
+                        )
                     """,
-                    (decision, reason, reviewer, now, run_id, paper_id),
+                    (decision, reason, reviewer, now, paper_id, row["topic_id"]),
                 )
             self._audit(
                 connection,
@@ -456,6 +466,7 @@ class PaperStore:
                     "from_decision": row[f"{stage}_decision"],
                     "to_decision": decision,
                     "primary_exclusion_reason": reason,
+                    "propagated_collection_records": updated.rowcount,
                 },
                 actor=reviewer,
             )
@@ -481,7 +492,7 @@ class PaperStore:
         with self.database.transaction() as connection:
             row = connection.execute(
                 """
-                SELECT cp.title_abstract_decision, cr.status AS run_status,
+                SELECT cp.title_abstract_decision, cr.status AS run_status, cr.topic_id,
                     et.status AS topic_status
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
@@ -513,7 +524,7 @@ class PaperStore:
             if status != "retrieved" and has_full_text is not None:
                 raise ValueError("a stored full text must be recorded as retrieved")
             now = _now()
-            connection.execute(
+            updated = connection.execute(
                 """
                 UPDATE collection_papers SET full_text_retrieval_status = ?,
                     full_text_retrieval_reason = ?,
@@ -527,7 +538,10 @@ class PaperStore:
                         THEN full_text_reviewer ELSE NULL END,
                     full_text_reviewed_at = CASE WHEN ? = 'retrieved'
                         THEN full_text_reviewed_at ELSE NULL END
-                WHERE run_id = ? AND paper_id = ?
+                WHERE paper_id = ? AND run_id IN (
+                    SELECT id FROM collection_runs
+                    WHERE topic_id = ? AND status = 'completed'
+                )
                 """,
                 (
                     status,
@@ -538,8 +552,8 @@ class PaperStore:
                     status,
                     status,
                     status,
-                    run_id,
                     paper_id,
+                    row["topic_id"],
                 ),
             )
             self._audit(
@@ -547,9 +561,183 @@ class PaperStore:
                 "collection_paper",
                 f"{run_id}:{paper_id}",
                 "full_text_retrieval_recorded",
-                {"status": status, "reason": normalized_reason},
+                {
+                    "status": status,
+                    "reason": normalized_reason,
+                    "propagated_collection_records": updated.rowcount,
+                },
                 actor=reviewer,
             )
+
+    def reconcile_topic_ledger(self, topic_id: str, *, reviewer: str) -> dict[str, object]:
+        """Normalize duplicated collection records without changing a published topic.
+
+        Collection runs remain the PRISMA audit trail.  The screening conclusion is
+        nevertheless a topic/paper fact, so missing duplicate records can inherit a
+        single recorded conclusion.  Conflicting completed conclusions are reported
+        for exception handling and never guessed away.
+        """
+
+        with self.database.transaction() as connection:
+            topic = connection.execute(
+                "SELECT status FROM evidence_topics WHERE id = ?", (topic_id,)
+            ).fetchone()
+            if topic is None or topic["status"] != "locked":
+                raise ValueError("a locked evidence topic is required for ledger reconciliation")
+            if connection.execute(
+                "SELECT 1 FROM evidence_profiles WHERE topic_id = ?", (topic_id,)
+            ).fetchone():
+                raise ValueError(
+                    "ledger reconciliation is immutable after evidence profile creation"
+                )
+            rows = connection.execute(
+                """
+                SELECT cp.*, cr.created_at AS run_created_at
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                WHERE cr.topic_id = ? AND cr.status = 'completed'
+                ORDER BY cp.paper_id, cr.created_at, cp.run_id
+                """,
+                (topic_id,),
+            ).fetchall()
+            grouped: dict[str, list[sqlite3.Row]] = {}
+            for row in rows:
+                grouped.setdefault(str(row["paper_id"]), []).append(row)
+            normalized = 0
+            conflicts: list[dict[str, object]] = []
+            for paper_id, records in grouped.items():
+                titles = {
+                    str(row["title_abstract_decision"])
+                    for row in records
+                    if row["title_abstract_decision"]
+                }
+                full_text = {
+                    str(row["full_text_decision"])
+                    for row in records
+                    if row["full_text_decision"]
+                }
+                if len(titles) > 1 or len(full_text) > 1:
+                    conflicts.append(
+                        {
+                            "paper_id": paper_id,
+                            "title_abstract_decisions": sorted(titles),
+                            "full_text_decisions": sorted(full_text),
+                        }
+                    )
+                    continue
+                has_stored_full_text = connection.execute(
+                    "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
+                ).fetchone()
+                retrieval = "retrieved" if has_stored_full_text else None
+                retrieval_reason = None
+                retrieval_reviewer = reviewer
+                if retrieval is None:
+                    closed = [
+                        row
+                        for row in records
+                        if row["full_text_retrieval_status"] == "not_retrieved"
+                        and str(row["full_text_retrieval_reason"] or "").strip()
+                    ]
+                    if closed:
+                        canonical = closed[-1]
+                        retrieval = "not_retrieved"
+                        retrieval_reason = str(canonical["full_text_retrieval_reason"])
+                        retrieval_reviewer = str(
+                            canonical["full_text_retrieval_reviewer"] or reviewer
+                        )
+                canonical_title = next(iter(titles), None)
+                canonical_full_text = next(iter(full_text), None)
+                if canonical_title is None and retrieval is None and canonical_full_text is None:
+                    continue
+                now = _now()
+                assignments: list[str] = []
+                values: list[object] = []
+                if canonical_title is not None:
+                    assignments.extend(
+                        (
+                            "title_abstract_decision = ?",
+                            "title_abstract_reviewer = ?",
+                            "title_abstract_reviewed_at = ?",
+                        )
+                    )
+                    values.extend((canonical_title, reviewer, now))
+                    if canonical_title == "excluded":
+                        assignments.extend(
+                            (
+                                "full_text_decision = NULL",
+                                "full_text_reviewer = NULL",
+                                "full_text_reviewed_at = NULL",
+                                "primary_exclusion_reason = NULL",
+                            )
+                        )
+                if retrieval is not None:
+                    assignments.extend(
+                        (
+                            "full_text_retrieval_status = ?",
+                            "full_text_retrieval_reason = ?",
+                            "full_text_retrieval_reviewer = ?",
+                            "full_text_retrieval_recorded_at = ?",
+                        )
+                    )
+                    values.extend((retrieval, retrieval_reason, retrieval_reviewer, now))
+                    if retrieval == "not_retrieved":
+                        assignments.extend(
+                            (
+                                "full_text_decision = NULL",
+                                "full_text_reviewer = NULL",
+                                "full_text_reviewed_at = NULL",
+                                "primary_exclusion_reason = NULL",
+                            )
+                        )
+                if canonical_full_text is not None:
+                    exclusion_reason = next(
+                        (
+                            str(row["primary_exclusion_reason"])
+                            for row in records
+                            if row["primary_exclusion_reason"]
+                        ),
+                        None,
+                    )
+                    assignments.extend(
+                        (
+                            "full_text_decision = ?",
+                            "primary_exclusion_reason = ?",
+                            "full_text_reviewer = ?",
+                            "full_text_reviewed_at = ?",
+                        )
+                    )
+                    values.extend(
+                        (
+                            canonical_full_text,
+                            exclusion_reason if canonical_full_text == "excluded" else None,
+                            reviewer,
+                            now,
+                        )
+                    )
+                result = connection.execute(
+                    "UPDATE collection_papers SET "
+                    + ", ".join(assignments)
+                    + " WHERE paper_id = ? AND run_id IN ("
+                    "SELECT id FROM collection_runs WHERE topic_id = ? AND status = 'completed'"
+                    ")",
+                    (*values, paper_id, topic_id),
+                )
+                normalized += result.rowcount
+                self._audit(
+                    connection,
+                    "paper",
+                    paper_id,
+                    "topic_ledger_reconciled",
+                    {
+                        "topic_id": topic_id,
+                        "title_abstract_decision": canonical_title,
+                        "full_text_retrieval_status": retrieval,
+                        "full_text_decision": canonical_full_text,
+                        "collection_records": result.rowcount,
+                    },
+                    actor=reviewer,
+                )
+        return {"topic_id": topic_id, "normalized_records": normalized, "conflicts": conflicts}
 
     def list_pending_full_texts(self) -> list[dict[str, object]]:
         with self.database.connect() as connection:
