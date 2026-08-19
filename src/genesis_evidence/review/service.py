@@ -68,6 +68,7 @@ class EvidenceProfileInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     certainty: Literal["high", "moderate", "low", "very_low"]
+    scope_key: str | None = Field(default=None, min_length=1, max_length=160)
     certainty_rationale: str = Field(min_length=1, max_length=5000)
     estimate_target: str = Field(min_length=1, max_length=1000)
     interpretations: dict[
@@ -268,16 +269,19 @@ class EvidenceReviewService:
             "paper", paper_id, "autonomous_review_started", actor=actor, detail=context
         )
         admission = item.get("admission") or {}
-        reopened_screening_rejection = admission.get("status") == "rejected" and admission.get(
-            "reviewer"
-        ) == "ai:screening-ledger" and any(
-            collection.get("title_abstract_decision") != "excluded"
-            and collection.get("full_text_decision") != "excluded"
-            for collection in item["collections"]
+        reopened_screening_rejection = (
+            admission.get("status") == "rejected"
+            and admission.get("reviewer") == "ai:screening-ledger"
+            and any(
+                collection.get("title_abstract_decision") != "excluded"
+                and collection.get("full_text_decision") != "excluded"
+                for collection in item["collections"]
+            )
         )
-        if admission.get("status") == "rejected" and admission.get(
-            "reviewer"
-        ) != "ai:screening-ledger":
+        if (
+            admission.get("status") == "rejected"
+            and admission.get("reviewer") != "ai:screening-ledger"
+        ):
             return self._automation_attention(
                 paper_id,
                 actor=actor,
@@ -530,8 +534,8 @@ class EvidenceReviewService:
                     }
                 )
                 continue
-            for index, group in enumerate(groups):
-                version = _profile_version(str(candidate["version"]), index)
+            for group in groups:
+                scope_key = str(group["scope_key"])
                 profile, patient_body, grade_domains = _automatic_profile(candidate, group)
                 claim_ids = [str(claim["id"]) for claim in group["claims"]]
                 card = next(
@@ -539,6 +543,7 @@ class EvidenceReviewService:
                         existing_card
                         for existing_card in existing.values()
                         if str(existing_card["topic_id"]) == str(candidate["id"])
+                        and str(existing_card["scope_key"]) == scope_key
                         and set(existing_card["claim_ids"]) == set(claim_ids)
                         and str(existing_card["grade"]) == profile.certainty
                         and existing_card["status"] not in {"rejected", "stale"}
@@ -548,8 +553,14 @@ class EvidenceReviewService:
                 if card:
                     version = str(card["version"])
                 else:
-                    while (str(candidate["condition_code"]), version) in existing:
-                        version = _profile_version(version, 1)
+                    version = _next_profile_version(
+                        str(candidate["version"]),
+                        {
+                            value
+                            for condition, value in existing
+                            if condition == str(candidate["condition_code"])
+                        },
+                    )
                 key = (str(candidate["condition_code"]), version)
                 card_id = str(card["id"]) if card else ""
                 card_status = str(card["status"]) if card else "draft"
@@ -616,6 +627,7 @@ class EvidenceReviewService:
                 existing[key] = {
                     "id": card_id,
                     "topic_id": candidate["id"],
+                    "scope_key": scope_key,
                     "claim_ids": claim_ids,
                     "grade": profile.certainty,
                     "status": status,
@@ -811,10 +823,17 @@ def _automatic_claim_review(
     )
 
 
-def _profile_version(topic_version: str, index: int) -> str:
+def _next_profile_version(topic_version: str, used_versions: set[str]) -> str:
     parts = [int(value) for value in re.findall(r"\d+", topic_version)[:3]]
     major, minor, patch = (*parts, 0, 0, 0)[:3]
-    return f"{major}.{minor}.{patch + index}"
+    used_patches = [
+        int(match.group(1))
+        for version in used_versions
+        if (match := re.fullmatch(rf"{major}\.{minor}\.(\d+)", version))
+    ]
+    if used_patches:
+        patch = max(patch, max(used_patches) + 1)
+    return f"{major}.{minor}.{patch}"
 
 
 def _claim_review_changed(claim: dict[str, object], review: ClaimReviewInput) -> bool:
@@ -848,16 +867,11 @@ def _automatic_profile(
     risk_domain = (
         "very_serious"
         if risk_overall & {"high", "critical"}
-        else (
-            "serious"
-            if risk_overall & {"some_concerns", "uncertain"}
-            else "not_serious"
-        )
+        else ("serious" if risk_overall & {"some_concerns", "uncertain"} else "not_serious")
     )
     picots = candidate.get("picots") or {}
     missing_scope = any(
-        str(picots.get(topic_field) or "").strip()
-        and _not_reported(str(dimensions[result_field]))
+        str(picots.get(topic_field) or "").strip() and _not_reported(str(dimensions[result_field]))
         for topic_field, result_field in (
             ("population", "population"),
             ("intervention_or_exposure", "ingredient_name"),
@@ -874,16 +888,33 @@ def _automatic_profile(
     imprecision = "not_serious" if precise else "serious"
     paper_count = len({str(claim["paper_id"]) for claim in claims})
     study_count = len({str(claim["study_id"]) for claim in claims})
+    interpretations = {str(claim["id"]): _interpretation(claim) for claim in claims}
+    synthesis = set(interpretations.values())
+    if synthesis & {"mixed", "uncertain", "not_reported"}:
+        inconsistency = "serious"
+    elif paper_count == 1:
+        inconsistency = "not_assessable"
+    elif synthesis in ({"supports"}, {"does_not_support"}):
+        inconsistency = "not_serious"
+    else:
+        # A missing or contradictory direction is not safe to treat as consistent.
+        inconsistency = "serious"
     domains = {
         "risk_of_bias": risk_domain,
-        "inconsistency": "not_assessable" if paper_count == 1 else "not_serious",
+        "inconsistency": inconsistency,
         "indirectness": indirectness,
         "imprecision": imprecision,
         "publication_bias": "not_assessable",
     }
     downgrade = {"not_serious": 0, "serious": 1, "very_serious": 2}
     score = max(
-        0, score - sum(downgrade[value] for value in (risk_domain, indirectness, imprecision))
+        0,
+        score
+        - sum(
+            downgrade[value]
+            for value in (risk_domain, inconsistency, indirectness, imprecision)
+            if value in downgrade
+        ),
     )
     single_primary_study = study_count == 1 and "systematic_review_meta_analysis" not in designs
     score = min(score, 1 if single_primary_study else 2)
@@ -903,8 +934,6 @@ def _automatic_profile(
         )
     )
     certainty_label = {"moderate": "中等", "low": "低", "very_low": "极低"}[certainty]
-    interpretations = {str(claim["id"]): _interpretation(claim) for claim in claims}
-    synthesis = set(interpretations.values())
     conclusion = (
         "结果整体支持上述研究关系。"
         if synthesis == {"supports"}
@@ -923,6 +952,7 @@ def _automatic_profile(
         "适用范围以所列研究人群和条件为限。"
     )
     profile = EvidenceProfileInput(
+        scope_key=str(group["scope_key"]),
         certainty=certainty,
         certainty_rationale=rationale,
         estimate_target=target,
@@ -957,9 +987,7 @@ def _issue_applies_to_claim(issue: dict[str, object], claim: dict[str, object]) 
     field = str(issue.get("field") or "").casefold()
     if not re.match(r"^claims?(?:$|[.\[])", field):
         return True
-    text = " ".join(
-        (field, *(str(issue.get(key) or "") for key in ("message", "evidence")))
-    )
+    text = " ".join((field, *(str(issue.get(key) or "") for key in ("message", "evidence"))))
     index = claim.get("extraction_claim_index")
     if not index:
         return True

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 
+from ..conditions import CONDITION_BY_CODE
+from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
 from .database import Database
 
@@ -349,6 +352,7 @@ class ReviewStore:
         patient_body = validate_patient_copy(patient_body)
         with self.database.transaction() as connection:
             topic = _require_complete_topic(connection, topic_id, condition_code)
+            picots = json.loads(topic["picots_json"])
             rows = connection.execute(
                 f"""
                 SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
@@ -419,22 +423,19 @@ class ReviewStore:
                 raise ValueError(
                     "high or moderate certainty requires resolved non-high risk-of-bias judgments"
                 )
-            dimensions = (
-                "population",
-                "baseline_nutrient_status",
-                "ingredient_name",
-                "ingredient_form",
-                "dose",
-                "comparator",
-                "outcome",
-                "timepoint",
+            scope_key, scope_label = _resolve_profile_scope(
+                picots,
+                condition_code,
+                [dict(row) for row in rows],
+                requested=str(profile.get("scope_key") or ""),
+                estimate_target=str(profile["estimate_target"]),
             )
-            if any(len({str(row[field]) for row in rows}) != 1 for field in dimensions):
-                raise ValueError("one evidence profile cannot mix different PICOTS result scopes")
-            first = rows[0]
             eligible = connection.execute(
                 """
-                SELECT c.id, c.status, cr.decision FROM claims c
+                SELECT c.id, c.status, cr.decision,
+                    r.population, r.baseline_nutrient_status, r.ingredient_name,
+                    r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint
+                FROM claims c
                 LEFT JOIN claim_reviews cr ON cr.claim_id = c.id
                 JOIN results r ON r.id = c.result_id
                 JOIN papers p ON p.id = c.paper_id
@@ -455,13 +456,14 @@ class ReviewStore:
                         WHERE cr.topic_id = ? AND cp.paper_id = p.id
                             AND cp.full_text_decision = 'included'
                     )
-                    AND r.population = ? AND r.baseline_nutrient_status = ?
-                    AND r.ingredient_name = ? AND r.ingredient_form = ?
-                    AND r.dose = ? AND r.comparator = ? AND r.outcome = ?
-                    AND r.timepoint = ?
                 """,
-                (condition_code, topic_id, *(first[field] for field in dimensions)),
+                (condition_code, topic_id),
             ).fetchall()
+            eligible = [
+                row
+                for row in eligible
+                if scope_key in _profile_scopes(picots, condition_code, dict(row))
+            ]
             if any(
                 row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
             ):
@@ -473,29 +475,32 @@ class ReviewStore:
                 raise ValueError("evidence profile requires one interpretation per selected result")
             now = _now()
             profile_id = str(uuid.uuid4())
+            dimensions = _synthesis_dimensions(picots, scope_label)
             connection.execute(
                 """
                 INSERT INTO evidence_profiles(
-                    id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                    id, topic_id, condition_code, scope_key, version,
+                    ingredient_name, ingredient_form,
                     population, baseline_nutrient_status, dose, comparator, outcome,
                     timepoint, estimate_target, certainty, certainty_rationale,
                     evidence_body_complete, evidence_cutoff_date, reviewer, reviewed_at,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
                     topic_id,
                     condition_code,
+                    scope_key,
                     version,
-                    first["ingredient_name"],
-                    first["ingredient_form"],
-                    first["population"],
-                    first["baseline_nutrient_status"],
-                    first["dose"],
-                    first["comparator"],
-                    first["outcome"],
-                    first["timepoint"],
+                    dimensions["ingredient_name"],
+                    dimensions["ingredient_form"],
+                    dimensions["population"],
+                    dimensions["baseline_nutrient_status"],
+                    dimensions["dose"],
+                    dimensions["comparator"],
+                    dimensions["outcome"],
+                    dimensions["timepoint"],
                     profile["estimate_target"],
                     profile["certainty"],
                     profile["certainty_rationale"],
@@ -910,41 +915,27 @@ class ReviewStore:
                     """,
                     (topic["condition_code"], topic["id"]),
                 ).fetchall()
-                dimensions = (
-                    "population",
-                    "baseline_nutrient_status",
-                    "ingredient_name",
-                    "ingredient_form",
-                    "dose",
-                    "comparator",
-                    "outcome",
-                    "timepoint",
-                )
-                groups: dict[tuple[str, ...], list[dict[str, object]]] = {}
+                groups: dict[str, dict[str, object]] = {}
                 for row in rows:
                     item = dict(row)
                     item["risk_of_bias"] = json.loads(item.pop("risk_of_bias_json"))
-                    groups.setdefault(tuple(str(item[field]) for field in dimensions), []).append(
-                        item
-                    )
-                matching_groups = {
-                    key: value
-                    for key, value in groups.items()
-                    if _profile_scope_matches(
-                        base["picots"], dict(zip(dimensions, key, strict=True))
-                    )
-                }
+                    for scope_key, scope_label in _profile_scopes(
+                        base["picots"], str(topic["condition_code"]), item
+                    ).items():
+                        group = groups.setdefault(
+                            scope_key,
+                            {
+                                "scope_key": scope_key,
+                                "dimensions": _synthesis_dimensions(base["picots"], scope_label),
+                                "claims": [],
+                            },
+                        )
+                        group["claims"].append(item)  # type: ignore[union-attr]
                 candidates.append(
                     {
                         **base,
                         "status": "ready",
-                        "groups": [
-                            {
-                                "dimensions": dict(zip(dimensions, key, strict=True)),
-                                "claims": matching_groups[key],
-                            }
-                            for key in sorted(matching_groups)
-                        ],
+                        "groups": [groups[key] for key in sorted(groups)],
                     }
                 )
         return candidates
@@ -966,7 +957,7 @@ class ReviewStore:
             rows = connection.execute(
                 """
                 SELECT kc.id, kc.condition_code, kc.version, kc.status, kc.grade,
-                    kc.evidence_profile_id, ep.topic_id,
+                    kc.evidence_profile_id, ep.topic_id, ep.scope_key,
                     kc.reviewer, kc.reviewed_at, kc.published_at, kc.patient_visible_body,
                     count(cc.claim_id) AS claim_count,
                     group_concat(cc.claim_id) AS claim_ids,
@@ -1007,6 +998,9 @@ class ReviewStore:
                     OR p.integrity_status <> 'clear'
                     OR p.publication_status <> 'formal'
                     OR pa.status <> 'internally_admitted'
+                    OR p.doi IS NULL OR trim(p.doi) = ''
+                    OR ft.paper_id IS NULL OR ft.processed_at IS NULL
+                    OR trim(cc.evidence_text) = '' OR trim(cc.locator) = ''
                     OR c.candidate_claim_type = 'mechanism'
                     OR cr.corrected_study_design IN (
                         'animal_study', 'in_vitro_study', 'case_series', 'case_report'
@@ -1017,6 +1011,7 @@ class ReviewStore:
             JOIN claim_reviews cr ON cr.claim_id = c.id
             JOIN papers p ON p.id = c.paper_id
             JOIN paper_admissions pa ON pa.paper_id = p.id
+            LEFT JOIN full_texts ft ON ft.paper_id = p.id
             WHERE cc.card_id = ?
             """,
             (card["condition_code"], card_id),
@@ -1031,7 +1026,18 @@ class ReviewStore:
             """,
             (card["evidence_profile_id"], card_id),
         ).fetchone()[0]
-        if evidence["total"] == 0 or evidence["invalid"] or missing_profile_results:
+        scope_key = connection.execute(
+            "SELECT ep.scope_key FROM knowledge_cards kc "
+            "JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id "
+            "WHERE kc.id = ?",
+            (card_id,),
+        ).fetchone()[0]
+        if (
+            evidence["total"] == 0
+            or evidence["invalid"]
+            or missing_profile_results
+            or not str(scope_key or "").strip()
+        ):
             raise ValueError("knowledge card has ineligible evidence")
 
     @staticmethod
@@ -1363,9 +1369,7 @@ def _picots_exclusion(
     if not candidates:
         return False, None
     if collection["topic_condition_code"] not in candidates:
-        reason = next(
-            (reason for reason in reasons if "outcome" in str(reason).casefold()), None
-        )
+        reason = next((reason for reason in reasons if "outcome" in str(reason).casefold()), None)
         return reason is not None, reason
     return True, None
 
@@ -1427,9 +1431,7 @@ def _picots_text_matches(
 
     topic_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", topic_text.casefold())
     if topic_age:
-        extracted_age = re.search(
-            r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold()
-        )
+        extracted_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold())
         adult_scope = int(topic_age.group(1)) <= 18 and re.search(
             r"\badults?\b", extracted_text.casefold()
         )
@@ -1457,9 +1459,10 @@ def _picots_text_matches(
     topic_tokens = tokens(topic_text)
     extracted_tokens = tokens(extracted_text)
     qualifiers = topic_tokens & {"supplement", "reduce", "modify"}
-    return bool(topic_duration) or (bool(topic_tokens & extracted_tokens) and (
-        not require_qualifiers or qualifiers <= extracted_tokens
-    ))
+    return bool(topic_duration) or (
+        bool(topic_tokens & extracted_tokens)
+        and (not require_qualifiers or qualifiers <= extracted_tokens)
+    )
 
 
 def _profile_scope_matches(picots: object, dimensions: dict[str, str]) -> bool:
@@ -1479,6 +1482,141 @@ def _profile_scope_matches(picots: object, dimensions: dict[str, str]) -> bool:
         ):
             return False
     return True
+
+
+_PROFILE_OUTCOME_ALIASES = {
+    "systolic_blood_pressure": (
+        "systolicbloodpressure",
+        "sbp",
+        "收缩压",
+    ),
+    "diastolic_blood_pressure": (
+        "diastolicbloodpressure",
+        "dbp",
+        "舒张压",
+    ),
+    "triglycerides": ("triglyceride", "triglycerides", "甘油三酯"),
+    "hdl_c": (
+        "hdlc",
+        "hdlcholesterol",
+        "highdensitylipoproteincholesterol",
+        "高密度脂蛋白胆固醇",
+    ),
+    "ldl_c": (
+        "ldlc",
+        "ldlcholesterol",
+        "lowdensitylipoproteincholesterol",
+        "低密度脂蛋白胆固醇",
+    ),
+    "total_cholesterol": ("totalcholesterol", "总胆固醇"),
+    "25_oh_vitamin_d": (
+        "25ohd",
+        "25hydroxyvitamind",
+        "25羟维生素d",
+    ),
+}
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold())
+
+
+def _metric_outcome_matches(metric_code: str, value: str) -> bool:
+    compact = _compact_text(value)
+    if metric_code in {"hdl_c", "ldl_c", "total_cholesterol"} and "ratio" in value.casefold():
+        return False
+    if metric_code == "hdl_c" and "nonhdl" in compact:
+        return False
+    return any(alias in compact for alias in _PROFILE_OUTCOME_ALIASES.get(metric_code, ()))
+
+
+def _topic_outcome_components(value: str) -> tuple[str, ...]:
+    components = tuple(
+        item.strip(" .")
+        for item in re.split(r"\s*(?:[,;，；]|\b(?:and|or)\b|和|或)\s*", value, flags=re.I)
+        if item.strip(" .")
+    )
+    return components or (value.strip(),)
+
+
+def _generic_scope_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    slug = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", normalized).strip("-")
+    return f"outcome:{slug[:140]}"
+
+
+def _profile_scopes(
+    picots: object, condition_code: str, dimensions: dict[str, object]
+) -> dict[str, str]:
+    if not isinstance(picots, dict):
+        return {}
+    values = {key: str(value or "") for key, value in dimensions.items()}
+    if not _profile_scope_matches(picots, values):
+        return {}
+    topic_outcome = str(picots.get("outcomes") or "").strip()
+    result_outcome = values.get("outcome", "")
+    compact_result = _compact_text(result_outcome)
+    if "ratio" in result_outcome.casefold() or "nonhdl" in compact_result:
+        return {}
+    condition = CONDITION_BY_CODE.get(condition_code)
+    scopes = {
+        f"metric:{metric_code}": METRIC_LABELS[metric_code]
+        for metric_code in (condition.metrics if condition else ())
+        if metric_code in _PROFILE_OUTCOME_ALIASES
+        and _metric_outcome_matches(metric_code, topic_outcome)
+        and _metric_outcome_matches(metric_code, result_outcome)
+    }
+    if scopes:
+        return scopes
+    for component in _topic_outcome_components(topic_outcome):
+        if _picots_text_matches(component, result_outcome, require_qualifiers=False):
+            scopes[_generic_scope_key(component)] = component
+    return scopes
+
+
+def _synthesis_dimensions(picots: object, outcome: str) -> dict[str, str]:
+    if not isinstance(picots, dict):
+        raise ValueError("locked topic PICOTS is required")
+    return {
+        "population": str(picots.get("population") or "Not restricted"),
+        "baseline_nutrient_status": "Mixed or not restricted by the locked topic",
+        "ingredient_name": str(picots.get("intervention_or_exposure") or "Not specified"),
+        "ingredient_form": "As reported across included studies",
+        "dose": "As reported across included studies",
+        "comparator": str(picots.get("comparator") or "Not specified"),
+        "outcome": outcome,
+        "timepoint": str(picots.get("timing") or "As reported across included studies"),
+    }
+
+
+def _resolve_profile_scope(
+    picots: object,
+    condition_code: str,
+    rows: list[dict[str, object]],
+    *,
+    requested: str,
+    estimate_target: str,
+) -> tuple[str, str]:
+    scopes = [_profile_scopes(picots, condition_code, row) for row in rows]
+    common = set(scopes[0]) if scopes else set()
+    for item in scopes[1:]:
+        common &= set(item)
+    if requested:
+        if requested not in common:
+            raise ValueError("selected claims do not share the requested outcome scope")
+        return requested, scopes[0][requested]
+    if len(common) == 1:
+        key = common.pop()
+        return key, scopes[0][key]
+    target_matches = [
+        key
+        for key in common
+        if _picots_text_matches(scopes[0][key], estimate_target, require_qualifiers=False)
+    ]
+    if len(target_matches) == 1:
+        key = target_matches[0]
+        return key, scopes[0][key]
+    raise ValueError("evidence profile requires one explicit shared outcome scope")
 
 
 def _claim_dict(
