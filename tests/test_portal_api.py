@@ -31,6 +31,7 @@ def test_portal_is_reduced_to_authenticated_evidence_api(tmp_path) -> None:
     assert root.headers["cache-control"] == "no-store"
     assert client.get("/health").json() == {"status": "ok"}
     assert {"code": "fasting_glucose", "label": "空腹血糖"} in client.get("/api/metrics").json()
+    assert client.get("/openapi.json").status_code == 404
 
 
 def test_evidence_endpoints_require_key_and_legacy_reports_are_gone(tmp_path) -> None:

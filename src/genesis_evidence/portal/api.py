@@ -45,7 +45,12 @@ def create_app(
             "evidence database is missing required tables: " + ", ".join(sorted(missing_tables))
         )
     store = EvidenceStore(database)
-    app = FastAPI(title="Genesis Evidence API", docs_url=None, redoc_url=None)
+    app = FastAPI(
+        title="Genesis Evidence API",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
