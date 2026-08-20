@@ -15,8 +15,9 @@ The worker shares `var/review.env`, requires `PAPER_AI_API_KEY_FILE` or
 `PAPER_AI_API_KEY`, and processes one persisted paper-extraction job at a time.
 The key file may be a two-column CSV containing an `apiKey` row. Keep it outside
 the repository and private to the development account. Legacy `ARK_*` variables
-remain supported. Failed jobs remain visible in the review workbench and require
-an explicit retry.
+remain supported. `PAPER_AI_TIMEOUT_SECONDS` bounds one streamed provider call;
+set it for the configured model's observed long-document latency. Failed jobs
+remain visible in the review workbench and require an explicit retry.
 
 Never commit either private environment file. The report upload path is not
 ready for a live model canary until `OPENAI_API_KEY` is configured.
