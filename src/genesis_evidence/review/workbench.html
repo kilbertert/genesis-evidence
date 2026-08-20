@@ -44,6 +44,10 @@
     .claim { border-top: 1px solid #e2e7e3; padding-top: 14px; margin-top: 14px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .coverage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .coverage-table th, .coverage-table td { border-bottom: 1px solid #d5ddd6; padding: 8px 6px; text-align: left; vertical-align: top; }
+    .coverage-table th { color: #65736b; font-weight: 600; white-space: nowrap; }
+    .coverage-table .status { white-space: nowrap; font-weight: 600; }
     .muted { color: #65736b; font-size: 13px; }
     .error { color: #a4261d; }
     .loading-state { min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #65736b; }
@@ -64,7 +68,7 @@
 </header>
 <main>
   <aside><div class="review-summary"><h2>论文队列</h2><button id="autoAll">AI 处理全部待办</button></div><div id="status" class="muted" role="status" aria-live="polite">请输入密钥。</div><div id="queue"></div><h2>抽取任务</h2><div id="jobs"></div></aside>
-  <section class="content"><div id="detail" class="panel" aria-live="polite"><p>选择一篇论文开始审核。</p></div><div id="cards" class="panel"><h2>知识卡</h2></div></section>
+  <section class="content"><div id="coverage" class="panel"><h2>疾病框架覆盖矩阵</h2><p class="muted">正在加载覆盖状态…</p></div><div id="detail" class="panel" aria-live="polite"><p>选择一篇论文开始审核。</p></div><div id="cards" class="panel"><h2>知识卡</h2></div></section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -112,11 +116,12 @@ async function loadAll(authenticate = false) {
         $('reviewer').textContent = '未认证'; sessionStorage.removeItem('reviewKey'); throw error;
       }
     }
-    const [nextConditions, nextTopics, papers, jobs, cards] = await Promise.all([
+    const [nextConditions, nextTopics, papers, jobs, cards, coverage] = await Promise.all([
       api('/api/review/conditions'), api('/api/review/topics'), api('/api/review/papers'),
-      api('/api/review/extraction-jobs'), api('/api/review/cards')
+      api('/api/review/extraction-jobs'), api('/api/review/cards'), api('/api/review/coverage-matrix')
     ]);
     conditions = nextConditions; topics = nextTopics;
+    renderCoverage(coverage);
     $('queue').innerHTML = papers.map(p => `<button data-paper="${esc(p.id)}" class="${p.id === selectedPaper ? 'active' : ''}"><strong>${esc(p.title || '无标题')}</strong><br><span class="muted">${esc(reviewStates[p.review_state] || p.review_state)} · ${p.full_text_not_retrieved ? '全文未取得（台账已闭合）' : p.full_text_available ? esc(p.extraction_job_status || '未入队') : '全文缺失'} / ${esc(p.extraction_job_stage || '—')} · 待审 ${esc(p.pending_claims || 0)}</span></button>`).join('') || '<p class="muted">暂无论文。</p>';
     document.querySelectorAll('[data-paper]').forEach(button => button.onclick = () => openPaper(button.dataset.paper));
     $('jobs').innerHTML = jobs.map(j => `<div class="claim"><strong>${esc(j.title)}</strong><p class="muted">${esc(j.status)} · ${esc(j.stage)} · 尝试 ${esc(j.attempt_count)}</p>${j.error_message ? `<p class="error">${esc(j.error_class)}：${esc(j.error_message)}</p>` : ''}${j.status === 'failed' ? `<button data-retry-job="${esc(j.id)}">重试</button>` : ''}</div>`).join('') || '<p class="muted">暂无任务。</p>';
@@ -232,6 +237,11 @@ function recordRetrieval(root, button) { return runAction(button, '正在保存�
 function createCard(button) { const checked = [...document.querySelectorAll('[name="card-claim"]:checked')]; const claim_ids = checked.map(x => x.value); const interpretations = Object.fromEntries(checked.map(x => [x.value,x.closest('[data-claim]').querySelector('[name="profile-interpretation"]').value])); return runAction(button, '正在创建知识卡草稿…', '知识卡草稿已创建。', async () => { await api('/api/review/cards',{method:'POST',body:JSON.stringify({topic_id:$('cardTopic').value,condition_code:$('cardCondition').value,version:$('cardVersion').value,claim_ids,patient_body:$('cardBody').value,profile:{certainty:$('profileCertainty').value,certainty_rationale:$('profileRationale').value,estimate_target:$('profileTarget').value,interpretations}})}); await loadAll(); }); }
 
 function renderCards(cards) { $('cards').innerHTML = `<h2>知识卡</h2>${cards.map(c => `<div class="claim"><strong>${esc(c.condition_code)} · ${esc(c.version)}</strong> <span class="tag">${esc(c.status)}</span><span class="tag">确定性 ${esc(c.grade)}</span><p>${esc(c.patient_visible_body)}</p><p class="muted">Evidence Profile：${esc(c.evidence_profile_id || '—')}<br>Claim：${(c.claim_ids || []).map(esc).join('、') || '—'}<br>论文：${(c.paper_ids || []).map(esc).join('、') || '—'}</p><div class="actions">${nextActions(c).map(a => `<button data-card="${esc(c.id)}" data-target="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>`).join('') || '<p class="muted">暂无知识卡。</p>'}`; document.querySelectorAll('[data-card]').forEach(button => button.onclick = () => runAction(button, '正在更新知识卡状态…', '知识卡状态已更新。', async () => { await api(`/api/review/cards/${button.dataset.card}/transition`,{method:'POST',body:JSON.stringify({target:button.dataset.target})}); await loadAll(); })); }
+function renderCoverage(rows) {
+  const statusNames = {published:'已发布',ready_to_publish:'待发布',blocked_low_certainty:'低确定性阻塞',profile_ready:'Profile 已形成',claims_ready:'Claim 已审核',full_text_ready:'全文已纳入',screening:'筛选中',no_eligible_evidence:'暂无合格证据',topic_locked:'主题已锁定',planned:'待建主题'};
+  const covered = rows.filter(row => row.coverage_status === 'published').length;
+  $('coverage').innerHTML = `<div class="review-summary"><div><h2>疾病框架覆盖矩阵</h2><p class="muted">${covered} / ${rows.length} 个指标范围已发布患者可见知识卡。</p></div></div><div class="table-wrap"><table class="coverage-table"><thead><tr><th>健康问题</th><th>指标范围</th><th>证据进度</th><th>状态</th><th>下一步</th></tr></thead><tbody>${rows.map(row => `<tr><td><strong>${esc(row.condition_name)}</strong><br><span class="muted">${esc(row.condition_code)}</span></td><td>${esc(row.metric_label || '症状/问题级')}<br><span class="muted">${esc(row.metric_code || row.scope_key)}</span></td><td>主题 ${esc(row.locked_topic_count)} · 全文 ${esc(row.full_text_included_count)} · Claim ${esc(row.approved_claim_count)} · Profile ${esc(row.evidence_profile_count)}</td><td class="status">${esc(statusNames[row.coverage_status] || row.coverage_status)}${row.published_card ? `<br><span class="muted">v${esc(row.published_card.version)} · ${esc(row.published_card.grade)}</span>` : ''}</td><td>${esc(row.next_action)}</td></tr>`).join('')}</tbody></table></div>`;
+}
 function nextActions(card) { return ({draft:['in_review','rejected'],in_review:['approved','rejected'],approved:['published','rejected']}[card.status] || []); }
 
 $('key').value = sessionStorage.getItem('reviewKey') || '';
