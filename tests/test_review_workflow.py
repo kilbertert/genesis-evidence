@@ -684,6 +684,9 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     dimensions["outcome"] = "Change in TC/HDL-C ratio and non-HDL-C"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
+    dimensions["outcome"] = "Total body fat (%)"
+    assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
+
 
 def test_adult_40_plus_scope_accepts_explicit_postmenopausal_population() -> None:
     assert _picots_text_matches(
