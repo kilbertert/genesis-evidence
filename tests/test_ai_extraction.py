@@ -150,7 +150,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
 
 
 def test_ark_analyzer_requires_server_key() -> None:
-    with pytest.raises(PaperAnalysisError, match="ARK_API_KEY"):
+    with pytest.raises(PaperAnalysisError, match="paper analysis API key"):
         ArkPaperAnalyzer(api_key="").analyze(
             PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Title"),
             {"abstract": "Text"},
@@ -369,3 +369,45 @@ def test_from_env_honors_ark_max_tokens(monkeypatch) -> None:
     monkeypatch.setenv("ARK_API_KEY", "k")
     monkeypatch.setenv("ARK_MAX_TOKENS", "32000")
     assert ArkPaperAnalyzer.from_env()._max_tokens == 32000
+
+
+def test_from_env_honors_provider_max_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_AI_API_KEY", "k")
+    monkeypatch.setenv("PAPER_AI_MAX_TOKENS", "32000")
+    monkeypatch.delenv("ARK_MAX_TOKENS", raising=False)
+    assert ArkPaperAnalyzer.from_env()._max_tokens == 32000
+
+
+def test_from_env_reads_openai_compatible_provider_key_from_csv(tmp_path, monkeypatch) -> None:
+    key_file = tmp_path / "provider.csv"
+    key_file.write_text(
+        "id,example\napiKey,csv-secret\nopenAiCompatible,https://provider.invalid/v1\n",
+        encoding="utf-8",
+    )
+    for name in (
+        "PAPER_AI_API_KEY",
+        "PAPER_AI_BASE_URL",
+        "PAPER_AI_MODEL",
+        "ARK_API_KEY",
+        "ARK_BASE_URL",
+        "ARK_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PAPER_AI_API_KEY_FILE", str(key_file))
+    monkeypatch.setenv("PAPER_AI_BASE_URL", "https://provider.invalid/v1")
+    monkeypatch.setenv("PAPER_AI_MODEL", "deepseek-v4-flash-0731")
+
+    analyzer = ArkPaperAnalyzer.from_env()
+
+    assert analyzer.api_key_configured
+    assert analyzer._api_key == "csv-secret"
+    assert analyzer._endpoint == "https://provider.invalid/v1/chat/completions"
+    assert analyzer.model == "deepseek-v4-flash-0731"
+
+
+def test_complete_endpoint_keeps_full_chat_completions_url() -> None:
+    analyzer = ArkPaperAnalyzer(
+        api_key="secret",
+        endpoint="https://provider.invalid/v1/chat/completions",
+    )
+    assert analyzer._endpoint == "https://provider.invalid/v1/chat/completions"

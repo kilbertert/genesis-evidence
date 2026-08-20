@@ -154,8 +154,12 @@ class LiteratureExtractionWorker:
 
 
 def main() -> None:
-    if not os.getenv("ARK_API_KEY", "").strip():
-        raise SystemExit("ARK_API_KEY is not configured; the extraction worker cannot start")
+    analyzer = ArkPaperAnalyzer.from_env()
+    if not analyzer.api_key_configured:
+        raise SystemExit(
+            "PAPER_AI_API_KEY_FILE/PAPER_AI_API_KEY (or legacy ARK_API_KEY) is not configured; "
+            "the extraction worker cannot start"
+        )
     database_path = Path(os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3"))
     database = Database(database_path)
     database.initialize()
@@ -163,7 +167,7 @@ def main() -> None:
     worker = LiteratureExtractionWorker(
         store=store,
         objects=ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
-        analyzer=ArkPaperAnalyzer.from_env(),
+        analyzer=analyzer,
     )
     lock_path = database_path.with_suffix(f"{database_path.suffix}.extraction-worker.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)

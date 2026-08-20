@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import time
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -17,6 +19,7 @@ from .models import PaperRecord
 
 DEFAULT_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
 DEFAULT_ARK_MODEL = "deepseek-v4-flash-ga-260731"
+API_KEY_FIELDS = {"apikey", "api_key", "api-key"}
 OBSERVATIONAL_DESIGNS = {
     "cohort_study",
     "case_control_study",
@@ -29,6 +32,26 @@ OBSERVATIONAL_DESIGNS = {
 
 class PaperAnalysisError(RuntimeError):
     """Raised when the configured paper-analysis provider cannot return valid evidence."""
+
+
+def _api_key_from_file(path: str) -> str:
+    try:
+        with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+            for row in csv.reader(handle):
+                if len(row) >= 2 and row[0].strip().casefold() in API_KEY_FIELDS:
+                    value = row[1].strip()
+                    if value:
+                        return value
+    except OSError as exc:
+        raise PaperAnalysisError(f"paper analysis API key file cannot be read: {path}") from exc
+    raise PaperAnalysisError(f"paper analysis API key file has no apiKey field: {path}")
+
+
+def _completion_endpoint(value: str) -> str:
+    endpoint = value.strip().rstrip("/") or DEFAULT_ARK_ENDPOINT
+    if not endpoint.endswith("/chat/completions"):
+        endpoint += "/chat/completions"
+    return endpoint
 
 
 class ConditionCandidate(BaseModel):
@@ -183,7 +206,7 @@ class ArkPaperAnalyzer:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._api_key = api_key.strip()
-        self._endpoint = endpoint.strip() or DEFAULT_ARK_ENDPOINT
+        self._endpoint = _completion_endpoint(endpoint)
         self._model = model.strip() or DEFAULT_ARK_MODEL
         self._timeout = max(5.0, timeout_seconds)
         self._max_input_chars = max(10_000, max_input_chars)
@@ -192,12 +215,33 @@ class ArkPaperAnalyzer:
 
     @classmethod
     def from_env(cls) -> ArkPaperAnalyzer:
-        return cls(
-            api_key=os.getenv("ARK_API_KEY", ""),
-            endpoint=os.getenv("ARK_BASE_URL", DEFAULT_ARK_ENDPOINT),
-            model=os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL),
-            max_tokens=int(os.getenv("ARK_MAX_TOKENS", "16384")),
+        key_file = (
+            os.getenv("PAPER_AI_API_KEY_FILE", "").strip()
+            or os.getenv("ARK_API_KEY_FILE", "").strip()
         )
+        api_key = _api_key_from_file(key_file) if key_file else (
+            os.getenv("PAPER_AI_API_KEY", "").strip()
+            or os.getenv("ARK_API_KEY", "")
+        )
+        return cls(
+            api_key=api_key,
+            endpoint=(
+                os.getenv("PAPER_AI_BASE_URL", "").strip()
+                or os.getenv("ARK_BASE_URL", DEFAULT_ARK_ENDPOINT)
+            ),
+            model=(
+                os.getenv("PAPER_AI_MODEL", "").strip()
+                or os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL)
+            ),
+            max_tokens=int(
+                os.getenv("PAPER_AI_MAX_TOKENS", "").strip()
+                or os.getenv("ARK_MAX_TOKENS", "16384")
+            ),
+        )
+
+    @property
+    def api_key_configured(self) -> bool:
+        return bool(self._api_key)
 
     def analyze(self, paper: PaperRecord, document: dict[str, object]) -> CheckedPaperExtraction:
         extraction, extraction_run_id = self.extract(paper, document)
@@ -296,7 +340,10 @@ class ArkPaperAnalyzer:
 
     def _source(self, paper: PaperRecord, document: dict[str, object]) -> str:
         if not self._api_key:
-            raise PaperAnalysisError("ARK_API_KEY is not configured")
+            raise PaperAnalysisError(
+                "paper analysis API key is not configured; set PAPER_AI_API_KEY_FILE "
+                "or PAPER_AI_API_KEY"
+            )
         source = json.dumps(
             {
                 "condition_catalog": [

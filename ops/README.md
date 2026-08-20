@@ -11,9 +11,12 @@ canonical environment, then symlink the four unit files into
 `GENESIS_REVIEW_API_KEY` when the new key is empty; set a dedicated new key to
 remove that compatibility dependency. Set `GENESIS_EVIDENCE_REVIEWER_ID` to the
 one authenticated human reviewer; audit identities are derived from this server-side value.
-The worker shares `var/review.env`, requires `ARK_API_KEY`, and processes one
-persisted paper-extraction job at a time. Failed jobs remain visible in the
-review workbench and require an explicit retry.
+The worker shares `var/review.env`, requires `PAPER_AI_API_KEY_FILE` or
+`PAPER_AI_API_KEY`, and processes one persisted paper-extraction job at a time.
+The key file may be a two-column CSV containing an `apiKey` row. Keep it outside
+the repository and private to the development account. Legacy `ARK_*` variables
+remain supported. Failed jobs remain visible in the review workbench and require
+an explicit retry.
 
 Never commit either private environment file. The report upload path is not
 ready for a live model canary until `OPENAI_API_KEY` is configured.
