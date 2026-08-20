@@ -301,7 +301,9 @@ class ArkPaperAnalyzer:
             max_tokens=min(self._max_tokens, 8192),
         )
         try:
-            consistency = ConsistencyReport.model_validate(_json_object(check_text))
+            consistency = ConsistencyReport.model_validate(
+                _normalize_consistency_payload(_json_object(check_text))
+            )
         except (ValueError, json.JSONDecodeError) as exc:
             correction_source = json.dumps(
                 {
@@ -319,7 +321,9 @@ class ArkPaperAnalyzer:
                     correction_source,
                     max_tokens=min(self._max_tokens, 8192),
                 )
-                consistency = ConsistencyReport.model_validate(_json_object(corrected_text))
+                consistency = ConsistencyReport.model_validate(
+                    _normalize_consistency_payload(_json_object(corrected_text))
+                )
                 check_run_id = corrected_run_id
             except (ValueError, json.JSONDecodeError, PaperAnalysisError) as correction_error:
                 raise PaperAnalysisError(
@@ -472,6 +476,31 @@ def _json_object(value: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise ValueError("provider JSON must be an object")
     return parsed
+
+
+def _normalize_consistency_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Accept the provider's older ``issue`` field without weakening the schema."""
+
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return payload
+    normalized: list[object] = []
+    for item in issues:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        issue = dict(item)
+        if "message" not in issue and issue.get("issue"):
+            issue["message"] = issue["issue"]
+        issue.pop("issue", None)
+        severity = str(issue.get("severity") or "medium").casefold()
+        issue["severity"] = {
+            "info": "low",
+            "minor": "low",
+            "critical": "high",
+        }.get(severity, severity if severity in {"low", "medium", "high"} else "medium")
+        normalized.append(issue)
+    return {**payload, "issues": normalized}
 
 
 def _require_source_evidence(extraction: PaperExtraction, document: dict[str, object]) -> None:

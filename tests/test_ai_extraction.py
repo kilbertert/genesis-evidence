@@ -11,6 +11,7 @@ from genesis_evidence.literature.ai_extraction import (
     ConsistencyReport,
     PaperAnalysisError,
     PaperExtraction,
+    _normalize_consistency_payload,
     _streamed_completion,
 )
 from genesis_evidence.literature.models import PaperRecord, SourceName
@@ -92,6 +93,19 @@ def test_consistency_report_keeps_large_auditable_difference_set() -> None:
     )
 
     assert len(report.issues) == 81
+
+
+def test_normalize_consistency_payload_accepts_legacy_issue_field() -> None:
+    report = ConsistencyReport.model_validate(
+        _normalize_consistency_payload(
+            {
+                "verdict": "needs_review",
+                "issues": [{"field": "claims", "issue": "The two claims differ."}],
+            }
+        )
+    )
+    assert report.issues[0].severity == "medium"
+    assert report.issues[0].message == "The two claims differ."
 
 
 def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
