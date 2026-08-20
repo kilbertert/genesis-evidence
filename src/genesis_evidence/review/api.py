@@ -318,6 +318,10 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     def cards() -> list[dict[str, object]]:
         return store.list_cards()
 
+    @app.get("/api/review/coverage-matrix", dependencies=[Depends(principal)])
+    def coverage_matrix() -> list[dict[str, object]]:
+        return store.list_coverage_matrix()
+
     @app.post("/api/review/cards")
     def create_card(
         request: CardDraftRequest, reviewer: str = Depends(principal)

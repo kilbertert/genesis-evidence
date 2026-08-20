@@ -1058,6 +1058,197 @@ class ReviewStore:
             cards.append(card)
         return cards
 
+    def list_coverage_matrix(self) -> list[dict[str, object]]:
+        """Derive first-batch coverage from the existing evidence tables."""
+
+        with self.database.connect() as connection:
+            conditions = connection.execute(
+                """
+                SELECT code, name, metrics_json, department, recheck_direction
+                FROM conditions ORDER BY code
+                """
+            ).fetchall()
+            matrix: list[dict[str, object]] = []
+            for condition in conditions:
+                topics = connection.execute(
+                    "SELECT * FROM evidence_topics WHERE condition_code = ?",
+                    (condition["code"],),
+                ).fetchall()
+                metrics = json.loads(condition["metrics_json"]) or [None]
+                for metric_code in metrics:
+                    scope_key = (
+                        f"metric:{metric_code}"
+                        if metric_code else f"condition:{condition['code']}"
+                    )
+                    profile_topic_ids = {
+                        row["topic_id"]
+                        for row in connection.execute(
+                            """
+                            SELECT topic_id FROM evidence_profiles
+                            WHERE condition_code = ? AND scope_key = ?
+                            """,
+                            (condition["code"], scope_key),
+                        ).fetchall()
+                    }
+                    matching_topics = [
+                        topic
+                        for topic in topics
+                        if topic["id"] in profile_topic_ids
+                        or not metric_code
+                        or _metric_outcome_matches(
+                            metric_code, json.loads(topic["picots_json"]).get("outcomes", "")
+                        )
+                    ]
+                    topic_ids = tuple(topic["id"] for topic in matching_topics)
+                    topic_counts = {
+                        "total": len(matching_topics),
+                        "locked": sum(topic["status"] == "locked" for topic in matching_topics),
+                    }
+                    if topic_ids:
+                        placeholders = _placeholders(topic_ids)
+                        run_counts = connection.execute(
+                            f"""
+                            SELECT count(DISTINCT cr.id) AS completed_runs,
+                                count(DISTINCT CASE WHEN cp.full_text_decision = 'included'
+                                    THEN cp.paper_id END) AS full_text_included
+                            FROM collection_runs cr
+                            LEFT JOIN collection_papers cp ON cp.run_id = cr.id
+                            WHERE cr.topic_id IN ({placeholders}) AND cr.status = 'completed'
+                            """,
+                            topic_ids,
+                        ).fetchone()
+                    else:
+                        run_counts = {"completed_runs": 0, "full_text_included": 0}
+                    claim_rows = (
+                        connection.execute(
+                            f"""
+                            SELECT DISTINCT cr.claim_id, r.outcome
+                            FROM claim_reviews cr
+                            JOIN claims c ON c.id = cr.claim_id
+                            JOIN results r ON r.id = c.result_id
+                            JOIN papers p ON p.id = c.paper_id
+                            JOIN paper_admissions pa ON pa.paper_id = p.id
+                            WHERE cr.condition_code = ? AND cr.decision = 'approved'
+                                AND p.integrity_status = 'clear'
+                                AND p.publication_status = 'formal'
+                                AND pa.status = 'internally_admitted'
+                                AND c.candidate_claim_type <> 'mechanism'
+                                AND cr.corrected_study_design NOT IN (
+                                    'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                                )
+                                AND EXISTS (
+                                    SELECT 1 FROM collection_papers cp
+                                    JOIN collection_runs run ON run.id = cp.run_id
+                                    WHERE run.topic_id IN ({_placeholders(topic_ids)})
+                                        AND cp.paper_id = c.paper_id
+                                        AND cp.full_text_decision = 'included'
+                                )
+                            """,
+                            (condition["code"], *topic_ids),
+                        ).fetchall()
+                        if topic_ids
+                        else []
+                    )
+                    approved_claims = sum(
+                        not metric_code or _metric_outcome_matches(metric_code, row["outcome"])
+                        for row in claim_rows
+                    )
+                    profiles = connection.execute(
+                        """
+                        SELECT count(*) FROM evidence_profiles
+                        WHERE condition_code = ? AND scope_key = ?
+                        """,
+                        (condition["code"], scope_key),
+                    ).fetchone()[0]
+                    card_rows = connection.execute(
+                        """
+                        SELECT kc.id, kc.version, kc.status, kc.grade, kc.published_at
+                        FROM knowledge_cards kc
+                        JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
+                        WHERE kc.condition_code = ? AND ep.scope_key = ?
+                        ORDER BY kc.published_at DESC, kc.created_at DESC, kc.id DESC
+                        """,
+                        (condition["code"], scope_key),
+                    ).fetchall()
+                    card_counts = {
+                        status: sum(row["status"] == status for row in card_rows)
+                        for status in ("draft", "in_review", "approved", "published", "stale")
+                    }
+                    published = next(
+                        (row for row in card_rows if row["status"] == "published"), None
+                    )
+                    publishable_approved = any(
+                        row["status"] == "approved" and row["grade"] in {"high", "moderate"}
+                        for row in card_rows
+                    )
+                    low_approved = any(
+                        row["status"] == "approved" and row["grade"] in {"low", "very_low"}
+                        for row in card_rows
+                    )
+                    if published:
+                        coverage_status, next_action = "published", "已覆盖，可继续扩充同主题证据"
+                    elif publishable_approved:
+                        coverage_status = "ready_to_publish"
+                        next_action = "按发布状态机完成最后审核"
+                    elif low_approved:
+                        coverage_status = "blocked_low_certainty"
+                        next_action = "补充或合并证据体，提高确定性后再发布"
+                    elif profiles:
+                        coverage_status, next_action = "profile_ready", "创建并审核患者知识卡"
+                    elif approved_claims and run_counts["full_text_included"]:
+                        coverage_status = "claims_ready"
+                        next_action = "合并同一 PICOTS 的 Evidence Profile"
+                    elif run_counts["full_text_included"]:
+                        coverage_status = "full_text_ready"
+                        next_action = "完成全文抽取与 Claim 审核"
+                    elif run_counts["completed_runs"]:
+                        incomplete_screening = connection.execute(
+                            f"""
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            WHERE cr.topic_id IN ({_placeholders(topic_ids)})
+                                AND cr.status = 'completed' AND (
+                                    cp.title_abstract_decision IS NULL
+                                    OR (cp.title_abstract_decision = 'included'
+                                        AND cp.full_text_retrieval_status = 'pending')
+                                    OR (cp.full_text_retrieval_status = 'retrieved'
+                                        AND cp.full_text_decision IS NULL)
+                                ) LIMIT 1
+                            """,
+                            topic_ids,
+                        ).fetchone()
+                        if incomplete_screening:
+                            coverage_status, next_action = "screening", "完成全文获取和筛选"
+                        else:
+                            coverage_status = "no_eligible_evidence"
+                            next_action = "扩展检索，当前主题尚无全文纳入证据"
+                    elif topic_counts["locked"]:
+                        coverage_status, next_action = "topic_locked", "启动该主题的论文检索"
+                    else:
+                        coverage_status, next_action = "planned", "建立并锁定版本化主题/PICOTS"
+                    matrix.append(
+                        {
+                            "condition_code": condition["code"],
+                            "condition_name": condition["name"],
+                            "department": condition["department"],
+                            "recheck_direction": condition["recheck_direction"],
+                            "metric_code": metric_code,
+                            "metric_label": METRIC_LABELS.get(metric_code) if metric_code else None,
+                            "scope_key": scope_key,
+                            "topic_count": topic_counts["total"] or 0,
+                            "locked_topic_count": topic_counts["locked"] or 0,
+                            "completed_run_count": run_counts["completed_runs"] or 0,
+                            "full_text_included_count": run_counts["full_text_included"] or 0,
+                            "approved_claim_count": approved_claims,
+                            "evidence_profile_count": profiles,
+                            "cards": card_counts,
+                            "published_card": dict(published) if published else None,
+                            "coverage_status": coverage_status,
+                            "next_action": next_action,
+                        }
+                    )
+        return matrix
+
     @staticmethod
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
@@ -1597,11 +1788,38 @@ _PROFILE_OUTCOME_ALIASES = {
         "低密度脂蛋白胆固醇",
     ),
     "total_cholesterol": ("totalcholesterol", "总胆固醇"),
+    "fasting_glucose": ("fastingglucose", "fastingbloodglucose", "fbg", "空腹血糖"),
+    "hba1c": ("hba1c", "glycatedhemoglobin", "glycosylatedhemoglobin", "糖化血红蛋白"),
+    "alt": ("alanineaminotransferase", "alaninetransaminase", "alt", "丙氨酸氨基转移酶"),
+    "ast": ("aspartateaminotransferase", "aspartatetransaminase", "ast", "天门冬氨酸氨基转移酶"),
+    "ggt": ("gammaglutamyltransferase", "gammaglutamyltranspeptidase", "ggt", "谷氨酰转移酶"),
+    "uric_acid": ("uricacid", "serumuricacid", "urate", "尿酸"),
+    "egfr": ("egfr", "estimatedglomerularfiltrationrate", "估算肾小球滤过率"),
+    "creatinine": ("creatinine", "serumcreatinine", "肌酐"),
+    "uacr": (
+        "uacr",
+        "urinealbumincreatinineratio",
+        "urinaryalbumincreatinineratio",
+        "尿白蛋白肌酐比",
+    ),
+    "hemoglobin": ("hemoglobin", "haemoglobin", "血红蛋白"),
+    "mcv": ("mcv", "meancorpuscularvolume", "平均红细胞体积"),
+    "ferritin": ("ferritin", "serumferritin", "铁蛋白"),
+    "tsat": ("tsat", "transferrinsaturation", "转铁蛋白饱和度"),
     "25_oh_vitamin_d": (
         "25ohd",
         "25hydroxyvitamind",
         "25羟维生素d",
     ),
+    "bone_density_t_score": ("bonedensitytscore", "bmdtscore", "骨密度t值"),
+    "calcium": ("serumcalcium", "bloodcalcium", "血钙", "钙"),
+    "alp": ("alkalinephosphatase", "alp", "碱性磷酸酶"),
+    "grip_strength": ("gripstrength", "handgripstrength", "握力"),
+    "walking_speed": ("walkingspeed", "gaitspeed", "步速"),
+    "muscle_mass": ("musclemass", "skeletalmusclemass", "肌肉量"),
+    "albumin": ("albumin", "serumalbumin", "白蛋白"),
+    "bmi": ("bodymassindex", "bmi", "体重指数"),
+    "prealbumin": ("prealbumin", "transthyretin", "前白蛋白"),
 }
 
 
@@ -1615,7 +1833,18 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         return False
     if metric_code == "hdl_c" and "nonhdl" in compact:
         return False
-    return any(alias in compact for alias in _PROFILE_OUTCOME_ALIASES.get(metric_code, ()))
+    aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code, ())
+    risky_abbreviations = {"alt", "ast", "alp"}
+    if any(alias in compact for alias in aliases if alias not in risky_abbreviations):
+        return True
+    tokens = set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
+    if any(alias in tokens for alias in aliases if alias in risky_abbreviations):
+        return True
+    if metric_code == "systolic_blood_pressure":
+        return "systolic" in compact and "bloodpressure" in compact
+    if metric_code == "diastolic_blood_pressure":
+        return "diastolic" in compact and "bloodpressure" in compact
+    return False
 
 
 def _topic_outcome_components(value: str) -> tuple[str, ...]:
