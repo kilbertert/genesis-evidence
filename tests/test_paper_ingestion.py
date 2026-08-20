@@ -241,8 +241,7 @@ def test_collection_queues_full_text_then_worker_persists_candidate_claims(tmp_p
         assert connection.execute("SELECT status FROM collection_runs").fetchone()[0] == "completed"
         assert connection.execute("SELECT processed_at FROM full_texts").fetchone()[0] is None
         assert (
-            connection.execute("SELECT status FROM paper_extraction_jobs").fetchone()[0]
-            == "queued"
+            connection.execute("SELECT status FROM paper_extraction_jobs").fetchone()[0] == "queued"
         )
     worker = LiteratureExtractionWorker(
         store=store,
@@ -297,12 +296,15 @@ def test_pending_full_text_backlog_downloads_and_queues_existing_paper(tmp_path)
     assert summary.downloaded_full_texts == 1
     assert summary.queued_extractions == 1
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT full_text_retrieval_status FROM collection_papers"
-        ).fetchone()[0] == "retrieved"
-        assert connection.execute(
-            "SELECT status FROM paper_extraction_jobs"
-        ).fetchone()[0] == "queued"
+        assert (
+            connection.execute(
+                "SELECT full_text_retrieval_status FROM collection_papers"
+            ).fetchone()[0]
+            == "retrieved"
+        )
+        assert (
+            connection.execute("SELECT status FROM paper_extraction_jobs").fetchone()[0] == "queued"
+        )
 
 
 def test_pending_full_text_without_pmcid_closes_retrieval_ledger(tmp_path) -> None:
@@ -339,8 +341,7 @@ def test_pending_full_text_without_pmcid_closes_retrieval_ledger(tmp_path) -> No
     assert summary.not_retrieved == 1
     with database.connect() as connection:
         row = connection.execute(
-            "SELECT full_text_retrieval_status, full_text_retrieval_reason "
-            "FROM collection_papers"
+            "SELECT full_text_retrieval_status, full_text_retrieval_reason FROM collection_papers"
         ).fetchone()
     assert row["full_text_retrieval_status"] == "not_retrieved"
     assert "identifier is unavailable" in row["full_text_retrieval_reason"]
@@ -436,11 +437,14 @@ def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:
         assert job["second_run_id"] is None
     store.retry_extraction(job_id, reviewer="reviewer-1")
     resumed = FakeAnalyzer()
-    assert LiteratureExtractionWorker(
-        store=store,
-        objects=ObjectStore(tmp_path / "objects"),
-        analyzer=resumed,
-    ).run_once() == job_id
+    assert (
+        LiteratureExtractionWorker(
+            store=store,
+            objects=ObjectStore(tmp_path / "objects"),
+            analyzer=resumed,
+        ).run_once()
+        == job_id
+    )
     assert resumed.calls == 2
     assert store.get_extraction_job(job_id)["status"] == "completed"
 
@@ -469,8 +473,10 @@ def test_targeted_query_batch_is_claimed_before_older_backlog(tmp_path) -> None:
                 query, status, created_at
             ) VALUES (?, ?, 'COND_SARCOPENIA_FRAILTY', 'test', 'effect', ?, 'test', 'completed', ?)
             """,
-            (("run-v1", topic_id, "1", "2026-08-12T00:00:00Z"),
-             ("run-v2", topic_id, "2", "2026-08-13T00:00:00Z")),
+            (
+                ("run-v1", topic_id, "1", "2026-08-12T00:00:00Z"),
+                ("run-v2", topic_id, "2", "2026-08-13T00:00:00Z"),
+            ),
         )
         connection.executemany(
             """
@@ -478,10 +484,98 @@ def test_targeted_query_batch_is_claimed_before_older_backlog(tmp_path) -> None:
                 id, paper_id, collection_run_id, status, stage, created_at, updated_at
             ) VALUES (?, ?, ?, 'queued', 'extraction_a', ?, ?)
             """,
-            (("job-v1", first, "run-v1", "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z"),
-             ("job-v2", second, "run-v2", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z")),
+            (
+                ("job-v1", first, "run-v1", "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z"),
+                ("job-v2", second, "run-v2", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z"),
+            ),
         )
     assert store.claim_next_extraction_job()["id"] == "job-v2"
+
+
+def test_targeted_query_batch_favors_a_disease_without_completed_extractions(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    sarcopenia_topic = _locked_topic(store)
+    ckd_topic = store.create_topic(
+        code="ckd-protein",
+        version="1",
+        condition_code="COND_CKD_RISK",
+        review_question="Does nutrition affect kidney outcomes?",
+        picots={
+            "population": "Adults with kidney disease risk",
+            "intervention_or_exposure": "Nutrition intervention",
+            "comparator": "Usual care",
+            "outcomes": "eGFR",
+            "timing": "Any follow-up",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("randomized_controlled_trial",),
+        inclusion_criteria=("Human adults",),
+        exclusion_reasons=("wrong_population", "wrong_intervention", "wrong_design"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    store.lock_topic(ckd_topic, reviewer="reviewer-1")
+    first = store.upsert_paper(_record(), source_url="https://example.test/first")
+    second = store.upsert_paper(
+        replace(
+            _record(),
+            source_id="MED:456",
+            doi="10.1000/example-2",
+            pmid="456",
+            pmcid="PMC456",
+        ),
+        source_url="https://example.test/second",
+    )
+    with database.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO collection_runs(
+                id, topic_id, condition_code, source, search_stream, query_version,
+                query, status, created_at
+            ) VALUES (?, ?, ?, 'test', 'effect', '2', 'test', 'completed', ?)
+            """,
+            (
+                (
+                    "run-sarcopenia",
+                    sarcopenia_topic,
+                    "COND_SARCOPENIA_FRAILTY",
+                    "2026-08-12T00:00:00Z",
+                ),
+                ("run-ckd", ckd_topic, "COND_CKD_RISK", "2026-08-13T00:00:00Z"),
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, model, extraction_run_id,
+                extraction_json, second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_json, created_at, updated_at, completed_at
+            ) VALUES ('done-sarcopenia', ?, 'run-sarcopenia', 'completed', 'saved',
+                'model', 'run-a', '{}', 'model', 'run-b', '{}', 'model', 'run-c',
+                '{"verdict":"consistent","issues":[]}', ?, ?, ?)
+            """,
+            (first, "2026-08-11T00:00:00Z", "2026-08-11T00:00:00Z", "2026-08-11T00:00:00Z"),
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, created_at, updated_at
+            ) VALUES ('queued-sarcopenia', ?, 'run-sarcopenia', 'queued', 'extraction_a', ?, ?)
+            """,
+            (first, "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z"),
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, created_at, updated_at
+            ) VALUES ('queued-ckd', ?, 'run-ckd', 'queued', 'extraction_a', ?, ?)
+            """,
+            (second, "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z"),
+        )
+    assert store.claim_next_extraction_job()["id"] == "queued-ckd"
 
 
 def test_interrupted_running_job_is_failed_without_losing_saved_stage(tmp_path) -> None:
