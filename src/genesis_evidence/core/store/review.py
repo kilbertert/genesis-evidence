@@ -816,9 +816,11 @@ class ReviewStore:
                     et.eligible_study_designs_json, et.exclusion_reasons_json,
                     cr.id AS run_id, cr.source, cr.search_stream,
                     cr.status AS run_status, cp.title_abstract_decision,
+                    cp.title_abstract_reviewer, cp.title_abstract_reviewed_at,
                     cp.full_text_retrieval_status, cp.full_text_retrieval_reason,
                     cp.full_text_retrieval_reviewer, cp.full_text_retrieval_recorded_at,
-                    cp.full_text_decision, cp.primary_exclusion_reason
+                    cp.full_text_decision, cp.primary_exclusion_reason,
+                    cp.full_text_reviewer, cp.full_text_reviewed_at
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
                 JOIN evidence_topics et ON et.id = cr.topic_id
@@ -1077,8 +1079,7 @@ class ReviewStore:
                 metrics = json.loads(condition["metrics_json"]) or [None]
                 for metric_code in metrics:
                     scope_key = (
-                        f"metric:{metric_code}"
-                        if metric_code else f"condition:{condition['code']}"
+                        f"metric:{metric_code}" if metric_code else f"condition:{condition['code']}"
                     )
                     profile_topic_ids = {
                         row["topic_id"]
@@ -1560,6 +1561,29 @@ def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
                 )
             ),
         }
+    elif (
+        item["title_abstract_decision"] == "included"
+        and item["full_text_decision"] == "excluded"
+        and str(item["full_text_reviewer"] or "").startswith("ai:")
+        and item["full_text_retrieval_status"] != "not_retrieved"
+    ):
+        eligible = design in item["eligible_study_designs"]
+        wrong_design = next(
+            (code for code in item["exclusion_reasons"] if "design" in code.casefold()),
+            None,
+        )
+        picots_ready, picots_exclusion = (
+            _picots_exclusion(item, extraction) if eligible else (True, None)
+        )
+        if eligible and picots_ready and not picots_exclusion:
+            item["screening_suggestion"] = {
+                "stage": "full_text",
+                "decision": "included",
+                "primary_exclusion_reason": None,
+                "reason": "当前 PICOTS 规则已更新，AI 重新评估该全文为可纳入。",
+            }
+        elif not eligible and wrong_design:
+            item["screening_suggestion"] = None
     else:
         item["screening_suggestion"] = None
     return item
@@ -1649,6 +1673,8 @@ def _picots_exclusion(
 def _picots_text_matches(
     topic_text: str, extracted_text: str, *, require_qualifiers: bool = True
 ) -> bool:
+    topic_text = _normalize_picots_text(topic_text)
+    extracted_text = _normalize_picots_text(extracted_text)
     aliases = {
         "bp": ("blood", "pressure"),
         "sbp": ("blood", "pressure"),
@@ -1658,6 +1684,10 @@ def _picots_text_matches(
         "men": ("adult",),
         "women": ("adult",),
         "adults": ("adult",),
+        "control": ("control", "usual", "alternative"),
+        "placebo": ("placebo", "usual", "control"),
+        "alternative": ("alternative", "intervention"),
+        "supplement": ("supplement", "intervention"),
         "25ohd": ("25", "vitamin"),
         "hydroxyvitamin": ("vitamin",),
     }
@@ -1701,21 +1731,23 @@ def _picots_text_matches(
                 result.add(canonical)
         return result
 
-    topic_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", topic_text.casefold())
+    topic_age = re.search(r"\baged\s*(?:≥|>=|>)?\s*(\d{1,3})", topic_text.casefold())
     if topic_age:
-        extracted_age = re.search(r"\baged\s*(?:≥|>=)?\s*(\d{1,3})", extracted_text.casefold())
+        extracted_age = re.search(r"\baged\s*(?:≥|>=|>)?\s*(\d{1,3})", extracted_text.casefold())
         extracted_folded = extracted_text.casefold()
-        adult_scope = int(topic_age.group(1)) <= 18 and re.search(
-            r"\badults?\b", extracted_folded
-        )
+        adult_scope = int(topic_age.group(1)) <= 18 and re.search(r"\badults?\b", extracted_folded)
         # A locked adult-40+ topic may receive an explicit postmenopausal
         # population label; this is a bounded adult proxy, not a generic
         # inference for women or older-sounding text.
         postmenopausal_scope = int(topic_age.group(1)) >= 40 and re.search(
             r"\bpostmenopausal\b", extracted_folded
         )
-        if not adult_scope and not postmenopausal_scope and (
-            not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1))
+        alternate_population_scope = _matches_alternate_population_scope(topic_text, extracted_text)
+        if (
+            not adult_scope
+            and not postmenopausal_scope
+            and not alternate_population_scope
+            and (not extracted_age or int(extracted_age.group(1)) < int(topic_age.group(1)))
         ):
             return False
     topic_duration = re.search(
@@ -1724,23 +1756,124 @@ def _picots_text_matches(
         topic_text.casefold(),
     )
     if topic_duration:
-        extracted_duration = re.search(
-            r"(\d+(?:\.\d+)?)\s*(day|week|month|year)s?", extracted_text.casefold()
+        extracted_durations = re.findall(
+            r"(\d+(?:\.\d+)?)\s*(?:\w+\s+)?(day|week|month|year)s?",
+            extracted_text.casefold(),
         )
-        if not extracted_duration:
+        if not extracted_durations:
             return False
         weeks = {"day": 1 / 7, "week": 1, "month": 4.345, "year": 52}
-        if (
-            float(extracted_duration.group(1)) * weeks[extracted_duration.group(2)]
-            < float(topic_duration.group(1)) * weeks[topic_duration.group(2)]
-        ):
+        topic_weeks = float(topic_duration.group(1)) * weeks[topic_duration.group(2)]
+        if max(float(amount) * weeks[unit] for amount, unit in extracted_durations) < topic_weeks:
             return False
+    if re.search(r"\b(?:usual|alternative|placebo)\b", topic_text) and re.search(
+        r"\b(?:control|usual|alternative|placebo)\b", extracted_text
+    ):
+        return True
     topic_tokens = tokens(topic_text)
     extracted_tokens = tokens(extracted_text)
     qualifiers = topic_tokens & {"supplement", "reduce", "modify"}
+    if {"usual", "alternative"} & extracted_tokens and {
+        "usual",
+        "alternative",
+    } & topic_tokens:
+        return True
     return bool(topic_duration) or (
         bool(topic_tokens & extracted_tokens)
         and (not require_qualifiers or qualifiers <= extracted_tokens)
+    )
+
+
+def _normalize_picots_text(value: str) -> str:
+    """Normalize common bilingual extraction terms before PICOTS matching."""
+
+    replacements = {
+        "绝经后": "postmenopausal",
+        "绝经": "postmenopausal",
+        "年龄": "aged ",
+        "成年人": "adults",
+        "成人": "adults",
+        "女性": "women",
+        "男性": "men",
+        "儿童": "children",
+        "老年人": "older adults",
+        "肌少症": "sarcopenia",
+        "衰弱": "frailty",
+        "骨质疏松": "osteoporosis",
+        "骨量减少": "osteopenia",
+        "骨密度": "bone mineral density",
+        "慢性肾脏病": "chronic kidney disease",
+        "肾脏病": "kidney disease",
+        "肾功能": "kidney function",
+        "碳酸氢钠": "sodium bicarbonate",
+        "胆钙化醇": "cholecalciferol vitamin d",
+        "蛋白质补充剂": "protein supplementation",
+        "膳食": "dietary",
+        "饮食": "dietary",
+        "对照组": "control",
+        "安慰剂": "placebo",
+        "常规护理": "usual care",
+        "标准治疗": "standard care",
+        "相互比较": "alternative",
+        "补充": "supplement",
+        "肌酐清除率": "creatinine clearance",
+        "血清肌酐": "serum creatinine",
+        "尿白蛋白肌酐比": "urine albumin creatinine ratio",
+        "营养不良": "malnutrition",
+        "便秘": "constipation",
+        "血压": "blood pressure",
+        "握力": "grip strength",
+        "步速": "gait speed",
+        "肌肉量": "muscle mass",
+        "运动": "exercise",
+        "钙": "calcium",
+        "单独": "alternative",
+        "血红蛋白": "hemoglobin",
+        "铁蛋白": "ferritin",
+        "尿酸": "uric acid",
+        "甘油三酯": "triglycerides",
+        "高密度脂蛋白胆固醇": "hdl cholesterol",
+        "低密度脂蛋白胆固醇": "ldl cholesterol",
+        "总胆固醇": "total cholesterol",
+        "空腹血糖": "fasting glucose",
+        "糖化血红蛋白": "hba1c",
+        "维生素\u00a0d": "vitamin d",
+        "维生素d": "vitamin d",
+        "masld": "metabolic risk",
+        "nafld": "metabolic risk",
+        "周": " weeks ",
+        "月": " months ",
+        "年": " years ",
+        "天": " days ",
+        "岁": " years ",
+    }
+    normalized = value.casefold()
+    for source, target in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        normalized = normalized.replace(source, f" {target.strip()} ")
+    return normalized
+
+
+def _matches_alternate_population_scope(topic_text: str, extracted_text: str) -> bool:
+    """Allow explicit non-age alternatives in versioned population PICOTS."""
+
+    if re.search(r"\bchildren?\b", extracted_text):
+        return False
+    alternatives = {
+        "kidney disease risk": ("kidney disease", "chronic kidney disease", "ckd"),
+        "metabolic risk": (
+            "metabolic risk",
+            "metabolic dysfunction",
+            "masld",
+            "fatty liver",
+            "obesity",
+            "diabetes",
+        ),
+        "nutritional risk": ("nutritional risk", "malnutrition", "undernutrition"),
+        "sarcopenia/frailty": ("sarcopenia", "frailty"),
+    }
+    return any(
+        marker in topic_text and any(term in extracted_text for term in terms)
+        for marker, terms in alternatives.items()
     )
 
 
