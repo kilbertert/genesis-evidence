@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import fcntl
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Protocol
 
-from ..core.store import Database, ObjectStore, PaperStore
+from ..core.store import Database, ObjectStore, PaperStore, ReviewStore
+from ..review.service import EvidenceReviewService
 from .ai_extraction import (
     ArkPaperAnalyzer,
     CheckedPaperExtraction,
@@ -36,6 +38,10 @@ class StageAnalyzer(Protocol):
     ) -> tuple[ConsistencyReport, str]: ...
 
 
+class PaperAutoReviewer(Protocol):
+    def auto_review_paper(self, paper_id: str, *, requested_by: str) -> dict[str, object]: ...
+
+
 class LiteratureExtractionWorker:
     def __init__(
         self,
@@ -43,10 +49,14 @@ class LiteratureExtractionWorker:
         store: PaperStore,
         objects: ObjectStore,
         analyzer: StageAnalyzer,
+        auto_reviewer: PaperAutoReviewer | None = None,
+        requested_by: str = "ai:extraction-worker",
     ) -> None:
         self._store = store
         self._objects = objects
         self._analyzer = analyzer
+        self._auto_reviewer = auto_reviewer
+        self._requested_by = requested_by
         self._jats = JatsParser()
 
     def run_once(self) -> str | None:
@@ -87,7 +97,31 @@ class LiteratureExtractionWorker:
             self._store.complete_extraction_job(job_id)
         except Exception as exc:
             self._store.fail_extraction_job(job_id, exc)
+        else:
+            self._auto_review(str(job["paper_id"]), job_id)
         return job_id
+
+    def _auto_review(self, paper_id: str, job_id: str) -> None:
+        if self._auto_reviewer is None:
+            return
+        try:
+            self._auto_reviewer.auto_review_paper(paper_id, requested_by=self._requested_by)
+        except Exception as exc:
+            try:
+                self._store.record_event(
+                    "paper",
+                    paper_id,
+                    "autonomous_review_failed",
+                    {
+                        "job_id": job_id,
+                        "requested_by": self._requested_by,
+                        "error_class": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                    actor="ai:extraction-worker",
+                )
+            except Exception:
+                logging.exception("failed to audit autonomous review failure for %s", paper_id)
 
     def _extraction_a(
         self,
@@ -164,10 +198,18 @@ def main() -> None:
     database = Database(database_path)
     database.initialize()
     store = PaperStore(database)
+    reviewer_id = os.getenv("GENESIS_EVIDENCE_REVIEWER_ID", "").strip()
+    if not reviewer_id:
+        raise SystemExit(
+            "GENESIS_EVIDENCE_REVIEWER_ID is not configured; "
+            "the extraction worker cannot audit autonomous review requests"
+        )
     worker = LiteratureExtractionWorker(
         store=store,
         objects=ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
         analyzer=analyzer,
+        auto_reviewer=EvidenceReviewService(ReviewStore(database), store),
+        requested_by=reviewer_id,
     )
     lock_path = database_path.with_suffix(f"{database_path.suffix}.extraction-worker.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)

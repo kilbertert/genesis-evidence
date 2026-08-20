@@ -1401,10 +1401,16 @@ class PaperStore:
         return dict(row) if row else None
 
     def record_event(
-        self, entity_type: str, entity_id: str, action: str, detail: dict[str, object]
+        self,
+        entity_type: str,
+        entity_id: str,
+        action: str,
+        detail: dict[str, object],
+        *,
+        actor: str = "system",
     ) -> None:
         with self.database.transaction() as connection:
-            self._audit(connection, entity_type, entity_id, action, detail)
+            self._audit(connection, entity_type, entity_id, action, detail, actor=actor)
 
     @staticmethod
     def _audit(

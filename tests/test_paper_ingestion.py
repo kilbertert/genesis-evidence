@@ -130,6 +130,16 @@ class FakeAnalyzer:
         return ConsistencyReport(verdict="consistent", issues=[]), f"check-{self.calls}"
 
 
+class FailingAutoReviewer:
+    def __init__(self) -> None:
+        self.paper_ids: list[str] = []
+
+    def auto_review_paper(self, paper_id: str, *, requested_by: str) -> dict[str, object]:
+        assert requested_by == "reviewer-1"
+        self.paper_ids.append(paper_id)
+        raise RuntimeError("review failed")
+
+
 def _record(*, source: SourceName = SourceName.EUROPE_PMC, source_id: str = "MED:123"):
     candidate = FullTextCandidate(
         source=source,
@@ -260,6 +270,46 @@ def test_collection_queues_full_text_then_worker_persists_candidate_claims(tmp_p
         job = connection.execute("SELECT * FROM paper_extraction_jobs").fetchone()
         assert job["status"] == "completed"
         assert job["check_run_id"] == "check-3"
+
+
+def test_worker_keeps_completed_extraction_when_automatic_review_fails(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    summary = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    ).collect(
+        topic_id=_locked_topic(store),
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="sarcopenia AND protein",
+        limit=1,
+    )
+    reviewer = FailingAutoReviewer()
+
+    job_id = LiteratureExtractionWorker(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        analyzer=FakeAnalyzer(),
+        auto_reviewer=reviewer,
+        requested_by="reviewer-1",
+    ).run_once()
+
+    with database.connect() as connection:
+        job = connection.execute(
+            "SELECT paper_id, status FROM paper_extraction_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        event = connection.execute(
+            "SELECT action, actor, detail_json FROM audit_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert summary.queued_extractions == 1
+    assert job["status"] == "completed"
+    assert reviewer.paper_ids == [job["paper_id"]]
+    assert event["action"] == "autonomous_review_failed"
+    assert event["actor"] == "ai:extraction-worker"
+    assert '"error_class": "RuntimeError"' in event["detail_json"]
 
 
 def test_pending_full_text_backlog_downloads_and_queues_existing_paper(tmp_path) -> None:
