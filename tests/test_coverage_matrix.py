@@ -132,3 +132,49 @@ def test_short_metric_abbreviations_do_not_match_words_by_substring(tmp_path) ->
     ]
 
     assert {row["coverage_status"] for row in masld} == {"planned"}
+
+
+def test_matrix_matches_long_form_uacr_and_bone_outcomes(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    for condition_code, code, outcomes in (
+        (
+            "COND_CKD_RISK",
+            "ckd-uacr",
+            "Adults with kidney disease risk; dietary sodium; usual diet; "
+            "urine albumin-to-creatinine ratio; 12 weeks; outpatient",
+        ),
+        (
+            "COND_OSTEOPOROSIS_RISK",
+            "osteoporosis-bone-mineral-density",
+            "Postmenopausal adults; calcium; placebo; bone mineral density, T-score, "
+            "and calcium; 12 months; outpatient",
+        ),
+    ):
+        topic_id = store.create_topic(
+            code=code,
+            version="1",
+            condition_code=condition_code,
+            review_question="Does the nutrition exposure affect the reported outcome?",
+            picots={
+                "population": outcomes.split("; ")[0],
+                "intervention_or_exposure": outcomes.split("; ")[1],
+                "comparator": outcomes.split("; ")[2],
+                "outcomes": outcomes.split("; ")[3],
+                "timing": outcomes.split("; ")[4],
+                "setting": outcomes.split("; ")[5],
+            },
+            eligible_study_designs=("randomized_controlled_trial",),
+            inclusion_criteria=("Human adults",),
+            exclusion_reasons=("wrong_outcome",),
+            required_search_streams=("effect",),
+            evidence_cutoff_date="2026-08-20",
+            reviewer="reviewer",
+        )
+        store.lock_topic(topic_id, reviewer="reviewer")
+
+    matrix = ReviewStore(database).list_coverage_matrix()
+    for metric_code in ("uacr", "bone_density_t_score", "calcium"):
+        row = next(row for row in matrix if row["metric_code"] == metric_code)
+        assert row["coverage_status"] == "topic_locked"
