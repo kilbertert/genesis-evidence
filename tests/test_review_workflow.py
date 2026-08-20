@@ -389,6 +389,33 @@ def test_ai_does_not_reopen_a_named_rejection(tmp_path) -> None:
     assert result["stage"] == "admission"
 
 
+def test_ai_reopens_its_own_screening_rejection_after_picots_update(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included', "
+            "full_text_decision = 'excluded', primary_exclusion_reason = 'wrong_population', "
+            "title_abstract_reviewer = 'ai:old-model', full_text_reviewer = 'ai:old-model' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute(
+            "UPDATE paper_admissions SET status = 'rejected', reviewer = 'ai:old-model' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["decision"] == "internally_admitted"
+    with database.connect() as connection:
+        admission = connection.execute(
+            "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+    assert tuple(admission) == ("internally_admitted", "ai:checker")
+
+
 def test_ai_review_guidance_drives_screening_and_downgrades_material_differences(tmp_path) -> None:
     database, _ = _service(tmp_path)
     paper_id, claim_id = _review_case(database, consistency="needs_review")
@@ -609,6 +636,33 @@ def test_picots_duration_normalizes_days_and_weeks() -> None:
     assert not _picots_text_matches("At least 3 weeks", "After 1 week of intervention")
 
 
+def test_picots_matches_common_chinese_population_terms() -> None:
+    topic = "Adults aged 40 and older or postmenopausal adults"
+    assert _picots_text_matches(topic, "绝经后女性")
+    assert not _picots_text_matches(topic, "儿童")
+    assert not _picots_text_matches("Adults aged 60 and older", "年龄 > 50 岁")
+
+
+def test_picots_duration_normalizes_chinese_units() -> None:
+    assert _picots_text_matches("At least 24 weeks", "干预周期 24 周")
+    assert _picots_text_matches("At least 6 months", "干预周期 24 周至 24 个月")
+
+
+def test_picots_matches_explicit_non_age_population_alternatives() -> None:
+    assert _picots_text_matches(
+        "Adults aged 40 and older or adults with metabolic risk",
+        "Adults with metabolic dysfunction-associated steatotic liver disease",
+    )
+    assert _picots_text_matches(
+        "Adults aged 40 and older or adults with kidney disease risk",
+        "Adults with chronic kidney disease",
+    )
+    assert not _picots_text_matches(
+        "Adults aged 40 and older or adults at nutritional risk",
+        "Children at nutritional risk",
+    )
+
+
 def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> None:
     picots = {
         "population": "Adults aged 18 and older",
@@ -635,9 +689,7 @@ def test_adult_40_plus_scope_accepts_explicit_postmenopausal_population() -> Non
     assert _picots_text_matches(
         "Adults aged 40 and older", "Postmenopausal women", require_qualifiers=False
     )
-    assert not _picots_text_matches(
-        "Adults aged 40 and older", "Women", require_qualifiers=False
-    )
+    assert not _picots_text_matches("Adults aged 40 and older", "Women", require_qualifiers=False)
 
 
 def test_profile_scope_does_not_treat_concentrations_as_ratio() -> None:

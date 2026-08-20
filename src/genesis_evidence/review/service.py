@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..core.store import PaperStore, ReviewStore
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 
-AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.2"
+AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.3"
 
 StudyDesign = Literal[
     "randomized_controlled_trial",
@@ -149,10 +149,17 @@ class EvidenceReviewService:
             raise ValueError("paper not found")
         if self.papers_store is None:
             raise RuntimeError("autonomous review requires PaperStore")
-        terminal_exclusion = bool(item["collections"]) and all(
-            collection.get("title_abstract_decision") == "excluded"
-            or collection.get("full_text_decision") == "excluded"
-            for collection in item["collections"]
+        terminal_exclusion = (
+            bool(item["collections"])
+            and all(
+                collection.get("title_abstract_decision") == "excluded"
+                or collection.get("full_text_decision") == "excluded"
+                for collection in item["collections"]
+            )
+            and not any(
+                (collection.get("screening_suggestion") or {}).get("stage")
+                for collection in item["collections"]
+            )
         )
         if terminal_exclusion:
             admission = item.get("admission") or {}
@@ -275,19 +282,18 @@ class EvidenceReviewService:
             "paper", paper_id, "autonomous_review_started", actor=actor, detail=context
         )
         admission = item.get("admission") or {}
+        has_screening_reassessment = any(
+            (collection.get("screening_suggestion") or {}).get("stage")
+            for collection in item["collections"]
+        )
         reopened_screening_rejection = (
             admission.get("status") == "rejected"
-            and admission.get("reviewer") == "ai:screening-ledger"
-            and any(
-                collection.get("title_abstract_decision") != "excluded"
-                and collection.get("full_text_decision") != "excluded"
-                for collection in item["collections"]
-            )
+            and str(admission.get("reviewer") or "").startswith("ai:")
+            and has_screening_reassessment
         )
-        if (
-            admission.get("status") == "rejected"
-            and admission.get("reviewer") != "ai:screening-ledger"
-        ):
+        if admission.get("status") == "rejected" and not str(
+            admission.get("reviewer") or ""
+        ).startswith("ai:"):
             return self._automation_attention(
                 paper_id,
                 actor=actor,
@@ -420,9 +426,7 @@ class EvidenceReviewService:
         blockers = list(guidance["blockers"])
         if automatically_adjudicated:
             dual_ai_blockers = {
-                str(check["detail"])
-                for check in guidance["checks"]
-                if check["id"] == "dual_ai"
+                str(check["detail"]) for check in guidance["checks"] if check["id"] == "dual_ai"
             }
             blockers = [blocker for blocker in blockers if blocker not in dual_ai_blockers]
         if blockers:
@@ -905,9 +909,10 @@ def _automatic_source_verification(
     ):
         failures.append("Claim does not match its structured Result source")
     extraction_id = str(trace.get("id") or "").strip()
-    if extraction_id != str(claim.get("extraction_id") or "").strip() or extraction_id != str(
-        claim.get("result_extraction_id") or ""
-    ).strip():
+    if (
+        extraction_id != str(claim.get("extraction_id") or "").strip()
+        or extraction_id != str(claim.get("result_extraction_id") or "").strip()
+    ):
         failures.append("Claim and Result are not linked to the current extraction")
     required_runs = (
         "model",
