@@ -663,6 +663,14 @@ def test_picots_matches_explicit_non_age_population_alternatives() -> None:
     )
 
 
+def test_picots_matches_chinese_kidney_disease_population() -> None:
+    assert _picots_text_matches(
+        "Adults aged 40 and older or adults with kidney disease risk",
+        "CKD患者，具体研究数量和样本量未报告",
+        require_qualifiers=False,
+    )
+
+
 def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> None:
     picots = {
         "population": "Adults aged 18 and older",

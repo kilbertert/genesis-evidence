@@ -653,6 +653,16 @@ class PaperStore:
                 assignments: list[str] = []
                 values: list[object] = []
                 if canonical_title is not None:
+                    exclusion_reason = next(
+                        (
+                            str(row["primary_exclusion_reason"])
+                            for row in records
+                            if canonical_title == "excluded"
+                            and row["title_abstract_decision"] == "excluded"
+                            and row["primary_exclusion_reason"]
+                        ),
+                        None,
+                    )
                     assignments.extend(
                         (
                             "title_abstract_decision = ?",
@@ -667,9 +677,10 @@ class PaperStore:
                                 "full_text_decision = NULL",
                                 "full_text_reviewer = NULL",
                                 "full_text_reviewed_at = NULL",
-                                "primary_exclusion_reason = NULL",
+                                "primary_exclusion_reason = ?",
                             )
                         )
+                        values.append(exclusion_reason)
                 if retrieval is not None:
                     assignments.extend(
                         (
