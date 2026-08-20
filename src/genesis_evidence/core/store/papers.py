@@ -959,7 +959,21 @@ class PaperStore:
                     SELECT 1 FROM collection_runs run
                     WHERE run.id = paper_extraction_jobs.collection_run_id
                         AND run.query_version = '2'
-                ) THEN 0 ELSE 1 END, created_at, id
+                ) THEN 0 ELSE 1 END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM collection_runs run
+                    JOIN evidence_topics topic ON topic.id = run.topic_id
+                    WHERE run.id = paper_extraction_jobs.collection_run_id
+                        AND run.query_version = '2'
+                        AND (
+                            SELECT COUNT(*) FROM paper_extraction_jobs done
+                            JOIN collection_runs done_run ON done_run.id = done.collection_run_id
+                            JOIN evidence_topics done_topic ON done_topic.id = done_run.topic_id
+                            WHERE done.status = 'completed'
+                                AND done_topic.condition_code = topic.condition_code
+                        ) = 0
+                ) THEN 0 ELSE 1 END,
+                created_at, id
                 LIMIT 1
                 """
             ).fetchone()
