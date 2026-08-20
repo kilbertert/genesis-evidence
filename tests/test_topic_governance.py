@@ -397,3 +397,33 @@ def test_reconcile_topic_ledger_copies_one_known_decision_to_duplicates(tmp_path
         row["title_abstract_decision"] == "included"
         for row in store.list_topic_ledger(topic_id)
     )
+
+
+def test_reconcile_topic_ledger_preserves_title_exclusion_reason(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert result["conflicts"] == []
+    assert all(
+        (row["title_abstract_decision"], row["primary_exclusion_reason"])
+        == ("excluded", "wrong_population")
+        for row in store.list_topic_ledger(topic_id)
+    )
