@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -443,6 +443,45 @@ def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:
     ).run_once() == job_id
     assert resumed.calls == 2
     assert store.get_extraction_job(job_id)["status"] == "completed"
+
+
+def test_targeted_query_batch_is_claimed_before_older_backlog(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _locked_topic(store)
+    first = store.upsert_paper(_record(), source_url="https://example.test/first")
+    second = store.upsert_paper(
+        replace(
+            _record(),
+            source_id="MED:456",
+            doi="10.1000/example-2",
+            pmid="456",
+            pmcid="PMC456",
+        ),
+        source_url="https://example.test/second",
+    )
+    with database.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO collection_runs(
+                id, topic_id, condition_code, source, search_stream, query_version,
+                query, status, created_at
+            ) VALUES (?, ?, 'COND_SARCOPENIA_FRAILTY', 'test', 'effect', ?, 'test', 'completed', ?)
+            """,
+            (("run-v1", topic_id, "1", "2026-08-12T00:00:00Z"),
+             ("run-v2", topic_id, "2", "2026-08-13T00:00:00Z")),
+        )
+        connection.executemany(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, created_at, updated_at
+            ) VALUES (?, ?, ?, 'queued', 'extraction_a', ?, ?)
+            """,
+            (("job-v1", first, "run-v1", "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z"),
+             ("job-v2", second, "run-v2", "2026-08-13T00:00:00Z", "2026-08-13T00:00:00Z")),
+        )
+    assert store.claim_next_extraction_job()["id"] == "job-v2"
 
 
 def test_interrupted_running_job_is_failed_without_losing_saved_stage(tmp_path) -> None:
