@@ -134,6 +134,81 @@ def test_short_metric_abbreviations_do_not_match_words_by_substring(tmp_path) ->
     assert {row["coverage_status"] for row in masld} == {"planned"}
 
 
+def test_screening_backlog_blocks_claim_ready_status(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = store.create_topic(
+        code="prediabetes-screening-backlog",
+        version="1",
+        condition_code="COND_PREDIABETES",
+        review_question="Does nutrition affect fasting glucose?",
+        picots={
+            "population": "Adults with prediabetes",
+            "intervention_or_exposure": "Nutrition intervention",
+            "comparator": "Usual diet",
+            "outcomes": "Fasting glucose",
+            "timing": "At least 4 weeks",
+            "setting": "Community or clinical",
+        },
+        eligible_study_designs=("randomized_controlled_trial",),
+        inclusion_criteria=("Human adults",),
+        exclusion_reasons=("wrong_population", "wrong_outcome"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-20",
+        reviewer="reviewer",
+    )
+    store.lock_topic(topic_id, reviewer="reviewer")
+    run_id = store.start_collection(
+        topic_id=topic_id,
+        source="test",
+        query="prediabetes fasting glucose nutrition",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
+            VALUES ('paper-pending', 'Pending screening', 'formal', 'clear',
+                '2026-08-20T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
+            VALUES ('paper-excluded', 'Excluded after title screening', 'formal', 'clear',
+                '2026-08-20T00:00:00Z')
+            """
+        )
+    store.add_to_collection(run_id, "paper-pending", position=1)
+    store.add_to_collection(run_id, "paper-excluded", position=2)
+    store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE collection_papers SET title_abstract_decision = 'excluded',
+                title_abstract_reviewer = 'reviewer',
+                title_abstract_reviewed_at = '2026-08-20T00:00:00Z',
+                full_text_retrieval_status = 'retrieved',
+                primary_exclusion_reason = 'wrong_population'
+            WHERE paper_id = 'paper-excluded'
+            """
+        )
+
+    row = next(
+        item
+        for item in ReviewStore(database).list_coverage_matrix()
+        if item["condition_code"] == "COND_PREDIABETES"
+        and item["metric_code"] == "fasting_glucose"
+    )
+
+    assert row["coverage_status"] == "screening"
+    assert row["screening_backlog"] == {
+        "title_abstract": 1,
+        "retrieval": 0,
+        "full_text": 0,
+    }
+
+
 def test_matrix_matches_long_form_uacr_and_bone_outcomes(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()

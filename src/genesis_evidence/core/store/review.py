@@ -1111,7 +1111,16 @@ class ReviewStore:
                             f"""
                             SELECT count(DISTINCT cr.id) AS completed_runs,
                                 count(DISTINCT CASE WHEN cp.full_text_decision = 'included'
-                                    THEN cp.paper_id END) AS full_text_included
+                                    THEN cp.paper_id END) AS full_text_included,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision IS NULL
+                                    THEN cp.paper_id END) AS title_abstract_pending,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision = 'included'
+                                    AND cp.full_text_retrieval_status = 'pending'
+                                    THEN cp.paper_id END) AS retrieval_pending,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision = 'included'
+                                    AND cp.full_text_retrieval_status = 'retrieved'
+                                    AND cp.full_text_decision IS NULL
+                                    THEN cp.paper_id END) AS full_text_screening_pending
                             FROM collection_runs cr
                             LEFT JOIN collection_papers cp ON cp.run_id = cr.id
                             WHERE cr.topic_id IN ({placeholders}) AND cr.status = 'completed'
@@ -1119,16 +1128,27 @@ class ReviewStore:
                             topic_ids,
                         ).fetchone()
                     else:
-                        run_counts = {"completed_runs": 0, "full_text_included": 0}
+                        run_counts = {
+                            "completed_runs": 0,
+                            "full_text_included": 0,
+                            "title_abstract_pending": 0,
+                            "retrieval_pending": 0,
+                            "full_text_screening_pending": 0,
+                        }
                     claim_rows = (
                         connection.execute(
                             f"""
-                            SELECT DISTINCT cr.claim_id, r.outcome
+                            SELECT DISTINCT cr.claim_id, r.population, r.ingredient_name,
+                                r.outcome, r.timepoint, topic.picots_json
                             FROM claim_reviews cr
                             JOIN claims c ON c.id = cr.claim_id
                             JOIN results r ON r.id = c.result_id
                             JOIN papers p ON p.id = c.paper_id
                             JOIN paper_admissions pa ON pa.paper_id = p.id
+                            JOIN collection_papers cp ON cp.paper_id = c.paper_id
+                                AND cp.full_text_decision = 'included'
+                            JOIN collection_runs run ON run.id = cp.run_id
+                            JOIN evidence_topics topic ON topic.id = run.topic_id
                             WHERE cr.condition_code = ? AND cr.decision = 'approved'
                                 AND p.integrity_status = 'clear'
                                 AND p.publication_status = 'formal'
@@ -1137,22 +1157,25 @@ class ReviewStore:
                                 AND cr.corrected_study_design NOT IN (
                                     'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                                 )
-                                AND EXISTS (
-                                    SELECT 1 FROM collection_papers cp
-                                    JOIN collection_runs run ON run.id = cp.run_id
-                                    WHERE run.topic_id IN ({_placeholders(topic_ids)})
-                                        AND cp.paper_id = c.paper_id
-                                        AND cp.full_text_decision = 'included'
-                                )
+                                AND run.topic_id IN ({_placeholders(topic_ids)})
                             """,
                             (condition["code"], *topic_ids),
                         ).fetchall()
                         if topic_ids
                         else []
                     )
-                    approved_claims = sum(
-                        not metric_code or _metric_outcome_matches(metric_code, row["outcome"])
-                        for row in claim_rows
+                    approved_claims = len(
+                        {
+                            row["claim_id"]
+                            for row in claim_rows
+                            if not metric_code
+                            or f"metric:{metric_code}"
+                            in _profile_scopes(
+                                json.loads(row["picots_json"]),
+                                str(condition["code"]),
+                                dict(row),
+                            )
+                        }
                     )
                     profiles = connection.execute(
                         """
@@ -1196,6 +1219,15 @@ class ReviewStore:
                         next_action = "补充或合并证据体，提高确定性后再发布"
                     elif profiles:
                         coverage_status, next_action = "profile_ready", "创建并审核患者知识卡"
+                    elif any(
+                        run_counts[key]
+                        for key in (
+                            "title_abstract_pending",
+                            "retrieval_pending",
+                            "full_text_screening_pending",
+                        )
+                    ):
+                        coverage_status, next_action = "screening", "完成题录、全文获取和筛选"
                     elif approved_claims and run_counts["full_text_included"]:
                         coverage_status = "claims_ready"
                         next_action = "合并同一 PICOTS 的 Evidence Profile"
@@ -1203,26 +1235,8 @@ class ReviewStore:
                         coverage_status = "full_text_ready"
                         next_action = "完成全文抽取与 Claim 审核"
                     elif run_counts["completed_runs"]:
-                        incomplete_screening = connection.execute(
-                            f"""
-                            SELECT 1 FROM collection_papers cp
-                            JOIN collection_runs cr ON cr.id = cp.run_id
-                            WHERE cr.topic_id IN ({_placeholders(topic_ids)})
-                                AND cr.status = 'completed' AND (
-                                    cp.title_abstract_decision IS NULL
-                                    OR (cp.title_abstract_decision = 'included'
-                                        AND cp.full_text_retrieval_status = 'pending')
-                                    OR (cp.full_text_retrieval_status = 'retrieved'
-                                        AND cp.full_text_decision IS NULL)
-                                ) LIMIT 1
-                            """,
-                            topic_ids,
-                        ).fetchone()
-                        if incomplete_screening:
-                            coverage_status, next_action = "screening", "完成全文获取和筛选"
-                        else:
-                            coverage_status = "no_eligible_evidence"
-                            next_action = "扩展检索，当前主题尚无全文纳入证据"
+                        coverage_status = "no_eligible_evidence"
+                        next_action = "扩展检索，当前主题尚无全文纳入证据"
                     elif topic_counts["locked"]:
                         coverage_status, next_action = "topic_locked", "启动该主题的论文检索"
                     else:
@@ -1240,6 +1254,11 @@ class ReviewStore:
                             "locked_topic_count": topic_counts["locked"] or 0,
                             "completed_run_count": run_counts["completed_runs"] or 0,
                             "full_text_included_count": run_counts["full_text_included"] or 0,
+                            "screening_backlog": {
+                                "title_abstract": run_counts["title_abstract_pending"] or 0,
+                                "retrieval": run_counts["retrieval_pending"] or 0,
+                                "full_text": run_counts["full_text_screening_pending"] or 0,
+                            },
                             "approved_claim_count": approved_claims,
                             "evidence_profile_count": profiles,
                             "cards": card_counts,
@@ -2027,6 +2046,10 @@ def _profile_scopes(
     if scopes:
         return scopes
     for component in _topic_outcome_components(topic_outcome):
+        if condition and any(
+            _metric_outcome_matches(metric_code, component) for metric_code in condition.metrics
+        ):
+            continue
         if _picots_text_matches(component, result_outcome, require_qualifiers=False):
             scopes[_generic_scope_key(component)] = component
     return scopes
