@@ -233,6 +233,10 @@ class ArkPaperAnalyzer:
                 os.getenv("PAPER_AI_MODEL", "").strip()
                 or os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL)
             ),
+            timeout_seconds=float(
+                os.getenv("PAPER_AI_TIMEOUT_SECONDS", "").strip()
+                or os.getenv("ARK_TIMEOUT_SECONDS", "180")
+            ),
             max_tokens=int(
                 os.getenv("PAPER_AI_MAX_TOKENS", "").strip()
                 or os.getenv("ARK_MAX_TOKENS", "16384")

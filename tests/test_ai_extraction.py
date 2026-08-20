@@ -374,8 +374,11 @@ def test_from_env_honors_ark_max_tokens(monkeypatch) -> None:
 def test_from_env_honors_provider_max_tokens(monkeypatch) -> None:
     monkeypatch.setenv("PAPER_AI_API_KEY", "k")
     monkeypatch.setenv("PAPER_AI_MAX_TOKENS", "32000")
+    monkeypatch.setenv("PAPER_AI_TIMEOUT_SECONDS", "420")
     monkeypatch.delenv("ARK_MAX_TOKENS", raising=False)
-    assert ArkPaperAnalyzer.from_env()._max_tokens == 32000
+    analyzer = ArkPaperAnalyzer.from_env()
+    assert analyzer._max_tokens == 32000
+    assert analyzer._timeout == 420
 
 
 def test_from_env_reads_openai_compatible_provider_key_from_csv(tmp_path, monkeypatch) -> None:
