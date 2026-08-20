@@ -773,8 +773,12 @@ class PaperStore:
                 """
                 SELECT job.id, job.paper_id, job.error_class, job.error_message
                 FROM paper_extraction_jobs job
-                WHERE job.status = 'failed'
-                    AND job.error_class <> 'ScreeningExcluded'
+                WHERE job.status IN ('failed', 'queued')
+                    AND (job.error_class IS NULL OR job.error_class <> 'ScreeningExcluded')
+                    AND EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        WHERE cp.paper_id = job.paper_id
+                    )
                     AND NOT EXISTS (
                         SELECT 1 FROM collection_papers cp
                         WHERE cp.paper_id = job.paper_id
@@ -787,8 +791,9 @@ class PaperStore:
             for row in rows:
                 connection.execute(
                     """
-                    UPDATE paper_extraction_jobs SET error_class = 'ScreeningExcluded',
-                        error_message = ?, updated_at = ? WHERE id = ?
+                    UPDATE paper_extraction_jobs SET status = 'failed',
+                        error_class = 'ScreeningExcluded', error_message = ?, updated_at = ?
+                        WHERE id = ?
                     """,
                     (
                         "No retry is required because screening excluded the paper.",
@@ -955,6 +960,15 @@ class PaperStore:
                 """
                 SELECT * FROM paper_extraction_jobs
                 WHERE status = 'queued'
+                    AND (NOT EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        WHERE cp.paper_id = paper_extraction_jobs.paper_id
+                    ) OR EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        WHERE cp.paper_id = paper_extraction_jobs.paper_id
+                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
+                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                    ))
                 ORDER BY CASE WHEN EXISTS (
                     SELECT 1 FROM collection_runs run
                     WHERE run.id = paper_extraction_jobs.collection_run_id

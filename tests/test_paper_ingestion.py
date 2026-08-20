@@ -453,6 +453,64 @@ def test_excluded_paper_failure_is_preserved_as_terminal_audit(tmp_path) -> None
     assert event_count == 1
 
 
+def test_excluded_paper_queued_job_is_closed_before_worker_claim(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    run_id = store.start_collection(
+        topic_id=_locked_topic(store),
+        source="europe_pmc",
+        query="protein AND ageing",
+    )
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_design",
+        reviewer="ai:screening",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, status, stage, created_at, updated_at
+            ) VALUES ('job-1', ?, 'queued', 'extraction_a', 'now', 'now')
+            """,
+            (paper_id,),
+        )
+
+    assert store.claim_next_extraction_job() is None
+    assert store.supersede_excluded_extraction_failures(reviewer="ai:retrieval-worker") == 1
+    with database.connect() as connection:
+        job = connection.execute(
+            "SELECT status, error_class FROM paper_extraction_jobs"
+        ).fetchone()
+    assert tuple(job) == ("failed", "ScreeningExcluded")
+
+
+def test_legacy_queued_job_without_screening_ledger_is_preserved(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, status, stage, created_at, updated_at
+            ) VALUES ('legacy-job', ?, 'queued', 'extraction_a', 'now', 'now')
+            """,
+            (paper_id,),
+        )
+
+    assert store.supersede_excluded_extraction_failures(reviewer="ai:retrieval-worker") == 0
+    assert store.claim_next_extraction_job()["id"] == "legacy-job"
+
+
 def test_worker_failure_keeps_completed_stage_and_can_retry(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
