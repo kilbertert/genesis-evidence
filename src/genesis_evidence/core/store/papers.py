@@ -954,7 +954,13 @@ class PaperStore:
             row = connection.execute(
                 """
                 SELECT * FROM paper_extraction_jobs
-                WHERE status = 'queued' ORDER BY created_at, id LIMIT 1
+                WHERE status = 'queued'
+                ORDER BY CASE WHEN EXISTS (
+                    SELECT 1 FROM collection_runs run
+                    WHERE run.id = paper_extraction_jobs.collection_run_id
+                        AND run.query_version = '2'
+                ) THEN 0 ELSE 1 END, created_at, id
+                LIMIT 1
                 """
             ).fetchone()
             if row is None:
