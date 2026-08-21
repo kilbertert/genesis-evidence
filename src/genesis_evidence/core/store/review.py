@@ -1992,6 +1992,7 @@ _PROFILE_OUTCOME_ALIASES = {
     "bone_density_t_score": (
         "bonemineraldensity",
         "bmd",
+        "tscore",
         "bonedensitytscore",
         "bonemineraldensitytscore",
         "bmdtscore",
@@ -2172,9 +2173,11 @@ def _claim_dict(
         and item.get("full_text_decision") != "excluded"
     ]
     dimensions = {
-        field: str(claim.get(field) or "")
-        for field in ("population", "ingredient_name", "outcome", "timepoint")
+        field: str(claim.get(field) or "") for field in ("population", "outcome", "timepoint")
     }
+    dimensions["ingredient_name"] = " ".join(
+        str(claim.get(field) or "") for field in ("ingredient_name", "ingredient_form", "dose")
+    )
     dimensions["population"] = " ".join(
         (
             dimensions["population"],
@@ -2187,7 +2190,7 @@ def _claim_dict(
         dict.fromkeys(
             str(item["topic_condition_code"])
             for item in active_collections
-            if _profile_scope_matches(item["picots"], dimensions)
+            if _profile_scopes(item["picots"], str(item["topic_condition_code"]), dimensions)
         )
     )
     limitations = [str(value) for value in extraction.get("limitations", []) if str(value).strip()]
