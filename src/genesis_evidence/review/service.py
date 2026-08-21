@@ -414,6 +414,7 @@ class EvidenceReviewService:
                 issue for issue in guidance["issues"] if issue.get("priority") == "must_resolve"
             ]
             if material_issues and not resolution_is_source_based:
+                self.store.require_consistency_adjudication(paper_id, reviewer=actor)
                 return self._automation_attention(
                     paper_id,
                     actor=actor,
