@@ -272,16 +272,24 @@ class ReviewStore:
                 "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
             ).fetchone()
             if previous is None:
-                raise ValueError("paper admission item not found")
-            connection.execute(
-                """
-                UPDATE paper_admissions SET status = 'pending', reviewer = ?, reviewed_at = ?
-                WHERE paper_id = ?
-                """,
-                (reviewer, _now(), paper_id),
-            )
+                connection.execute(
+                    """
+                    INSERT INTO paper_admissions(
+                        paper_id, status, condition_codes_json, reviewer, reviewed_at
+                    ) VALUES (?, 'pending', '[]', ?, ?)
+                    """,
+                    (paper_id, reviewer, _now()),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE paper_admissions SET status = 'pending', reviewer = ?, reviewed_at = ?
+                    WHERE paper_id = ?
+                    """,
+                    (reviewer, _now(), paper_id),
+                )
             stale_cards = self._stale_cards_for_paper(connection, paper_id)
-            if previous["status"] != "pending" or stale_cards:
+            if previous is None or previous["status"] != "pending" or stale_cards:
                 self._audit(
                     connection,
                     "paper",
@@ -289,7 +297,7 @@ class ReviewStore:
                     "consistency_adjudication_required",
                     reviewer,
                     {
-                        "from_status": previous["status"],
+                        "from_status": previous["status"] if previous else None,
                         "to_status": "pending",
                         "stale_cards": stale_cards,
                     },
