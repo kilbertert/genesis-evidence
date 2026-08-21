@@ -1724,6 +1724,7 @@ def _picots_text_matches(
         "placebo": ("placebo", "usual", "control"),
         "alternative": ("alternative", "intervention"),
         "supplement": ("supplement", "intervention"),
+        "collagen": ("collagen", "protein"),
         "25ohd": ("25", "vitamin"),
         "hydroxyvitamin": ("vitamin",),
     }
@@ -1847,6 +1848,8 @@ def _normalize_picots_text(value: str) -> str:
         "病人": "patients",
         "碳酸氢钠": "sodium bicarbonate",
         "胆钙化醇": "cholecalciferol vitamin d",
+        "胶原蛋白肽": "collagen protein peptide",
+        "胶原蛋白": "collagen protein",
         "蛋白质补充剂": "protein supplementation",
         "膳食": "dietary",
         "饮食": "dietary",
