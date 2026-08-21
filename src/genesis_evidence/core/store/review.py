@@ -266,6 +266,35 @@ class ReviewStore:
                 },
             )
 
+    def require_consistency_adjudication(self, paper_id: str, *, reviewer: str) -> None:
+        with self.database.transaction() as connection:
+            previous = connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            if previous is None:
+                raise ValueError("paper admission item not found")
+            connection.execute(
+                """
+                UPDATE paper_admissions SET status = 'pending', reviewer = ?, reviewed_at = ?
+                WHERE paper_id = ?
+                """,
+                (reviewer, _now(), paper_id),
+            )
+            stale_cards = self._stale_cards_for_paper(connection, paper_id)
+            if previous["status"] != "pending" or stale_cards:
+                self._audit(
+                    connection,
+                    "paper",
+                    paper_id,
+                    "consistency_adjudication_required",
+                    reviewer,
+                    {
+                        "from_status": previous["status"],
+                        "to_status": "pending",
+                        "stale_cards": stale_cards,
+                    },
+                )
+
     def review_claim(
         self,
         claim_id: str,

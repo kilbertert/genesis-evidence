@@ -1203,6 +1203,10 @@ def test_ai_blocks_unresolved_material_difference_without_polluting_risk(tmp_pat
     result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
     assert result["status"] == "attention_required"
     assert result["stage"] == "consistency_adjudication"
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == "pending"
     _admit(
         service,
         paper_id,
@@ -1224,6 +1228,43 @@ def test_ai_blocks_unresolved_material_difference_without_polluting_risk(tmp_pat
     assert "primary estimate was verified" in admission["consistency_resolution"].casefold()
     assert risk["overall"] == "some_concerns"
     assert tuple(card) == ("approved", "very_low")
+
+
+def test_unresolved_difference_removes_paper_from_active_profiles(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database, consistency="consistent")
+    first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    assert first["cards"][0]["status"] == "approved"
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_extractions SET consistency_status = 'needs_review', "
+            "consistency_json = ? WHERE paper_id = ?",
+            (
+                json.dumps(
+                    {
+                        "verdict": "needs_review",
+                        "issues": [
+                            {
+                                "field": "claims[0].effect_estimate",
+                                "severity": "high",
+                                "message": "The two estimates conflict.",
+                                "evidence": "Results table 2",
+                            }
+                        ],
+                    }
+                ),
+                paper_id,
+            ),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["stage"] == "consistency_adjudication"
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == "pending"
+        assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "stale"
 
 
 def test_low_claim_difference_does_not_downgrade_risk(tmp_path) -> None:
