@@ -650,6 +650,47 @@ def test_picots_matches_collagen_peptides_as_a_protein_intervention() -> None:
     assert _picots_text_matches(topic, "5 g specific collagen peptides daily")
 
 
+def test_claim_review_matches_combination_intervention_details(tmp_path) -> None:
+    database, _ = _service(tmp_path)
+    paper_id, _ = _review_case(database)
+    picots = {
+        "population": "Adults aged 40 and older or postmenopausal adults",
+        "intervention_or_exposure": (
+            "Calcium, vitamin D, protein, or dietary pattern intervention/exposure"
+        ),
+        "outcomes": "Bone mineral density, T-score, calcium, or alkaline phosphatase",
+        "timing": "At least 6 months or longer follow-up",
+    }
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE evidence_topics SET condition_code = ?, picots_json = ?",
+            ("COND_OSTEOPOROSIS_RISK", json.dumps(picots)),
+        )
+        connection.execute(
+            """
+            UPDATE results SET population = 'postmenopausal women with osteopenia',
+                ingredient_name = 'CalGo®',
+                ingredient_form = 'salmon bone complex in a collagen-rich matrix',
+                dose = '380 mg elemental calcium, 500 mg type II collagen, 40 µg vitamin D3',
+                outcome = '24-month change in femoral-neck BMD', timepoint = '24 months'
+            WHERE paper_id = ?
+            """,
+            (paper_id,),
+        )
+
+    item = ReviewStore(database).get_review_item(paper_id)
+    assert item["claims"][0]["review_suggestion"]["condition_code"] == ("COND_OSTEOPOROSIS_RISK")
+
+    for unrelated_outcome in ("adverse event incidence", "EQ-5D-3L index and EQ-VAS scores"):
+        with database.transaction() as connection:
+            connection.execute(
+                "UPDATE results SET outcome = ? WHERE paper_id = ?",
+                (unrelated_outcome, paper_id),
+            )
+        item = ReviewStore(database).get_review_item(paper_id)
+        assert item["claims"][0]["review_suggestion"]["decision"] == "rejected"
+
+
 def test_picots_duration_normalizes_chinese_units() -> None:
     assert _picots_text_matches("At least 24 weeks", "干预周期 24 周")
     assert _picots_text_matches("At least 6 months", "干预周期 24 周至 24 个月")
