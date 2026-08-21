@@ -650,6 +650,13 @@ def test_picots_matches_collagen_peptides_as_a_protein_intervention() -> None:
     assert _picots_text_matches(topic, "5 g specific collagen peptides daily")
 
 
+def test_picots_accepts_regular_milk_as_an_alternative_dietary_comparator() -> None:
+    topic = "Placebo, no intervention, usual diet, or alternative dietary intervention"
+
+    assert _picots_text_matches(topic, "普通鲜奶，每日400 mL")
+    assert _picots_text_matches(topic, "regular milk, 400 mL daily")
+
+
 def test_claim_review_matches_combination_intervention_details(tmp_path) -> None:
     database, _ = _service(tmp_path)
     paper_id, _ = _review_case(database)
@@ -783,6 +790,10 @@ def test_profile_scope_recognizes_bmd_as_bone_density() -> None:
         "timepoint": "After 12 months",
     }
 
+    assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
+        "metric:bone_density_t_score": "骨密度 T 值"
+    }
+    dimensions["outcome"] = "腰椎L1-4骨密度变化百分比"
     assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
         "metric:bone_density_t_score": "骨密度 T 值"
     }
