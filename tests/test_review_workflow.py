@@ -643,6 +643,13 @@ def test_picots_matches_common_chinese_population_terms() -> None:
     assert not _picots_text_matches("Adults aged 60 and older", "年龄 > 50 岁")
 
 
+def test_picots_matches_collagen_peptides_as_a_protein_intervention() -> None:
+    topic = "Calcium, vitamin D, protein, or dietary pattern intervention/exposure"
+
+    assert _picots_text_matches(topic, "每日口服5 g特定生物活性胶原蛋白肽（SCP）")
+    assert _picots_text_matches(topic, "5 g specific collagen peptides daily")
+
+
 def test_picots_duration_normalizes_chinese_units() -> None:
     assert _picots_text_matches("At least 24 weeks", "干预周期 24 周")
     assert _picots_text_matches("At least 6 months", "干预周期 24 周至 24 个月")
