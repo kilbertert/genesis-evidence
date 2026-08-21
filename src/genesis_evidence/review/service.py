@@ -9,9 +9,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.store import PaperStore, ReviewStore
+from ..core.store.review import _source_based_consistency_resolution
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 
-AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.3"
+AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.4"
 
 StudyDesign = Literal[
     "randomized_controlled_trial",
@@ -404,10 +405,27 @@ class EvidenceReviewService:
                     "reason": "a non-excluded collection exists for a new screening evaluation",
                 },
             )
-        consistency_resolution = (item.get("admission") or {}).get("consistency_resolution")
+        admission = item.get("admission") or {}
+        consistency_resolution = admission.get("consistency_resolution")
+        resolution_is_source_based = _source_based_consistency_resolution(admission)
         automatically_adjudicated = False
         if (item.get("consistency") or {}).get("verdict") == "needs_review":
-            automatically_adjudicated = not bool(consistency_resolution)
+            material_issues = [
+                issue for issue in guidance["issues"] if issue.get("priority") == "must_resolve"
+            ]
+            if material_issues and not resolution_is_source_based:
+                return self._automation_attention(
+                    paper_id,
+                    actor=actor,
+                    requested_by=requester,
+                    stage="consistency_adjudication",
+                    reason=(
+                        "independent extraction has unresolved material differences; "
+                        "record a source-based adjudication before admission"
+                    ),
+                    trace=trace,
+                )
+            automatically_adjudicated = not resolution_is_source_based
             consistency_resolution = consistency_resolution or _automatic_resolution(
                 guidance["issues"]
             )
@@ -421,6 +439,7 @@ class EvidenceReviewService:
                         **context,
                         "issues": guidance["issues"],
                         "consistency_resolution": consistency_resolution,
+                        "material_issue_count": len(material_issues),
                     },
                 )
         blockers = list(guidance["blockers"])
@@ -528,7 +547,6 @@ class EvidenceReviewService:
                     )
             review = _automatic_claim_review(
                 claim,
-                issues=guidance["issues"],
                 admitted_conditions=admitted_conditions,
                 source_verified=bool(source_verification and source_verification["verified"]),
             )
@@ -797,7 +815,8 @@ def _automatic_resolution(issues: list[dict[str, object]]) -> str:
     lines = [
         f"AI consistency adjudication ({AUTONOMOUS_REVIEW_POLICY_VERSION}): "
         "the primary extraction remains the structured source of record; each checker issue "
-        "is retained below for audit and raises downstream risk-of-bias when material."
+        "is retained below for audit. Material issues require source-based adjudication before "
+        "admission; they do not determine study risk of bias."
     ]
     lines.extend(
         f"[{issue.get('severity', 'unknown')}] {issue.get('field', 'difference')}: "
@@ -810,7 +829,6 @@ def _automatic_resolution(issues: list[dict[str, object]]) -> str:
 def _automatic_claim_review(
     claim: dict[str, object],
     *,
-    issues: list[dict[str, object]],
     admitted_conditions: list[str],
     source_verified: bool,
 ) -> ClaimReviewInput | None:
@@ -848,36 +866,20 @@ def _automatic_claim_review(
     if design in OBSERVATIONAL_DESIGNS and inference == "causal":
         inference = "associational"
     risk = dict(suggestion.get("risk_of_bias") or {})
-    material = [
-        issue
-        for issue in issues
-        if issue.get("priority") == "must_resolve" and _issue_applies_to_claim(issue, claim)
-    ]
     reported_limitations = str(risk.get("rationale") or "").casefold()
     reported_high_risk = any(
         token in reported_limitations
         for token in (
             "high risk of bias",
             "critical risk of bias",
-            "very low certainty",
-            "very-low certainty",
             "高偏倚风险",
-            "证据确定性极低",
         )
     )
-    risk["overall"] = "high" if material or reported_high_risk else "some_concerns"
+    risk["overall"] = "high" if reported_high_risk else "some_concerns"
     risk["rationale"] = (
         str(risk.get("rationale") or "AI review found no extracted limitations.")
-        + (
-            " Material independent-extraction differences were retained in the audit trail, so "
-            "this result "
-            "is conservatively rated high risk."
-            if material
-            else (
-                " Independent extraction source checks found no unresolved material issue for "
-                "this result."
-            )
-        )
+        + " Independent-extraction differences are adjudicated separately and do not determine "
+        "research risk of bias."
     )[:4000]
     return ClaimReviewInput(
         decision="approved",
@@ -1106,32 +1108,6 @@ def _interpretation(claim: dict[str, object]) -> str:
     ):
         return "does_not_support"
     return "mixed" if "mixed" in text or "不一致" in text else "supports"
-
-
-def _issue_applies_to_claim(issue: dict[str, object], claim: dict[str, object]) -> bool:
-    field = str(issue.get("field") or "").casefold()
-    if not re.match(r"^claims?(?:$|[.\[])", field):
-        return True
-    text = " ".join((field, *(str(issue.get(key) or "") for key in ("message", "evidence"))))
-    index = claim.get("extraction_claim_index")
-    if not index:
-        return True
-    bracketed = re.search(r"claims?\[(\d+)\]", text.casefold())
-    if bracketed:
-        return int(index) == int(bracketed.group(1)) + 1
-    matches = re.findall(r"\bclaims?\s*(\d+)(?:\s*[-–]\s*(\d+))?", text.casefold())
-    if not matches:
-        additional_claim_only = any(
-            phrase in text.casefold()
-            for phrase in (
-                "not present in extraction",
-                "does not include",
-                "not included in extraction",
-            )
-        )
-        return not additional_claim_only
-    claim_index = int(index)
-    return any(int(start) <= claim_index <= int(end or start) for start, end in matches)
 
 
 def _not_reported(value: str) -> bool:

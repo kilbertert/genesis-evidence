@@ -451,13 +451,16 @@ class ReviewStore:
                     "only verified formal publications can support a patient-visible profile"
                 )
             if any(
-                row["candidate_claim_type"] == "mechanism"
-                or row["corrected_study_design"]
+                row["corrected_study_design"]
                 in {"animal_study", "in_vitro_study", "case_series", "case_report"}
                 for row in rows
             ):
                 raise ValueError(
                     "mechanism and case-report results cannot support a patient-visible card"
+                )
+            if any(row["candidate_claim_type"] != "intervention_effect" for row in rows):
+                raise ValueError(
+                    "only direct intervention-effect results can support a patient-visible card"
                 )
             if profile["certainty"] in {"high", "moderate"} and any(
                 json.loads(row["risk_of_bias_json"])["overall"] in {"high", "critical", "uncertain"}
@@ -486,7 +489,7 @@ class ReviewStore:
                 WHERE p.integrity_status = 'clear'
                     AND p.publication_status = 'formal'
                     AND pa.status = 'internally_admitted'
-                    AND c.candidate_claim_type <> 'mechanism'
+                    AND c.candidate_claim_type = 'intervention_effect'
                     AND COALESCE(cr.corrected_study_design, c.candidate_study_design) NOT IN (
                         'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                     )
@@ -996,7 +999,7 @@ class ReviewStore:
                     WHERE cr.decision = 'approved' AND cr.condition_code = ?
                         AND p.integrity_status = 'clear' AND p.publication_status = 'formal'
                         AND pa.status = 'internally_admitted'
-                        AND c.candidate_claim_type <> 'mechanism'
+                        AND c.candidate_claim_type = 'intervention_effect'
                         AND cr.corrected_study_design NOT IN (
                             'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                         )
@@ -1170,7 +1173,7 @@ class ReviewStore:
                                 AND p.integrity_status = 'clear'
                                 AND p.publication_status = 'formal'
                                 AND pa.status = 'internally_admitted'
-                                AND c.candidate_claim_type <> 'mechanism'
+                                AND c.candidate_claim_type = 'intervention_effect'
                                 AND cr.corrected_study_design NOT IN (
                                     'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                                 )
@@ -1318,7 +1321,7 @@ class ReviewStore:
                     OR p.doi IS NULL OR trim(p.doi) = ''
                     OR ft.paper_id IS NULL OR ft.processed_at IS NULL
                     OR trim(cc.evidence_text) = '' OR trim(cc.locator) = ''
-                    OR c.candidate_claim_type = 'mechanism'
+                    OR c.candidate_claim_type <> 'intervention_effect'
                     OR cr.corrected_study_design IN (
                         'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                     )
@@ -2384,9 +2387,10 @@ def _review_guidance(
         for issue in (consistency or {}).get("issues", [])
         if isinstance(issue, dict)
     ]
-    unresolved_consistency = (consistency or {}).get("verdict") == "needs_review" and not str(
-        (admission or {}).get("consistency_resolution") or ""
-    ).strip()
+    unresolved_consistency = (
+        (consistency or {}).get("verdict") == "needs_review"
+        and not _source_based_consistency_resolution(admission)
+    )
     material_issues = [issue for issue in issues if issue["priority"] == "must_resolve"]
     pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
     checks = [
@@ -2425,8 +2429,9 @@ def _review_guidance(
                 "blocked" if not extraction else ("action" if unresolved_consistency else "pass")
             ),
             "detail": (
-                f"AI 将逐项记录并裁决 {len(issues)} 项差异；"
-                f"{len(material_issues)} 项关键差异会将相关 Claim 保守降为高偏倚风险。"
+                f"AI 将逐项记录 {len(issues)} 项差异；"
+                f"{len(material_issues)} 项关键差异需要基于原文完成裁决，"
+                "且不会自动改变研究偏倚风险。"
                 if unresolved_consistency
                 else (
                     "关键差异已由具名执行者裁决。"
@@ -2501,6 +2506,13 @@ def _review_guidance(
             "consistency_resolution": _resolution_draft(issues),
         },
     }
+
+
+def _source_based_consistency_resolution(admission: object) -> bool:
+    if not isinstance(admission, dict):
+        return False
+    resolution = str(admission.get("consistency_resolution") or "").strip()
+    return bool(resolution) and not resolution.startswith("AI consistency adjudication (")
 
 
 def _critical_issue(issue: dict[str, object]) -> bool:
