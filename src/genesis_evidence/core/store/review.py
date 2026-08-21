@@ -493,6 +493,11 @@ class ReviewStore:
                     AND EXISTS (
                         SELECT 1 FROM json_each(pa.condition_codes_json) WHERE value = ?
                     )
+                    AND c.extraction_id = (
+                        SELECT latest.id FROM paper_extractions latest
+                        WHERE latest.paper_id = p.id
+                        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                    )
                     AND EXISTS (
                         SELECT 1 FROM collection_papers cp
                         JOIN collection_runs cr ON cr.id = cp.run_id
@@ -584,12 +589,19 @@ class ReviewStore:
                     now,
                 ),
             )
+            profile_results: dict[str, str] = {}
+            for row in rows:
+                result_id = str(row["result_id"])
+                interpretation = interpretations[row["id"]]
+                if result_id in profile_results and profile_results[result_id] != interpretation:
+                    raise ValueError("claims for one result require one shared interpretation")
+                profile_results[result_id] = interpretation
             connection.executemany(
                 """
                 INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
                 VALUES (?, ?, ?)
                 """,
-                [(profile_id, row["result_id"], interpretations[row["id"]]) for row in rows],
+                [(profile_id, result_id, value) for result_id, value in profile_results.items()],
             )
             connection.execute(
                 """
@@ -987,6 +999,11 @@ class ReviewStore:
                         AND c.candidate_claim_type <> 'mechanism'
                         AND cr.corrected_study_design NOT IN (
                             'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                        )
+                        AND c.extraction_id = (
+                            SELECT latest.id FROM paper_extractions latest
+                            WHERE latest.paper_id = p.id
+                            ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
                         )
                         AND EXISTS (
                             SELECT 1 FROM collection_papers cp
@@ -1821,6 +1838,7 @@ def _normalize_picots_text(value: str) -> str:
         "骨质疏松": "osteoporosis",
         "骨量减少": "osteopenia",
         "骨密度": "bone mineral density",
+        "bmd": "bone mineral density",
         "慢性肾脏病": "chronic kidney disease",
         "肾脏病": "kidney disease",
         "肾功能": "kidney function",
@@ -1970,6 +1988,7 @@ _PROFILE_OUTCOME_ALIASES = {
     ),
     "bone_density_t_score": (
         "bonemineraldensity",
+        "bmd",
         "bonedensitytscore",
         "bonemineraldensitytscore",
         "bmdtscore",
@@ -2036,9 +2055,14 @@ def _profile_scopes(
     topic_outcome = str(picots.get("outcomes") or "").strip()
     result_outcome = values.get("outcome", "")
     compact_result = _compact_text(result_outcome)
-    if re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result:
-        return {}
     condition = CONDITION_BY_CODE.get(condition_code)
+    lipid_metrics = {"hdl_c", "ldl_c", "total_cholesterol"}
+    if (
+        condition
+        and lipid_metrics.intersection(condition.metrics)
+        and (re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result)
+    ):
+        return {}
     scopes = {
         f"metric:{metric_code}": METRIC_LABELS[metric_code]
         for metric_code in (condition.metrics if condition else ())

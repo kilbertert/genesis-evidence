@@ -59,8 +59,8 @@ class LiteratureExtractionWorker:
         self._requested_by = requested_by
         self._jats = JatsParser()
 
-    def run_once(self) -> str | None:
-        job = self._store.claim_next_extraction_job()
+    def run_once(self, *, topic_id: str | None = None) -> str | None:
+        job = self._store.claim_next_extraction_job(topic_id=topic_id)
         if job is None:
             return None
         job_id = str(job["id"])
@@ -204,6 +204,7 @@ def main() -> None:
             "GENESIS_EVIDENCE_REVIEWER_ID is not configured; "
             "the extraction worker cannot audit autonomous review requests"
         )
+    topic_id = os.getenv("GENESIS_EVIDENCE_ACTIVE_TOPIC_ID") or None
     worker = LiteratureExtractionWorker(
         store=store,
         objects=ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
@@ -215,10 +216,10 @@ def main() -> None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        store.recover_running_extraction_jobs()
+        store.recover_running_extraction_jobs(topic_id=topic_id)
         poll_seconds = max(1.0, float(os.getenv("GENESIS_EVIDENCE_WORKER_POLL_SECONDS", "5")))
         while True:
-            if worker.run_once() is None:
+            if worker.run_once(topic_id=topic_id) is None:
                 time.sleep(poll_seconds)
 
 

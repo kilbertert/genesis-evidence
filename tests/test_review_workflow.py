@@ -721,6 +721,45 @@ def test_profile_scope_does_not_treat_concentrations_as_ratio() -> None:
     }
 
 
+def test_profile_scope_recognizes_bmd_as_bone_density() -> None:
+    picots = {
+        "population": "Adults aged 40 and older or postmenopausal adults",
+        "intervention_or_exposure": "Calcium or vitamin D supplementation",
+        "outcomes": "Bone mineral density or T-score",
+        "timing": "At least 6 months",
+    }
+    dimensions = {
+        "population": "Postmenopausal women",
+        "ingredient_name": "Calcium and vitamin D",
+        "outcome": "Lumbar spine BMD",
+        "timepoint": "After 12 months",
+    }
+
+    assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
+        "metric:bone_density_t_score": "骨密度 T 值"
+    }
+
+
+def test_profile_scope_keeps_bmd_when_result_also_reports_a_bone_ratio() -> None:
+    picots = {
+        "population": "Adults aged 40 and older or postmenopausal adults",
+        "intervention_or_exposure": "Calcium or vitamin D supplementation",
+        "outcomes": "Bone mineral density, calcium, or alkaline phosphatase",
+        "timing": "At least 6 months",
+    }
+    dimensions = {
+        "population": "Postmenopausal women aged 50-59 years",
+        "ingredient_name": "Eggshell-derived calcium and vitamin D",
+        "outcome": "Changes in BMD, serum calcium, and urine calcium/creatinine ratio",
+        "timepoint": "After 6 months",
+    }
+
+    assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
+        "metric:bone_density_t_score": "骨密度 T 值",
+        "metric:calcium": "钙",
+    }
+
+
 def test_publishing_card_only_stales_the_same_outcome_scope(tmp_path, monkeypatch) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
@@ -908,7 +947,7 @@ def test_ai_completes_review_and_card_without_human_participation(tmp_path) -> N
         assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "stale"
 
 
-def test_ai_stops_when_claim_is_not_linked_to_current_extraction(tmp_path) -> None:
+def test_ai_ignores_claims_from_an_older_extraction(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
     with database.transaction() as connection:
@@ -930,17 +969,80 @@ def test_ai_stops_when_claim_is_not_linked_to_current_extraction(tmp_path) -> No
 
     result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
-    assert result["status"] == "attention_required"
-    assert result["stage"] == "claim_source_verification"
+    assert result["status"] == "completed"
+    assert result["reviewed_claims"] == 0
     with database.connect() as connection:
-        event = connection.execute(
-            "SELECT detail_json FROM audit_events WHERE entity_type = 'claim' AND entity_id = ? "
-            "AND action = 'autonomous_claim_source_verification'",
-            (claim_id,),
-        ).fetchone()
-    detail = json.loads(event["detail_json"])
-    assert detail["verified"] is False
-    assert "Claim and Result are not linked to the current extraction" in detail["failures"]
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM audit_events WHERE entity_type = 'claim' AND entity_id = ? "
+                "AND action = 'autonomous_claim_source_verification'",
+                (claim_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_profile_eligibility_uses_only_each_papers_latest_extraction(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, old_claim_id = _review_case(database)
+    new_claim_id = str(uuid.uuid4())
+    new_result_id = str(uuid.uuid4())
+    _admit(service, paper_id)
+    service.review_claim(old_claim_id, reviewer="reviewer-1", review=_approved_review())
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extractions(
+                id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json, created_at
+            ) SELECT 'new-extraction', paper_id, model, 'new-extract-run', extraction_json,
+                second_model, 'new-second-run', second_extraction_json,
+                check_model, 'new-check-run', consistency_status, consistency_json,
+                '2026-08-12T00:00:00Z'
+            FROM paper_extractions WHERE paper_id = ?
+            """,
+            (paper_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO results(
+                id, study_id, paper_id, extraction_id, population,
+                baseline_nutrient_status, ingredient_name, ingredient_form,
+                dose, comparator, outcome, timepoint, effect_estimate,
+                statistical_details, evidence_text, locator, created_at
+            ) SELECT ?, study_id, paper_id, 'new-extraction', population,
+                baseline_nutrient_status, ingredient_name, ingredient_form,
+                dose, comparator, outcome, timepoint, effect_estimate,
+                statistical_details, evidence_text, locator, '2026-08-12T00:00:00Z'
+            FROM results WHERE id = (SELECT result_id FROM claims WHERE id = ?)
+            """,
+            (new_result_id, old_claim_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO claims(
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_study_design, created_at
+            ) SELECT ?, paper_id, 'new-extraction', ?, candidate_text,
+                evidence_text, locator, candidate_study_design, '2026-08-12T00:00:00Z'
+            FROM claims WHERE id = ?
+            """,
+            (new_claim_id, new_result_id, old_claim_id),
+        )
+    service.review_claim(new_claim_id, reviewer="reviewer-1", review=_approved_review())
+
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[new_claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(new_claim_id),
+    )
+
+    assert card_id
 
 
 def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None:
@@ -1442,6 +1544,56 @@ def test_one_reviewer_can_publish_a_traceable_card(tmp_path) -> None:
         assert admission["status"] == "internally_admitted"
         assert json.loads(admission["condition_codes_json"]) == ["COND_VITAMIN_D_DEFICIENCY"]
         assert connection.execute("SELECT grade FROM knowledge_cards").fetchone()[0] == "moderate"
+
+
+def test_profile_links_a_shared_result_only_once(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    duplicate_claim_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO claims(
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_study_design, created_at
+            ) SELECT ?, paper_id, extraction_id, result_id, candidate_text || ' Confirmed.',
+                evidence_text, locator, candidate_study_design, created_at
+            FROM claims WHERE id = ?
+            """,
+            (duplicate_claim_id, claim_id),
+        )
+    _admit(service, paper_id)
+    for selected_claim_id in (claim_id, duplicate_claim_id):
+        service.review_claim(selected_claim_id, reviewer="reviewer-1", review=_approved_review())
+    profile = _profile(claim_id)
+    profile.interpretations[duplicate_claim_id] = "supports"
+
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id, duplicate_claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=profile,
+    )
+
+    with database.connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM evidence_profile_results ep "
+                "JOIN knowledge_cards kc ON kc.evidence_profile_id = ep.profile_id "
+                "WHERE kc.id = ?",
+                (card_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM card_claims WHERE card_id = ?", (card_id,)
+            ).fetchone()[0]
+            == 2
+        )
 
 
 def test_patient_card_requires_doi_and_processed_full_text(tmp_path) -> None:
