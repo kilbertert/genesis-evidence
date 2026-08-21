@@ -11,7 +11,11 @@ from ..core.store import Database, ObjectStore, PaperStore
 from .downloader import FullTextDownloader
 from .http import HttpClient
 from .ingestion import LiteratureIngestionService
-from .integrity import PublicationIntegrityChecker
+from .integrity import (
+    CrossrefIntegrityProvider,
+    EuropePmcIntegrityProvider,
+    PublicationIntegrityChecker,
+)
 from .policy import SourcePolicyRegistry
 
 
@@ -32,14 +36,25 @@ def main() -> None:
                     os.getenv("GENESIS_EVIDENCE_FULL_TEXT_MAX_BYTES", 25 * 1024 * 1024)
                 ),
             ),
-            integrity=PublicationIntegrityChecker(()),
+            integrity=PublicationIntegrityChecker(
+                (EuropePmcIntegrityProvider(http), CrossrefIntegrityProvider(http))
+            ),
         )
-        summary = service.retrieve_pending_full_texts()
+        topic_id = (
+            os.getenv("GENESIS_EVIDENCE_ACTIVE_TOPIC_ID")
+            or os.getenv("GENESIS_EVIDENCE_BACKLOG_TOPIC_ID")
+            or None
+        )
+        summary = service.retrieve_pending_full_texts(topic_id=topic_id)
     superseded = store.supersede_excluded_extraction_failures(
-        reviewer="ai:retrieval-worker"
+        reviewer="ai:retrieval-worker", topic_id=topic_id
+    )
+    restored = store.restore_screening_excluded_extractions(
+        reviewer="ai:retrieval-worker",
+        topic_id=topic_id,
     )
     retried = 0
-    for job in store.list_extraction_jobs(limit=500):
+    for job in store.list_extraction_jobs(limit=500, topic_id=topic_id, latest_per_paper=True):
         if job["status"] == "failed":
             store.retry_extraction(str(job["id"]), reviewer="ai:extraction-worker")
             retried += 1
@@ -48,6 +63,7 @@ def main() -> None:
             {
                 **asdict(summary),
                 "superseded_failures": superseded,
+                "restored_screening_exclusions": restored,
                 "retried_failures": retried,
             },
             ensure_ascii=False,

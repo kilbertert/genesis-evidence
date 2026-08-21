@@ -69,6 +69,12 @@ class FakeIntegrityChecker:
         return IntegrityAssessment(self.status, (), ("fake",), {"fake": {}})
 
 
+class FailingIntegrityChecker:
+    def check(self, paper: dict[str, object]) -> IntegrityAssessment:
+        del paper
+        raise RuntimeError("integrity provider unavailable")
+
+
 class FakeAnalyzer:
     model = "fake-extractor"
 
@@ -164,11 +170,16 @@ def _record(*, source: SourceName = SourceName.EUROPE_PMC, source_id: str = "MED
     )
 
 
-def _locked_topic(store: PaperStore) -> str:
+def _locked_topic(
+    store: PaperStore,
+    *,
+    code: str = "sarcopenia-protein",
+    condition_code: str = "COND_SARCOPENIA_FRAILTY",
+) -> str:
     topic_id = store.create_topic(
-        code="sarcopenia-protein",
+        code=code,
         version="1",
-        condition_code="COND_SARCOPENIA_FRAILTY",
+        condition_code=condition_code,
         review_question="Does protein supplementation improve strength in older adults?",
         picots={
             "population": "Older adults",
@@ -187,6 +198,24 @@ def _locked_topic(store: PaperStore) -> str:
     )
     store.lock_topic(topic_id, reviewer="reviewer-1")
     return topic_id
+
+
+def _record_variant(index: int) -> PaperRecord:
+    record = _record(source_id=f"MED:{index}")
+    candidate = record.full_text_candidates[0]
+    return replace(
+        record,
+        doi=f"10.1000/example-{index}",
+        pmid=str(index),
+        pmcid=f"PMC{index}",
+        full_text_candidates=(
+            replace(
+                candidate,
+                source_id=f"PMC{index}",
+                url=f"https://www.ebi.ac.uk/europepmc/webservices/rest/PMC{index}/fullTextXML",
+            ),
+        ),
+    )
 
 
 def test_paper_store_deduplicates_the_same_paper_across_sources(tmp_path) -> None:
@@ -357,6 +386,174 @@ def test_pending_full_text_backlog_downloads_and_queues_existing_paper(tmp_path)
         )
 
 
+def test_pending_full_text_backlog_can_be_scoped_to_one_topic(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    first_topic = _locked_topic(store)
+    second_topic = _locked_topic(store, code="sarcopenia-protein-second")
+    for position, (topic_id, record) in enumerate(
+        ((first_topic, _record_variant(124)), (second_topic, _record_variant(125))),
+        start=1,
+    ):
+        paper_id = store.upsert_paper(record, source_url=f"https://example.test/{position}")
+        run_id = store.start_collection(topic_id=topic_id, source="europe_pmc", query="protein")
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="title_abstract",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+    summary = service.retrieve_pending_full_texts(topic_id=first_topic)
+
+    assert summary.pending_papers == 1
+    assert summary.downloaded_full_texts == 1
+    with database.connect() as connection:
+        statuses = connection.execute(
+            """
+            SELECT cr.topic_id, cp.full_text_retrieval_status
+            FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
+            ORDER BY cr.topic_id
+            """
+        ).fetchall()
+    assert {str(row["topic_id"]): str(row["full_text_retrieval_status"]) for row in statuses} == {
+        first_topic: "retrieved",
+        second_topic: "pending",
+    }
+
+
+def test_extraction_claim_can_be_scoped_to_one_topic(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    first_topic = _locked_topic(store)
+    second_topic = _locked_topic(store, code="sarcopenia-protein-second")
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+    for position, (topic_id, record) in enumerate(
+        ((first_topic, _record_variant(224)), (second_topic, _record_variant(225))),
+        start=1,
+    ):
+        paper_id = store.upsert_paper(record, source_url=f"https://example.test/{position}")
+        run_id = store.start_collection(topic_id=topic_id, source="europe_pmc", query="protein")
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="title_abstract",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+    service.retrieve_pending_full_texts()
+
+    first_job = store.claim_next_extraction_job(topic_id=first_topic)
+    second_job = store.claim_next_extraction_job(topic_id=second_topic)
+
+    assert first_job is not None and second_job is not None
+    with database.connect() as connection:
+        runs = connection.execute(
+            "SELECT id, topic_id FROM collection_runs ORDER BY topic_id"
+        ).fetchall()
+    run_topics = {str(row[0]): str(row[1]) for row in runs}
+    assert run_topics[str(first_job["collection_run_id"])] == first_topic
+    assert run_topics[str(second_job["collection_run_id"])] == second_topic
+
+
+def test_worker_recovery_can_be_scoped_to_one_topic(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    first_topic = _locked_topic(store)
+    second_topic = _locked_topic(store, code="sarcopenia-protein-second")
+    with database.transaction() as connection:
+        for index, topic_id in enumerate((first_topic, second_topic), start=1):
+            run_id = f"run-{index}"
+            connection.execute(
+                """
+                INSERT INTO collection_runs(
+                    id, topic_id, condition_code, source, query, status, created_at
+                ) VALUES (?, ?, 'COND_SARCOPENIA_FRAILTY', 'europe_pmc', 'protein',
+                    'completed', 'now')
+                """,
+                (run_id, topic_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
+                VALUES (?, 'Nutrition and ageing', 'formal', 'clear', 'now')
+                """,
+                (f"paper-{index}",),
+            )
+            connection.execute(
+                """
+                INSERT INTO paper_extraction_jobs(
+                    id, paper_id, collection_run_id, status, stage, started_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'running', 'consistency', 'now', 'now', 'now')
+                """,
+                (f"job-{index}", f"paper-{index}", run_id),
+            )
+
+    assert store.recover_running_extraction_jobs(topic_id=first_topic) == 1
+    with database.connect() as connection:
+        statuses = dict(
+            connection.execute("SELECT id, status FROM paper_extraction_jobs").fetchall()
+        )
+    assert statuses == {"job-1": "failed", "job-2": "running"}
+
+
+def test_scoped_worker_leaves_cross_topic_paper_for_exception_review(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    first_topic = _locked_topic(store)
+    second_topic = _locked_topic(store, code="sarcopenia-protein-second")
+    paper_id = store.upsert_paper(_record_variant(325), source_url="https://example.test/paper")
+    run_ids = []
+    for topic_id in (first_topic, second_topic):
+        run_id = store.start_collection(topic_id=topic_id, source="europe_pmc", query="protein")
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="title_abstract",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+        run_ids.append(run_id)
+    stored = ObjectStore(tmp_path / "objects").put(JATS_WITH_RESULT, suffix="xml")
+    store.save_full_text(
+        paper_id,
+        stored,
+        media_type="application/xml",
+        rights_status="redistributable",
+        collection_run_id=run_ids[0],
+    )
+    store.enqueue_extraction(paper_id, collection_run_id=run_ids[0])
+
+    assert store.claim_next_extraction_job(topic_id=first_topic) is None
+    assert store.claim_next_extraction_job() is not None
+
+
 def test_pending_full_text_without_pmcid_closes_retrieval_ledger(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
@@ -395,6 +592,49 @@ def test_pending_full_text_without_pmcid_closes_retrieval_ledger(tmp_path) -> No
         ).fetchone()
     assert row["full_text_retrieval_status"] == "not_retrieved"
     assert "identifier is unavailable" in row["full_text_retrieval_reason"]
+
+
+def test_pending_full_text_stays_pending_when_integrity_provider_fails(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    run_id = store.start_collection(
+        topic_id=_locked_topic(store), source="europe_pmc", query="protein"
+    )
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FailingIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    summary = service.retrieve_pending_full_texts()
+
+    assert summary.failed_full_texts == 1
+    with database.connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT full_text_retrieval_status FROM collection_papers"
+            ).fetchone()[0]
+            == "pending"
+        )
+        assert (
+            connection.execute(
+                "SELECT action FROM audit_events ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+            == "pending_integrity_failed"
+        )
 
 
 def test_excluded_paper_failure_is_preserved_as_terminal_audit(tmp_path) -> None:
@@ -486,10 +726,46 @@ def test_excluded_paper_queued_job_is_closed_before_worker_claim(tmp_path) -> No
     assert store.claim_next_extraction_job() is None
     assert store.supersede_excluded_extraction_failures(reviewer="ai:retrieval-worker") == 1
     with database.connect() as connection:
-        job = connection.execute(
-            "SELECT status, error_class FROM paper_extraction_jobs"
-        ).fetchone()
+        job = connection.execute("SELECT status, error_class FROM paper_extraction_jobs").fetchone()
     assert tuple(job) == ("failed", "ScreeningExcluded")
+
+
+def test_screening_excluded_job_reopens_for_a_new_unreviewed_collection(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    topic_id = _locked_topic(store)
+    old_run = store.start_collection(topic_id=topic_id, source="europe_pmc", query="old")
+    store.add_to_collection(old_run, paper_id, position=1)
+    store.finish_collection(old_run, status="completed", detail={})
+    store.screen_collection_paper(
+        old_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_design",
+        reviewer="ai:screening",
+    )
+    new_run = store.start_collection(topic_id=topic_id, source="europe_pmc", query="new")
+    store.add_to_collection(new_run, paper_id, position=1)
+    store.finish_collection(new_run, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, error_class, error_message,
+                extraction_json, second_extraction_json, created_at, updated_at
+            ) VALUES ('job-reopen', ?, ?, 'failed', 'extraction_a', 'ScreeningExcluded',
+                'closed before new batch screening', '{}', '{}', 'now', 'now')
+            """,
+            (paper_id, new_run),
+        )
+
+    assert store.restore_screening_excluded_extractions(reviewer="ai:screening") == 1
+    job = store.claim_next_extraction_job()
+    assert job["id"] == "job-reopen"
+    assert job["stage"] == "consistency"
 
 
 def test_legacy_queued_job_without_screening_ledger_is_preserved(tmp_path) -> None:
@@ -598,6 +874,88 @@ def test_targeted_query_batch_is_claimed_before_older_backlog(tmp_path) -> None:
             ),
         )
     assert store.claim_next_extraction_job()["id"] == "job-v2"
+
+
+def test_extraction_job_listing_can_be_scoped_to_one_topic(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _locked_topic(store)
+    other_topic_id = store.create_topic(
+        code="other-topic",
+        version="1",
+        condition_code="COND_CKD_RISK",
+        review_question="Does nutrition affect kidney outcomes?",
+        picots={
+            "population": "Adults with kidney disease risk",
+            "intervention_or_exposure": "Nutrition intervention",
+            "comparator": "Usual care",
+            "outcomes": "eGFR",
+            "timing": "Any follow-up",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("randomized_controlled_trial",),
+        inclusion_criteria=("Human adults",),
+        exclusion_reasons=("wrong_population", "wrong_intervention", "wrong_design"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    store.lock_topic(other_topic_id, reviewer="reviewer-1")
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    with database.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO collection_runs(
+                id, topic_id, condition_code, source, search_stream, query_version,
+                query, status, created_at
+            ) VALUES (?, ?, ?, 'test', 'effect', '1', 'test', 'completed', ?)
+            """,
+            (
+                ("run-topic", topic_id, "COND_SARCOPENIA_FRAILTY", "2026-08-12T00:00:00Z"),
+                ("run-other", other_topic_id, "COND_CKD_RISK", "2026-08-12T00:00:00Z"),
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, error_class, error_message,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, 'failed', 'extraction_a', 'PaperAnalysisError',
+                'failed', 'now', 'now')
+            """,
+            (("job-topic", paper_id, "run-topic"), ("job-other", paper_id, "run-other")),
+        )
+
+    assert {job["id"] for job in store.list_extraction_jobs(topic_id=topic_id)} == {"job-topic"}
+
+
+def test_extraction_job_listing_can_return_only_each_papers_latest_job(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _locked_topic(store)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    run_id = store.start_collection(topic_id=topic_id, source="europe_pmc", query="protein")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO paper_extraction_jobs(
+                id, paper_id, collection_run_id, status, stage, error_class, error_message,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, 'failed', 'extraction_a', 'PaperAnalysisError', 'failed', ?, ?)
+            """,
+            (
+                ("job-old", paper_id, run_id, "2026-08-20T00:00:00Z", "now"),
+                ("job-latest", paper_id, run_id, "2026-08-21T00:00:00Z", "now"),
+            ),
+        )
+
+    assert [
+        job["id"] for job in store.list_extraction_jobs(topic_id=topic_id, latest_per_paper=True)
+    ] == ["job-latest"]
 
 
 def test_targeted_query_batch_favors_a_disease_without_completed_extractions(tmp_path) -> None:

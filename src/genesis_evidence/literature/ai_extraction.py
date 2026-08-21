@@ -219,9 +219,10 @@ class ArkPaperAnalyzer:
             os.getenv("PAPER_AI_API_KEY_FILE", "").strip()
             or os.getenv("ARK_API_KEY_FILE", "").strip()
         )
-        api_key = _api_key_from_file(key_file) if key_file else (
-            os.getenv("PAPER_AI_API_KEY", "").strip()
-            or os.getenv("ARK_API_KEY", "")
+        api_key = (
+            _api_key_from_file(key_file)
+            if key_file
+            else (os.getenv("PAPER_AI_API_KEY", "").strip() or os.getenv("ARK_API_KEY", ""))
         )
         return cls(
             api_key=api_key,
@@ -230,16 +231,14 @@ class ArkPaperAnalyzer:
                 or os.getenv("ARK_BASE_URL", DEFAULT_ARK_ENDPOINT)
             ),
             model=(
-                os.getenv("PAPER_AI_MODEL", "").strip()
-                or os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL)
+                os.getenv("PAPER_AI_MODEL", "").strip() or os.getenv("ARK_MODEL", DEFAULT_ARK_MODEL)
             ),
             timeout_seconds=float(
                 os.getenv("PAPER_AI_TIMEOUT_SECONDS", "").strip()
                 or os.getenv("ARK_TIMEOUT_SECONDS", "180")
             ),
             max_tokens=int(
-                os.getenv("PAPER_AI_MAX_TOKENS", "").strip()
-                or os.getenv("ARK_MAX_TOKENS", "16384")
+                os.getenv("PAPER_AI_MAX_TOKENS", "").strip() or os.getenv("ARK_MAX_TOKENS", "16384")
             ),
         )
 
@@ -319,7 +318,7 @@ class ArkPaperAnalyzer:
                 corrected_text, corrected_run_id = self._complete(
                     _CONSISTENCY_CORRECTION_PROMPT,
                     correction_source,
-                    max_tokens=min(self._max_tokens, 8192),
+                    max_tokens=self._max_tokens,
                 )
                 consistency = ConsistencyReport.model_validate(
                     _normalize_consistency_payload(_json_object(corrected_text))
@@ -387,7 +386,7 @@ class ArkPaperAnalyzer:
         corrected_text, corrected_run_id = self._complete(
             _EXTRACTION_CORRECTION_PROMPT,
             correction_source,
-            max_tokens=min(self._max_tokens, 12_288),
+            max_tokens=self._max_tokens,
         )
         try:
             corrected = PaperExtraction.model_validate(_json_object(corrected_text))
@@ -499,7 +498,13 @@ def _normalize_consistency_payload(payload: dict[str, object]) -> dict[str, obje
             "minor": "low",
             "critical": "high",
         }.get(severity, severity if severity in {"low", "medium", "high"} else "medium")
-        normalized.append(issue)
+        normalized.append(
+            {
+                key: issue[key]
+                for key in ("field", "severity", "message", "evidence")
+                if key in issue
+            }
+        )
     return {**payload, "issues": normalized}
 
 
@@ -524,8 +529,7 @@ def _require_source_evidence(extraction: PaperExtraction, document: dict[str, ob
     ]
     if missing:
         details = "; ".join(
-            f"{path}={json.dumps(value[:500], ensure_ascii=False)}"
-            for path, value in missing[:10]
+            f"{path}={json.dumps(value[:500], ensure_ascii=False)}" for path, value in missing[:10]
         )
         if len(missing) > 10:
             details += f"; and {len(missing) - 10} more"

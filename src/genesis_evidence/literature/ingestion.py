@@ -151,9 +151,9 @@ class LiteratureIngestionService:
         return IngestionSummary(run_id=run_id, **counts)
 
     def retrieve_pending_full_texts(
-        self, *, reviewer: str = "ai:retrieval-worker"
+        self, *, reviewer: str = "ai:retrieval-worker", topic_id: str | None = None
     ) -> RetrievalSummary:
-        pending = self._store.list_pending_full_texts()
+        pending = self._store.list_pending_full_texts(topic_id=topic_id)
         counts = {
             "downloaded_full_texts": 0,
             "queued_extractions": 0,
@@ -163,6 +163,34 @@ class LiteratureIngestionService:
         for item in pending:
             paper_id = str(item["paper_id"])
             run_ids = [str(value) for value in item["run_ids"]]
+            try:
+                integrity = self._integrity.check(
+                    {key: item[key] for key in ("doi", "pmid", "pmcid")}
+                )
+            except Exception as exc:
+                counts["failed_full_texts"] += 1
+                self._store.record_event(
+                    "paper",
+                    paper_id,
+                    "pending_integrity_failed",
+                    {"error": f"{type(exc).__name__}: {exc}"},
+                )
+                continue
+            if integrity.checked_sources:
+                self._store.update_integrity(
+                    paper_id,
+                    _stored_integrity_status(integrity.status),
+                    detail=integrity.to_dict(),
+                )
+            if integrity.status == IntegrityStatus.RETRACTED:
+                self._mark_not_retrieved(
+                    run_ids,
+                    paper_id,
+                    reason="Publication integrity check reports a retracted paper.",
+                    reviewer=reviewer,
+                )
+                counts["not_retrieved"] += 1
+                continue
             pmcid = str(item["pmcid"] or "").strip().upper()
             if not pmcid:
                 self._mark_not_retrieved(
@@ -183,7 +211,12 @@ class LiteratureIngestionService:
                 media_type="application/xml",
             )
             try:
-                job_id = self._ingest_candidate(None, paper_id, candidate)
+                job_id = self._ingest_candidate(
+                    None,
+                    paper_id,
+                    candidate,
+                    extraction_run_id=run_ids[0] if run_ids else None,
+                )
             except Exception as exc:
                 counts["failed_full_texts"] += 1
                 self._store.record_event(
@@ -232,6 +265,8 @@ class LiteratureIngestionService:
         run_id: str | None,
         paper_id: str,
         candidate: FullTextCandidate,
+        *,
+        extraction_run_id: str | None = None,
     ) -> str | None:
         if candidate.format != FullTextFormat.JATS_XML:
             return None
@@ -243,14 +278,15 @@ class LiteratureIngestionService:
         }:
             return None
         stored = self._objects.put(artifact.content, suffix="xml")
+        target_run_id = extraction_run_id or run_id
         self._store.save_full_text(
             paper_id,
             stored,
             media_type=artifact.media_type or "application/xml",
             rights_status=document.license.rights_status.value,
-            collection_run_id=run_id,
+            collection_run_id=target_run_id,
         )
-        return self._store.enqueue_extraction(paper_id, collection_run_id=run_id)
+        return self._store.enqueue_extraction(paper_id, collection_run_id=target_run_id)
 
 
 def _source_url(record: PaperRecord) -> str:
