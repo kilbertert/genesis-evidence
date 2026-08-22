@@ -13,7 +13,6 @@ from genesis_evidence.review.service import (
     EvidenceProfileInput,
     EvidenceReviewService,
     RiskOfBiasInput,
-    _issue_applies_to_claim,
     _next_profile_version,
 )
 
@@ -135,8 +134,8 @@ def _review_case(
             """
             INSERT INTO claims(
                 id, paper_id, extraction_id, result_id, candidate_text,
-                evidence_text, locator, candidate_study_design, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'Results', 'cohort_study',
+                evidence_text, locator, candidate_claim_type, candidate_study_design, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'Results', 'intervention_effect', 'cohort_study',
                 '2026-08-11T00:00:00Z')
             """,
             (
@@ -1085,11 +1084,12 @@ def test_profile_eligibility_uses_only_each_papers_latest_extraction(tmp_path) -
         )
         connection.execute(
             """
-            INSERT INTO claims(
-                id, paper_id, extraction_id, result_id, candidate_text,
-                evidence_text, locator, candidate_study_design, created_at
-            ) SELECT ?, paper_id, 'new-extraction', ?, candidate_text,
-                evidence_text, locator, candidate_study_design, '2026-08-12T00:00:00Z'
+                INSERT INTO claims(
+                    id, paper_id, extraction_id, result_id, candidate_text,
+                    evidence_text, locator, candidate_claim_type, candidate_study_design, created_at
+                ) SELECT ?, paper_id, 'new-extraction', ?, candidate_text,
+                    evidence_text, locator, candidate_claim_type, candidate_study_design,
+                    '2026-08-12T00:00:00Z'
             FROM claims WHERE id = ?
             """,
             (new_claim_id, new_result_id, old_claim_id),
@@ -1139,6 +1139,68 @@ def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None
         assert connection.execute("SELECT count(*) FROM knowledge_cards").fetchone()[0] == 1
 
 
+def test_ai_review_migrates_legacy_extraction_risk_once(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database, screened=False)
+    topic_id = _complete_topic(database, paper_id)
+    _admit(service, paper_id)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO claim_reviews(
+                claim_id, decision, corrected_text, corrected_study_design, inference,
+                risk_of_bias_json, applicability, condition_code, reviewer, reviewed_at
+            ) VALUES (?, 'approved', ?, 'cohort_study', 'associational', ?, ?,
+                'COND_VITAMIN_D_DEFICIENCY', 'ai:checker', '2026-08-12T00:00:00Z')
+            """,
+            (
+                claim_id,
+                "Lower vitamin D status was associated with frailty.",
+                json.dumps(
+                    {
+                        "tool": "exposure_study",
+                        "overall": "high",
+                        "rationale": (
+                            "Material independent-extraction differences were retained in the "
+                            "audit trail, so this result is conservatively rated high risk."
+                        ),
+                    }
+                ),
+                "Applies to older adults with measured serum 25(OH)D.",
+            ),
+        )
+        connection.execute("UPDATE claims SET status = 'reviewed' WHERE id = ?", (claim_id,))
+        connection.execute("UPDATE results SET status = 'reviewed' WHERE paper_id = ?", (paper_id,))
+    old_card = service.create_card_draft(
+        topic_id=topic_id,
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="旧版证据背景卡。",
+        profile=_profile(claim_id, certainty="very_low"),
+    )
+    service.transition_card(old_card, reviewer="reviewer-1", target="in_review")
+    service.transition_card(old_card, reviewer="reviewer-1", target="approved")
+
+    first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    second = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    replacement = first["cards"][0]
+    assert replacement["card_id"] != old_card
+    assert replacement["status"] == "approved"
+    assert replacement["certainty"] == "very_low"
+    assert second["cards"][0]["card_id"] == replacement["card_id"]
+    with database.connect() as connection:
+        cards = connection.execute(
+            "SELECT id, status FROM knowledge_cards ORDER BY version"
+        ).fetchall()
+    assert [tuple(row) for row in cards] == [
+        (old_card, "stale"),
+        (replacement["card_id"], "approved"),
+    ]
+
+
 def test_ai_profile_records_a_null_result_as_not_supporting(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
@@ -1164,7 +1226,7 @@ def test_ai_profile_records_a_null_result_as_not_supporting(tmp_path) -> None:
     assert "未支持上述研究关系" in body
 
 
-def test_ai_closes_material_difference_with_conservative_risk_downgrade(tmp_path) -> None:
+def test_ai_blocks_unresolved_material_difference_without_polluting_risk(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, _ = _review_case(database, consistency="needs_review")
     with database.transaction() as connection:
@@ -1190,6 +1252,31 @@ def test_ai_closes_material_difference_with_conservative_risk_downgrade(tmp_path
 
     result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
+    assert result["status"] == "attention_required"
+    assert result["stage"] == "consistency_adjudication"
+    _admit(
+        service,
+        paper_id,
+        consistency_resolution=(
+            "AI consistency adjudication (literature-review-ai/1.3): "
+            "the primary extraction remains the structured source of record."
+        ),
+    )
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    assert result["status"] == "attention_required"
+    assert result["stage"] == "consistency_adjudication"
+    with database.connect() as connection:
+        admission = connection.execute(
+            "SELECT status, consistency_resolution FROM paper_admissions WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        assert tuple(admission) == ("pending", None)
+    _admit(
+        service,
+        paper_id,
+        consistency_resolution="The primary estimate was verified against Results table 2.",
+    )
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
     assert result["status"] == "completed"
     assert result["decision"] == "internally_admitted"
     with database.connect() as connection:
@@ -1202,9 +1289,46 @@ def test_ai_closes_material_difference_with_conservative_risk_downgrade(tmp_path
         )
         card = connection.execute("SELECT status, grade FROM knowledge_cards").fetchone()
     assert admission["status"] == "internally_admitted"
-    assert "two estimates conflict" in admission["consistency_resolution"].casefold()
-    assert risk["overall"] == "high"
+    assert "primary estimate was verified" in admission["consistency_resolution"].casefold()
+    assert risk["overall"] == "some_concerns"
     assert tuple(card) == ("approved", "very_low")
+
+
+def test_unresolved_difference_removes_paper_from_active_profiles(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database, consistency="consistent")
+    first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    assert first["cards"][0]["status"] == "approved"
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_extractions SET consistency_status = 'needs_review', "
+            "consistency_json = ? WHERE paper_id = ?",
+            (
+                json.dumps(
+                    {
+                        "verdict": "needs_review",
+                        "issues": [
+                            {
+                                "field": "claims[0].effect_estimate",
+                                "severity": "high",
+                                "message": "The two estimates conflict.",
+                                "evidence": "Results table 2",
+                            }
+                        ],
+                    }
+                ),
+                paper_id,
+            ),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["stage"] == "consistency_adjudication"
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == "pending"
+        assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "stale"
 
 
 def test_low_claim_difference_does_not_downgrade_risk(tmp_path) -> None:
@@ -1237,29 +1361,6 @@ def test_low_claim_difference_does_not_downgrade_risk(tmp_path) -> None:
             connection.execute("SELECT risk_of_bias_json FROM claim_reviews").fetchone()[0]
         )
     assert risk["overall"] == "some_concerns"
-
-
-def test_claim_difference_only_applies_to_its_extraction_claims() -> None:
-    indexed_issue = {
-        "field": "claims[6].effect_estimate",
-        "message": "The extracted estimate differs.",
-    }
-    ranged_issue = {
-        "field": "claims",
-        "message": "Claims 7-9 use different estimates.",
-    }
-    additional_issue = {
-        "field": "claims",
-        "message": "Extraction B includes two claims that are not present in Extraction A.",
-    }
-
-    assert _issue_applies_to_claim(indexed_issue, {"extraction_claim_index": 7})
-    assert not _issue_applies_to_claim(indexed_issue, {"extraction_claim_index": 8})
-    assert not _issue_applies_to_claim(ranged_issue, {"extraction_claim_index": 6})
-    assert _issue_applies_to_claim(ranged_issue, {"extraction_claim_index": 7})
-    assert _issue_applies_to_claim(ranged_issue, {"extraction_claim_index": 9})
-    assert not _issue_applies_to_claim(ranged_issue, {"extraction_claim_index": 10})
-    assert not _issue_applies_to_claim(additional_issue, {"extraction_claim_index": 1})
 
 
 def test_ai_preserves_reported_high_risk_of_bias(tmp_path) -> None:
@@ -1618,11 +1719,11 @@ def test_profile_links_a_shared_result_only_once(tmp_path) -> None:
     with database.transaction() as connection:
         connection.execute(
             """
-            INSERT INTO claims(
-                id, paper_id, extraction_id, result_id, candidate_text,
-                evidence_text, locator, candidate_study_design, created_at
-            ) SELECT ?, paper_id, extraction_id, result_id, candidate_text || ' Confirmed.',
-                evidence_text, locator, candidate_study_design, created_at
+                INSERT INTO claims(
+                    id, paper_id, extraction_id, result_id, candidate_text,
+                    evidence_text, locator, candidate_claim_type, candidate_study_design, created_at
+                ) SELECT ?, paper_id, extraction_id, result_id, candidate_text || ' Confirmed.',
+                    evidence_text, locator, candidate_claim_type, candidate_study_design, created_at
             FROM claims WHERE id = ?
             """,
             (duplicate_claim_id, claim_id),
@@ -1659,6 +1760,42 @@ def test_profile_links_a_shared_result_only_once(tmp_path) -> None:
             ).fetchone()[0]
             == 2
         )
+
+
+@pytest.mark.parametrize("claim_type", ["association", "mechanism", "other"])
+def test_patient_profile_excludes_non_effect_claims_but_keeps_audit_record(
+    tmp_path, claim_type
+) -> None:
+    database, service = _service(tmp_path)
+    paper_id, intervention_claim_id = _review_case(database)
+    audit_claim_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO claims(
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_claim_type, candidate_study_design, created_at
+            ) SELECT ?, paper_id, extraction_id, result_id, candidate_text || ' Audit only.',
+                evidence_text, locator, ?, candidate_study_design, created_at
+            FROM claims WHERE id = ?
+            """,
+            (audit_claim_id, claim_type, intervention_claim_id),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "completed"
+    assert result["cards"][0]["status"] == "approved"
+    with database.connect() as connection:
+        reviews = dict(
+            connection.execute(
+                "SELECT claim_id, decision FROM claim_reviews WHERE claim_id IN (?, ?)",
+                (intervention_claim_id, audit_claim_id),
+            ).fetchall()
+        )
+        card_claims = connection.execute("SELECT claim_id FROM card_claims").fetchall()
+    assert reviews == {intervention_claim_id: "approved", audit_claim_id: "approved"}
+    assert [row[0] for row in card_claims] == [intervention_claim_id]
 
 
 def test_patient_card_requires_doi_and_processed_full_text(tmp_path) -> None:
