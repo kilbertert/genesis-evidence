@@ -12,6 +12,7 @@ from genesis_evidence.literature.ai_extraction import (
     PaperAnalysisError,
     PaperExtraction,
     _normalize_consistency_payload,
+    _require_source_evidence,
     _streamed_completion,
 )
 from genesis_evidence.literature.models import PaperRecord, SourceName
@@ -304,6 +305,30 @@ def test_ark_analyzer_rejects_evidence_missing_from_full_text_with_field_path() 
             PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
             {"abstract": "This text contains none of the cited excerpts."},
         )
+
+
+def test_source_evidence_allows_inline_figure_citation_marker() -> None:
+    payload = _extraction()
+    payload["claims"][0]["evidence"] = (
+        "Lower 25(OH)D was associated with higher frailty prevalence."
+    )
+    extraction = PaperExtraction.model_validate(payload)
+
+    _require_source_evidence(
+        extraction,
+        {
+            "abstract": "Serum 25-hydroxyvitamin D was measured.",
+            "sections": [
+                {
+                    "title": "Results",
+                    "text": (
+                        "Lower 25(OH)D was associated with higher frailty prevalence "
+                        "(Figure 2)."
+                    ),
+                }
+            ],
+        },
+    )
 
 
 def test_streamed_completion_skips_chunks_without_choices() -> None:
