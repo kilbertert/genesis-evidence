@@ -135,6 +135,19 @@ def test_only_confirmed_abnormal_observations_match_published_cards(tmp_path) ->
     assert finding["patient_visible_body"] == "这是经过审核的营养健康知识。"
 
 
+def test_low_card_is_visible_as_context_only_in_report_assessment(tmp_path) -> None:
+    database, store, handle = _store(tmp_path)
+    _confirm(store, handle, value=6.8)
+    _publish_card(database, "COND_PREDIABETES", grade="low")
+
+    result = store.assess(handle.report_id, handle.access_token)
+
+    finding = result["findings"][0]
+    assert finding["content_layer"] == "context_only"
+    assert finding["action_status"] == "not_available"
+    assert finding["product_status"] == "not_implemented"
+
+
 def test_abnormal_value_without_published_card_returns_no_reviewed_content(tmp_path) -> None:
     _, store, handle = _store(tmp_path)
     observation_id = _confirm(store, handle, value=6.8)

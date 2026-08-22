@@ -667,9 +667,9 @@ class ReviewStore:
                 raise ValueError(f"invalid card transition: {card['status']} -> {target}")
             if target == "published":
                 self._require_publishable(connection, card_id)
-                if card["grade"] not in {"high", "moderate"}:
+                if card["grade"] not in {"high", "moderate", "low"}:
                     raise ValueError(
-                        "patient-visible benefit cards require high or moderate certainty"
+                        "patient-visible context cards require low, moderate, or high certainty"
                     )
                 connection.execute(
                     """
@@ -1218,22 +1218,31 @@ class ReviewStore:
                     published = next(
                         (row for row in card_rows if row["status"] == "published"), None
                     )
-                    publishable_approved = any(
+                    action_publishable_approved = any(
                         row["status"] == "approved" and row["grade"] in {"high", "moderate"}
                         for row in card_rows
                     )
-                    low_approved = any(
-                        row["status"] == "approved" and row["grade"] in {"low", "very_low"}
+                    context_publishable_approved = any(
+                        row["status"] == "approved" and row["grade"] == "low"
                         for row in card_rows
                     )
-                    if published:
+                    if published and published["grade"] == "low":
+                        coverage_status = "published_context"
+                        next_action = "已发布证据背景卡；补充证据达到中等或高确定性后再开放行动建议"
+                    elif published:
                         coverage_status, next_action = "published", "已覆盖，可继续扩充同主题证据"
-                    elif publishable_approved:
+                    elif action_publishable_approved:
                         coverage_status = "ready_to_publish"
                         next_action = "按发布状态机完成最后审核"
-                    elif low_approved:
-                        coverage_status = "blocked_low_certainty"
-                        next_action = "补充或合并证据体，提高确定性后再发布"
+                    elif context_publishable_approved:
+                        coverage_status = "ready_to_publish_context"
+                        next_action = "发布为证据背景卡；行动建议仍需中等或高确定性"
+                    elif any(
+                        row["status"] == "approved" and row["grade"] == "very_low"
+                        for row in card_rows
+                    ):
+                        coverage_status = "blocked_very_low_certainty"
+                        next_action = "补充或合并证据体后再进入患者端"
                     elif profiles:
                         coverage_status, next_action = "profile_ready", "创建并审核患者知识卡"
                     elif any(
@@ -1290,7 +1299,7 @@ class ReviewStore:
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
             """
-            SELECT kc.condition_code, kc.evidence_profile_id, ep.topic_id
+            SELECT kc.condition_code, kc.evidence_profile_id, kc.grade, ep.topic_id
             FROM knowledge_cards kc
             LEFT JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
             WHERE kc.id = ?
@@ -1348,6 +1357,23 @@ class ReviewStore:
             or not str(scope_key or "").strip()
         ):
             raise ValueError("knowledge card has ineligible evidence")
+        if card["grade"] == "low":
+            high_risk = connection.execute(
+                """
+                SELECT 1
+                FROM card_claims cc
+                JOIN claim_reviews cr ON cr.claim_id = cc.claim_id
+                WHERE cc.card_id = ?
+                    AND json_extract(cr.risk_of_bias_json, '$.overall')
+                        IN ('high', 'critical', 'uncertain')
+                LIMIT 1
+                """,
+                (card_id,),
+            ).fetchone()
+            if high_risk:
+                raise ValueError(
+                    "context cards require resolved non-high risk-of-bias judgments"
+                )
 
     @staticmethod
     def _stale_cards_for_paper(connection, paper_id: str) -> int:

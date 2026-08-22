@@ -83,6 +83,22 @@ Response guarantees:
   service actor. The audit contains codes and counts, never report images or
   raw patient identifiers.
 
+### Published card capability layers
+
+Publication and capability are separate decisions. A `low` card may be published
+as the formal evidence background for a matched health problem, but it is returned
+with `content_layer = context_only` and `action_status = not_available`. The stored
+card text must use research language such as “研究提示” and must not become a
+diagnosis, product recommendation, dose, or treatment instruction.
+
+`moderate` and `high` cards are eligible for a future action layer, but the current
+card schema stores only reviewed background content, so they still return
+`content_layer = context_only` and `action_status = not_available` with an explicit
+message. A future action card must carry separately reviewed action content before
+this status changes. Every card also returns `product_status = not_implemented`
+until the separately governed nutrition-product catalogue exists. `very_low` cards
+remain internal and cannot transition to `published`.
+
 ## Trust and safety gates
 
 1. `confirmation_status` is a literal `confirmed`; unconfirmed or corrected

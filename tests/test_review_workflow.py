@@ -1303,7 +1303,8 @@ def test_ai_preserves_reported_high_risk_of_bias(tmp_path) -> None:
         card = connection.execute("SELECT status, grade FROM knowledge_cards").fetchone()
     assert risk["overall"] == "high"
     assert tuple(card) == ("approved", "low")
-    assert result["cards"][0]["status"] == "approved"
+    assert result["cards"][0]["status"] == "approved_evidence_limited"
+    assert "risk-of-bias" in result["cards"][0]["reason"]
 
 
 def test_ai_caps_a_single_study_profile_at_low_certainty(tmp_path) -> None:
@@ -1764,7 +1765,7 @@ def test_ai_differences_require_documented_actor_resolution_before_admission(tmp
         )
 
 
-def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:
+def test_low_certainty_context_card_can_be_patient_visible(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
     _admit(service, paper_id)
@@ -1780,7 +1781,28 @@ def test_low_certainty_benefit_card_cannot_be_patient_visible(tmp_path) -> None:
     )
     for target in ("in_review", "approved"):
         service.transition_card(card_id, reviewer="reviewer-1", target=target)
-    with pytest.raises(ValueError, match="high or moderate"):
+    service.transition_card(card_id, reviewer="reviewer-1", target="published")
+    published = ReviewStore(database).list_published_cards("COND_VITAMIN_D_DEFICIENCY")
+    assert published[0]["grade"] == "low"
+
+
+def test_very_low_certainty_card_remains_internal(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="证据极不确定，仅供内部审核使用。",
+        profile=_profile(claim_id, certainty="very_low"),
+    )
+    for target in ("in_review", "approved"):
+        service.transition_card(card_id, reviewer="reviewer-1", target=target)
+    with pytest.raises(ValueError, match="low, moderate, or high"):
         service.transition_card(card_id, reviewer="reviewer-1", target="published")
 
 

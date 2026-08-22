@@ -662,7 +662,7 @@ class EvidenceReviewService:
                     results.append(detail)
                     continue
                 status = card_status
-                if card_status == "approved" and profile.certainty in {"high", "moderate"}:
+                if card_status == "approved" and profile.certainty in {"high", "moderate", "low"}:
                     try:
                         self.transition_card(card_id, reviewer=actor, target="published")
                         status = "published"

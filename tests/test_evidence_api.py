@@ -32,6 +32,7 @@ def _publish_scoped_card(
     topic_id: str = "topic-1",
     claim_id: str = "claim-1",
     paper_id: str = "paper-1",
+    grade: str = "moderate",
 ) -> None:
     with database.transaction() as connection:
         connection.execute(
@@ -108,11 +109,11 @@ def _publish_scoped_card(
             INSERT INTO knowledge_cards(
                 id, condition_code, version, status, grade, evidence_profile_id, reviewer,
                 reviewed_at, published_at, patient_visible_body, created_at
-            ) VALUES (?, ?, '1.0.0', 'published', 'moderate',
+            ) VALUES (?, ?, '1.0.0', 'published', ?,
                 ?, 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
                 '这是经过审核的营养健康知识。', '2026-08-11T00:00:00Z')
             """,
-            (card_id, condition_code, profile_id),
+            (card_id, condition_code, grade, profile_id),
         )
         connection.execute(
             """
@@ -241,6 +242,12 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
                         "bbox_normalized": [10, 20, 100, 120],
                     }
                 ],
+                "content_layer": "context_only",
+                "action_status": "not_available",
+                "action_message": (
+                    "证据确定性已达到行动建议门槛，但当前知识卡尚未包含经审核的具体行动内容。"
+                ),
+                "product_status": "not_implemented",
             }
         ],
         "unmatched_count": 1,
@@ -263,6 +270,7 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
             "reason": "no_published_knowledge_card",
         }
     ]
+
     assert {item["reason"] for item in body["skipped"]} == {"within_reference_range"}
     with database.connect() as connection:
         audit = connection.execute(
@@ -312,7 +320,6 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
             "reason": "no_published_knowledge_card",
         }
     ]
-
     ldl = _observation(
         metric_code="ldl_c",
         value=4.2,
@@ -329,6 +336,41 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["findings"][0]["card"]["scope_key"] == "metric:ldl_c"
 
+
+def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(database, grade="low")
+
+    response = client.post(
+        "/api/evidence/matches",
+        json={"schema_version": "2", "observations": [_observation()]},
+    )
+
+    assert response.status_code == 200
+    finding = response.json()["findings"][0]
+    assert finding["content_layer"] == "context_only"
+    assert finding["action_status"] == "not_available"
+    assert "行动建议门槛" in finding["action_message"]
+    assert finding["product_status"] == "not_implemented"
+    assert finding["card"]["content_layer"] == "context_only"
+    assert finding["card"]["action_status"] == "not_available"
+    assert response.json()["patient_reply"]["findings"][0]["product_status"] == (
+        "not_implemented"
+    )
+
+
+def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(database, grade="very_low")
+
+    response = client.post(
+        "/api/evidence/matches",
+        json={"schema_version": "2", "observations": [_observation()]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["findings"] == []
+    assert response.json()["unmatched"][0]["reason"] == "no_published_knowledge_card"
 
 def test_evidence_api_requires_key_and_confirmed_status(tmp_path) -> None:
     _, client = _client(tmp_path, api_key="secret-key-012345678901234")
