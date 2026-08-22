@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -525,7 +526,7 @@ def _require_source_evidence(extraction: PaperExtraction, document: dict[str, ob
     missing = [
         (path, value)
         for path, value in evidence
-        if not any(_normalized_text(value) in segment for segment in source_segments)
+        if not any(_source_evidence_matches(value, segment) for segment in source_segments)
     ]
     if missing:
         details = "; ".join(
@@ -540,6 +541,29 @@ def _require_source_evidence(extraction: PaperExtraction, document: dict[str, ob
 
 def _normalized_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+_INLINE_CITATION_RE = re.compile(
+    r"\((?:fig(?:ure)?|table|tbl\.?|appendix|supplement(?:ary)?)\b[^)]{0,160}\)",
+    re.IGNORECASE,
+)
+
+
+def _source_evidence_matches(evidence: str, source_segment: str) -> bool:
+    """Match verbatim evidence when a publisher inserts an inline figure/table cite."""
+
+    normalized_evidence = _citation_spacing(_normalized_text(evidence))
+    if normalized_evidence in source_segment:
+        return True
+    evidence_without_citation = _citation_spacing(
+        _INLINE_CITATION_RE.sub(" ", normalized_evidence)
+    )
+    source_without_citation = _citation_spacing(_INLINE_CITATION_RE.sub(" ", source_segment))
+    return evidence_without_citation in source_without_citation
+
+
+def _citation_spacing(value: str) -> str:
+    return re.sub(r"\s+([,.;:!?])", r"\1", value)
 
 
 def _string_values(value: object) -> list[str]:
