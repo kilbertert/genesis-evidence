@@ -2517,7 +2517,7 @@ def _review_guidance(
     issues = [
         {
             **issue,
-            "priority": "must_resolve" if _critical_issue(issue) else "verify",
+            "priority": "must_resolve" if _critical_issue(issue, claims) else "verify",
         }
         for issue in (consistency or {}).get("issues", [])
         if isinstance(issue, dict)
@@ -2650,10 +2650,14 @@ def _source_based_consistency_resolution(admission: object) -> bool:
     return bool(resolution) and not resolution.startswith("AI consistency adjudication (")
 
 
-def _critical_issue(issue: dict[str, object]) -> bool:
+def _critical_issue(
+    issue: dict[str, object], claims: list[dict[str, object]] | None = None
+) -> bool:
     severity = str(issue.get("severity") or "").casefold()
     if severity == "low":
         return False
+    if severity == "high":
+        return True
     field = str(issue.get("field") or "").casefold()
     message = str(issue.get("message") or "").casefold()
     value = f"{field} {message}"
@@ -2676,6 +2680,14 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "inference",
         "标记为",
         "分类",
+        "格式不一致",
+        "空格",
+        "措辞不一致",
+        "实质内容一致",
+        "额外说明",
+        "仅报告",
+        "format",
+        "spacing",
         "发表偏倚",
         "meta 回归",
         "not include",
@@ -2685,6 +2697,22 @@ def _critical_issue(issue: dict[str, object]) -> bool:
     )
     if severity == "medium" and any(token in value for token in coverage_only):
         return False
+    if claims is not None and "claim" in field:
+        patient_claims = [
+            claim
+            for claim in claims
+            if claim.get("candidate_claim_type") == "intervention_effect"
+            and (claim.get("review_suggestion") or {}).get("decision") == "approved"
+        ]
+        indexed = re.search(r"claims\[(\d+)\]", field)
+        if indexed:
+            extraction_index = int(indexed.group(1)) + 1
+            return any(
+                claim.get("extraction_claim_index") == extraction_index for claim in patient_claims
+            )
+        return any(
+            token in value for token in ("primary outcome", "primary_outcome", "主要结局")
+        )
     tokens = (
         "claim",
         "study_design",
@@ -2710,7 +2738,7 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "撤稿",
         "更正",
     )
-    return severity == "high" or any(token in value for token in tokens)
+    return any(token in value for token in tokens)
 
 
 def _resolution_draft(issues: list[dict[str, object]]) -> str:

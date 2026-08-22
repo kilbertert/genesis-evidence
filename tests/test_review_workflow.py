@@ -1463,6 +1463,70 @@ def test_medium_claim_coverage_difference_stays_auditable_without_blocking() -> 
             "message": "Extraction A did not include a secondary claim; coverage differs.",
         }
     )
+
+
+def test_medium_claim_difference_only_blocks_patient_profile_scope() -> None:
+    patient_claim = {
+        "candidate_claim_type": "intervention_effect",
+        "extraction_claim_index": 1,
+        "outcome": "Serum uric acid",
+        "review_suggestion": {"decision": "approved"},
+    }
+    secondary_claim = {
+        "candidate_claim_type": "intervention_effect",
+        "extraction_claim_index": 2,
+        "outcome": "Xanthine oxidase activity",
+        "review_suggestion": {"decision": "rejected"},
+    }
+
+    assert _critical_issue(
+        {
+            "field": "claims[0].effect_estimate",
+            "severity": "medium",
+            "message": "The primary effect direction conflicts.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[1].effect_estimate",
+            "severity": "medium",
+            "message": "The secondary effect estimates differ.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].effect_estimate",
+            "severity": "medium",
+            "message": "A microbiome association with serum uric acid differs.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].baseline_nutrient_status",
+            "severity": "medium",
+            "message": "The serum uric acid values differ only in spacing format.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].population",
+            "severity": "medium",
+            "message": "部分条目的 population 表述不一致，代谢组样本描述不同。",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert _critical_issue(
+        {
+            "field": "claims[1].effect_estimate",
+            "severity": "high",
+            "message": "The secondary estimate contradicts the source.",
+        },
+        [patient_claim, secondary_claim],
+    )
     assert _critical_issue(
         {
             "field": "claims.effect_estimate",
