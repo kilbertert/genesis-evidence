@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.store import Database, PaperStore, ReviewStore
+from ..core.store import Database, ObjectStore, PaperStore, ReviewStore
 from .service import (
     AUTONOMOUS_REVIEW_POLICY_VERSION,
     ClaimReviewInput,
@@ -91,7 +91,11 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     database.initialize()
     store = ReviewStore(database)
     papers_store = PaperStore(database)
-    service = EvidenceReviewService(store, papers_store)
+    service = EvidenceReviewService(
+        store,
+        papers_store,
+        ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
+    )
     workbench = Path(__file__).with_name("workbench.html").read_text(encoding="utf-8")
     app = FastAPI(title="Genesis Evidence Review", docs_url=None, redoc_url=None)
 

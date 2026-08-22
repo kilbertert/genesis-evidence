@@ -6,14 +6,19 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from genesis_evidence.core.store import Database, PaperStore, ReviewStore
-from genesis_evidence.core.store.review import _picots_text_matches, _profile_scopes
+from genesis_evidence.core.store import Database, ObjectStore, PaperStore, ReviewStore
+from genesis_evidence.core.store.review import (
+    _critical_issue,
+    _picots_text_matches,
+    _profile_scopes,
+)
 from genesis_evidence.review.service import (
     ClaimReviewInput,
     EvidenceProfileInput,
     EvidenceReviewService,
     RiskOfBiasInput,
     _next_profile_version,
+    _source_evidence_fragments,
 )
 
 
@@ -1294,11 +1299,175 @@ def test_ai_blocks_unresolved_material_difference_without_polluting_risk(tmp_pat
     assert tuple(card) == ("approved", "very_low")
 
 
-def test_unresolved_difference_removes_paper_from_active_profiles(tmp_path) -> None:
+def test_ai_source_adjudication_rejects_a_statistically_contradictory_claim_once(
+    tmp_path,
+) -> None:
+    database, _ = _service(tmp_path)
+    paper_id, claim_id = _review_case(database, consistency="needs_review")
+    evidence = "Vitamin D significantly lowered frailty prevalence (p > 0.05)."
+    objects = ObjectStore(tmp_path / "objects")
+    stored = objects.put(
+        f"""<article><front><article-meta><title-group><article-title>Test</article-title>
+        </title-group></article-meta></front><body><sec><title>Results</title>
+        <p>{evidence}</p></sec></body></article>""".encode(),
+        suffix="xml",
+    )
+    with database.transaction() as connection:
+        extraction = json.loads(
+            connection.execute(
+                "SELECT extraction_json FROM paper_extractions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+        )
+        extraction["claims"][0]["evidence"] = evidence
+        connection.execute(
+            "UPDATE paper_extractions SET extraction_json = ?, consistency_json = ? "
+            "WHERE paper_id = ?",
+            (
+                json.dumps(extraction),
+                json.dumps(
+                    {
+                        "verdict": "needs_review",
+                        "issues": [
+                            {
+                                "field": "claims[0].effect_estimate",
+                                "severity": "high",
+                                "message": (
+                                    "Significance wording conflicts with the reported p value."
+                                ),
+                                "evidence": f"Source: {evidence}",
+                            }
+                        ],
+                    }
+                ),
+                paper_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE claims SET evidence_text = ? WHERE id = ?", (evidence, claim_id)
+        )
+        connection.execute(
+            "UPDATE results SET evidence_text = ? WHERE paper_id = ?", (evidence, paper_id)
+        )
+        connection.execute(
+            "UPDATE full_texts SET object_key = ?, sha256 = ? WHERE paper_id = ?",
+            (stored.key, stored.sha256, paper_id),
+        )
+    service = EvidenceReviewService(ReviewStore(database), PaperStore(database), objects)
+    _admit(
+        service,
+        paper_id,
+        consistency_resolution=(
+            "AI consistency adjudication (literature-review-ai/1.3): "
+            "the primary extraction remains the structured source of record."
+        ),
+    )
+
+    first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    second = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert first["status"] == "completed"
+    assert second["status"] == "completed"
+    with database.connect() as connection:
+        claim = connection.execute(
+            "SELECT c.status, cr.decision, cr.reviewer FROM claims c "
+            "JOIN claim_reviews cr ON cr.claim_id = c.id WHERE c.id = ?",
+            (claim_id,),
+        ).fetchone()
+        admission = connection.execute(
+            "SELECT status, consistency_resolution FROM paper_admissions WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        event_count = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE entity_type = 'paper' AND entity_id = ? "
+            "AND action = 'autonomous_consistency_source_adjudicated'",
+            (paper_id,),
+        ).fetchone()[0]
+    assert tuple(claim) == ("rejected", "rejected", "source-ai:checker")
+    assert admission["status"] == "internally_admitted"
+    assert admission["consistency_resolution"].startswith("Source-based AI adjudication (")
+    assert event_count == 1
+
+
+def test_ai_source_adjudication_treats_invalid_jats_as_attention_required(tmp_path) -> None:
+    database, _ = _service(tmp_path)
+    paper_id, _ = _review_case(database, consistency="needs_review")
+    objects = ObjectStore(tmp_path / "objects")
+    stored = objects.put(b"not jats", suffix="xml")
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_extractions SET consistency_json = ? WHERE paper_id = ?",
+            (
+                json.dumps(
+                    {
+                        "verdict": "needs_review",
+                        "issues": [
+                            {
+                                "field": "claims[0].effect_estimate",
+                                "severity": "high",
+                                "message": "The two estimates conflict.",
+                                "evidence": "Results table 2",
+                            }
+                        ],
+                    }
+                ),
+                paper_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE full_texts SET object_key = ?, sha256 = ? WHERE paper_id = ?",
+            (stored.key, stored.sha256, paper_id),
+        )
+    service = EvidenceReviewService(ReviewStore(database), PaperStore(database), objects)
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "attention_required"
+    assert result["stage"] == "consistency_adjudication"
+
+
+def test_medium_claim_coverage_difference_stays_auditable_without_blocking() -> None:
+    assert not _critical_issue(
+        {
+            "field": "claims.outcome",
+            "severity": "medium",
+            "message": "Extraction A did not include a secondary claim; coverage differs.",
+        }
+    )
+    assert _critical_issue(
+        {
+            "field": "claims.effect_estimate",
+            "severity": "medium",
+            "message": "The two effect estimates conflict.",
+        }
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims",
+            "severity": "medium",
+            "message": "抽取 A 缺少抽取 B 中关于 meta 回归和发表偏倚的声明。",
+        }
+    )
+    assert _source_evidence_fragments(
+        "A 与 B 的描述不同。原文 Method: 'including warm-up, resistance and relaxation'。"
+    ) == ["including warm-up, resistance and relaxation"]
+
+
+def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, _ = _review_case(database, consistency="consistent")
     first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
     assert first["cards"][0]["status"] == "approved"
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()[0] == "internally_admitted"
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_admissions SET consistency_resolution = "
+            "'AI consistency adjudication (literature-review-ai/1.3): legacy review' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
     with database.transaction() as connection:
         connection.execute(
             "UPDATE paper_extractions SET consistency_status = 'needs_review', "
@@ -1327,8 +1496,8 @@ def test_unresolved_difference_removes_paper_from_active_profiles(tmp_path) -> N
     with database.connect() as connection:
         assert connection.execute(
             "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "pending"
-        assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "stale"
+        ).fetchone()[0] == "internally_admitted"
+        assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "approved"
 
 
 def test_low_claim_difference_does_not_downgrade_risk(tmp_path) -> None:

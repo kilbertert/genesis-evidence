@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import unicodedata
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..core.store import PaperStore, ReviewStore
+from ..core.store import ObjectStore, PaperStore, ReviewStore
 from ..core.store.review import _source_based_consistency_resolution
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
+from ..literature.jats import JatsParseError, JatsParser
 
-AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.4"
+AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.5"
 
 StudyDesign = Literal[
     "randomized_controlled_trial",
@@ -139,9 +141,16 @@ class ClaimReviewInput(BaseModel):
 
 
 class EvidenceReviewService:
-    def __init__(self, store: ReviewStore, papers_store: PaperStore | None = None) -> None:
+    def __init__(
+        self,
+        store: ReviewStore,
+        papers_store: PaperStore | None = None,
+        objects: ObjectStore | None = None,
+    ) -> None:
         self.store = store
         self.papers_store = papers_store
+        self.objects = objects
+        self._jats = JatsParser()
 
     def auto_review_paper(self, paper_id: str, *, requested_by: str) -> dict[str, object]:
         requester = _reviewer(requested_by)
@@ -409,28 +418,72 @@ class EvidenceReviewService:
         consistency_resolution = admission.get("consistency_resolution")
         resolution_is_source_based = _source_based_consistency_resolution(admission)
         automatically_adjudicated = False
+        source_adjudicated = False
+        source_rejected_claim_ids: set[str] = set()
         if (item.get("consistency") or {}).get("verdict") == "needs_review":
             material_issues = [
                 issue for issue in guidance["issues"] if issue.get("priority") == "must_resolve"
             ]
             if material_issues and not resolution_is_source_based:
-                self.store.require_consistency_adjudication(paper_id, reviewer=actor)
-                return self._automation_attention(
+                source_adjudication = self._source_adjudication(paper_id, item, material_issues)
+                if source_adjudication is None:
+                    current_extraction_id = str(
+                        (item.get("extraction_trace") or {}).get("id") or ""
+                    )
+                    current_claims = [
+                        claim
+                        for claim in item.get("claims", [])
+                        if str(claim.get("extraction_id") or "") == current_extraction_id
+                    ]
+                    preserve_admission = (
+                        admission.get("status") == "internally_admitted"
+                        and bool(str(admission.get("consistency_resolution") or "").strip())
+                        and bool(current_claims)
+                        and all(claim.get("status") != "candidate" for claim in current_claims)
+                    )
+                    if preserve_admission:
+                        self.store.record_event(
+                            "paper",
+                            paper_id,
+                            "autonomous_consistency_attention_preserved_admission",
+                            actor=actor,
+                            detail={
+                                **context,
+                                "reason": "source adjudication could not verify the new difference",
+                                "admission_status": "internally_admitted",
+                            },
+                        )
+                    else:
+                        self.store.require_consistency_adjudication(paper_id, reviewer=actor)
+                    return self._automation_attention(
+                        paper_id,
+                        actor=actor,
+                        requested_by=requester,
+                        stage="consistency_adjudication",
+                        reason=(
+                            "independent extraction has unresolved material differences; "
+                            "full-text evidence could not support an autonomous adjudication"
+                        ),
+                        trace=trace,
+                    )
+                consistency_resolution = str(source_adjudication["resolution"])
+                source_rejected_claim_ids = {
+                    str(claim_id) for claim_id in source_adjudication["rejected_claim_ids"]
+                }
+                automatically_adjudicated = True
+                source_adjudicated = True
+                self.store.record_event(
+                    "paper",
                     paper_id,
+                    "autonomous_consistency_source_adjudicated",
                     actor=actor,
-                    requested_by=requester,
-                    stage="consistency_adjudication",
-                    reason=(
-                        "independent extraction has unresolved material differences; "
-                        "record a source-based adjudication before admission"
-                    ),
-                    trace=trace,
+                    detail={**context, **source_adjudication},
                 )
             automatically_adjudicated = not resolution_is_source_based
             consistency_resolution = consistency_resolution or _automatic_resolution(
                 guidance["issues"]
             )
-            if automatically_adjudicated:
+            if automatically_adjudicated and not source_adjudicated:
                 self.store.record_event(
                     "paper",
                     paper_id,
@@ -469,7 +522,10 @@ class EvidenceReviewService:
                 reason="study design remains uncertain after independent extraction review",
                 trace=trace,
             )
-        if (item.get("admission") or {}).get("status") != "internally_admitted":
+        if (
+            (item.get("admission") or {}).get("status") != "internally_admitted"
+            or source_adjudicated
+        ):
             self.admit_paper(
                 paper_id,
                 reviewer=actor,
@@ -514,11 +570,25 @@ class EvidenceReviewService:
                 and (claim.get("review_suggestion") or {}).get("decision") == "approved"
                 and _needs_extraction_risk_migration(claim)
             )
+            source_rejection_recheck = (
+                str(claim["id"]) in source_rejected_claim_ids
+                and claim.get("status") == "reviewed"
+                and claim.get("decision") == "approved"
+            )
             if (
                 claim.get("status") != "candidate"
                 and not ai_rejection_reopened
                 and not ai_approval_recheck
+                and not source_rejection_recheck
             ):
+                continue
+            if str(claim["id"]) in source_rejected_claim_ids:
+                self.review_claim(
+                    str(claim["id"]),
+                    reviewer=f"source-ai:{trace.get('check_model') or trace.get('model')}",
+                    review=ClaimReviewInput(decision="rejected"),
+                )
+                reviewed_claims.append(str(claim["id"]))
                 continue
             suggestion = claim.get("review_suggestion") or {}
             source_verification = None
@@ -716,6 +786,62 @@ class EvidenceReviewService:
                     "status": status,
                 }
         return results
+
+    def _source_adjudication(
+        self,
+        paper_id: str,
+        item: dict[str, object],
+        issues: list[dict[str, object]],
+    ) -> dict[str, object] | None:
+        """Adjudicate only differences directly supported by the stored full text."""
+
+        if self.papers_store is None or self.objects is None:
+            return None
+        try:
+            _, object_key = self.papers_store.get_analysis_source(paper_id)
+            document = self._jats.parse(self.objects.read(object_key)).to_dict()
+        except (JatsParseError, OSError, ValueError):
+            return None
+        source_segments = [_source_text(value) for value in _string_values(document)]
+        claims = [claim for claim in item.get("claims", []) if isinstance(claim, dict)]
+        decisions: list[str] = []
+        rejected_claim_ids: set[str] = set()
+        for issue in issues:
+            fragments = _source_evidence_fragments(issue.get("evidence"))
+            if not fragments or not all(
+                any(fragment in segment for segment in source_segments) for fragment in fragments
+            ):
+                return None
+            if not _primary_extraction_supports_fragments(item, issue, fragments):
+                return None
+            if _statistical_contradiction(issue):
+                matching = _claims_matching_fragments(claims, fragments)
+                if not matching:
+                    return None
+                rejected_claim_ids.update(
+                    str(claim["id"])
+                    for claim in matching
+                    if str(claim.get("id") or "").strip()
+                )
+                decisions.append(
+                    f"{issue.get('field', 'difference')}: 原文统计信息与显著性措辞冲突，"
+                    "相关 Claim 拒绝进入 Evidence Profile。"
+                )
+            else:
+                decisions.append(
+                    f"{issue.get('field', 'difference')}: 原文引文已逐字核验，"
+                    "保留抽取 A 的结构化事实；"
+                    "抽取 B 的差异仅保留在审计记录中。"
+                )
+        resolution = (
+            f"Source-based AI adjudication ({AUTONOMOUS_REVIEW_POLICY_VERSION}): "
+            "逐条差异证据均命中已存全文；" + " ".join(decisions)
+        )[:5000]
+        return {
+            "resolution": resolution,
+            "verified_issue_count": len(issues),
+            "rejected_claim_ids": sorted(rejected_claim_ids),
+        }
 
     def _automation_attention(
         self,
@@ -949,7 +1075,90 @@ def _automatic_source_verification(
 
 
 def _source_text(value: object) -> str:
-    return re.sub(r"\\s+", " ", str(value or "")).strip().casefold()
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
+
+
+def _source_evidence_fragments(value: object) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    markers = list(
+        re.finditer(
+            r"(?:原文|evidence|source|original|full\s+text)\s*(?:[A-Za-z][\w .-]*\s*)?[:：]",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    candidates: list[str] = []
+    for marker in markers:
+        tail = raw[marker.end() :].strip()
+        quoted = re.findall(r"[\"“](.+?)[\"”]", tail)
+        if not quoted:
+            quoted = re.findall(r"‘(.+?)’", tail)
+        candidates.extend(quoted or [re.split(r"[。；;]", tail, maxsplit=1)[0]])
+    if not candidates and re.match(
+        r"^(?:evidence|source|original|full\s+text)\s*[:：]", raw, flags=re.IGNORECASE
+    ):
+        candidates = [re.split(r"[。；;]", raw.split(":", 1)[1], maxsplit=1)[0]]
+    if not candidates and not markers:
+        candidates = [raw]
+    fragments: list[str] = []
+    for candidate in candidates:
+        fragment = _source_text(candidate).strip(" \"'“”‘’。.；;")
+        if len(fragment) >= 8 and fragment not in fragments:
+            fragments.append(fragment)
+    return fragments
+
+
+def _string_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _string_values(item)]
+    if isinstance(value, (list, tuple)):
+        return [text for item in value for text in _string_values(item)]
+    return []
+
+
+def _primary_extraction_supports_fragments(
+    item: dict[str, object], issue: dict[str, object], fragments: list[str]
+) -> bool:
+    """Require a structured Claim/Result target before retaining extraction A."""
+
+    del fragments  # The full-text match is checked by the caller.
+    field = str(issue.get("field") or "")
+    match = re.search(r"claims\[(\d+)\]", field)
+    if match:
+        index = int(match.group(1))
+        claims = [claim for claim in item.get("claims", []) if isinstance(claim, dict)]
+        if index >= len(claims):
+            return False
+        claim = claims[index]
+        return bool(claim.get("id") and claim.get("result_id") and claim.get("locator"))
+    return bool(item.get("claims"))
+
+
+def _claims_matching_fragments(
+    claims: list[dict[str, object]], fragments: list[str]
+) -> list[dict[str, object]]:
+    return [
+        claim
+        for claim in claims
+        if any(
+            fragment in _source_text(claim.get("evidence_text"))
+            or fragment in _source_text(claim.get("result_evidence_text"))
+            for fragment in fragments
+        )
+    ]
+
+
+def _statistical_contradiction(issue: dict[str, object]) -> bool:
+    text = " ".join(str(issue.get(key) or "") for key in ("message", "evidence")).casefold()
+    return (
+        any(token in text for token in ("矛盾", "不一致", "conflict", "inconsistent"))
+        and bool(re.search(r"\bp\s*(?:>|=)\s*0?\.0?5\b", text))
+        and any(token in text for token in ("显著", "significant"))
+    )
 
 
 def _next_profile_version(topic_version: str, used_versions: set[str]) -> str:
