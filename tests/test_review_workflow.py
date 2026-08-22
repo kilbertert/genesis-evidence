@@ -640,6 +640,36 @@ def test_picots_duration_normalizes_days_and_weeks() -> None:
     assert not _picots_text_matches("At least 3 weeks", "After 1 week of intervention")
 
 
+def test_picots_matches_chinese_salt_substitute_as_sodium_reduction() -> None:
+    assert _picots_text_matches(
+        "Dietary sodium reduction",
+        "低钠高钾盐替代品替代普通盐，减少钠摄入并增加钾摄入",
+    )
+    assert _picots_text_matches("Adults aged 40 and older", "282名40岁或以上的西藏高血压患者")
+    assert _picots_text_matches(
+        "Systolic and diastolic blood pressure",
+        "收缩压和舒张压从基线到三个月随访的变化",
+    )
+    assert _picots_text_matches("4 weeks or longer", "三个月")
+
+
+def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap() -> None:
+    topic = "Dietary pattern or defined food or nutrient intervention"
+
+    assert _picots_text_matches(topic, "每日饮用1.5 L电解碱性水，持续12周")
+    assert _picots_text_matches(topic, "大麦嫩叶（barley green）提取物，每日服用")
+    assert _picots_text_matches(topic, "soy protein or soy isoflavones")
+    assert not _picots_text_matches(topic, "A supervised exercise programme")
+    assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
+
+
+def test_picots_matches_bilingual_dietary_comparators() -> None:
+    topic = "Usual diet, no intervention, placebo, or an alternative diet"
+
+    assert _picots_text_matches(topic, "仅遵循平衡膳食模式")
+    assert _picots_text_matches(topic, "1.5 L/day纯净中性水，pH 7.0")
+
+
 def test_picots_matches_common_chinese_population_terms() -> None:
     topic = "Adults aged 40 and older or postmenopausal adults"
     assert _picots_text_matches(topic, "绝经后女性")
@@ -1433,6 +1463,70 @@ def test_medium_claim_coverage_difference_stays_auditable_without_blocking() -> 
             "message": "Extraction A did not include a secondary claim; coverage differs.",
         }
     )
+
+
+def test_medium_claim_difference_only_blocks_patient_profile_scope() -> None:
+    patient_claim = {
+        "candidate_claim_type": "intervention_effect",
+        "extraction_claim_index": 1,
+        "outcome": "Serum uric acid",
+        "review_suggestion": {"decision": "approved"},
+    }
+    secondary_claim = {
+        "candidate_claim_type": "intervention_effect",
+        "extraction_claim_index": 2,
+        "outcome": "Xanthine oxidase activity",
+        "review_suggestion": {"decision": "rejected"},
+    }
+
+    assert _critical_issue(
+        {
+            "field": "claims[0].effect_estimate",
+            "severity": "medium",
+            "message": "The primary effect direction conflicts.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[1].effect_estimate",
+            "severity": "medium",
+            "message": "The secondary effect estimates differ.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].effect_estimate",
+            "severity": "medium",
+            "message": "A microbiome association with serum uric acid differs.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].baseline_nutrient_status",
+            "severity": "medium",
+            "message": "The serum uric acid values differ only in spacing format.",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].population",
+            "severity": "medium",
+            "message": "部分条目的 population 表述不一致，代谢组样本描述不同。",
+        },
+        [patient_claim, secondary_claim],
+    )
+    assert _critical_issue(
+        {
+            "field": "claims[1].effect_estimate",
+            "severity": "high",
+            "message": "The secondary estimate contradicts the source.",
+        },
+        [patient_claim, secondary_claim],
+    )
     assert _critical_issue(
         {
             "field": "claims.effect_estimate",
@@ -1445,6 +1539,13 @@ def test_medium_claim_coverage_difference_stays_auditable_without_blocking() -> 
             "field": "claims",
             "severity": "medium",
             "message": "抽取 A 缺少抽取 B 中关于 meta 回归和发表偏倚的声明。",
+        }
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims",
+            "severity": "medium",
+            "message": "B 将结果标记为 intervention_effect/causal，A 标记为 other/descriptive。",
         }
     )
     assert _source_evidence_fragments(

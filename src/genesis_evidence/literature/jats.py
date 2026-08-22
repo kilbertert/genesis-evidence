@@ -109,7 +109,15 @@ def classify_license(text: str, url: str | None = None) -> LicenseInfo:
     elif "by-sa" in compact:
         code, commercial, derivatives = "CC-BY-SA", True, True
         rights = RightsStatus.INTERNAL_TDM_ONLY
-    elif "creativecommons.org/licenses/by" in haystack or re.search(r"\bcc[- ]?by\b", haystack):
+    elif (
+        "creativecommons.org/licenses/by" in haystack
+        or re.search(r"\bcc[- ]?by\b", haystack)
+        or re.search(
+            r"creative\s+commons\s+attribution"
+            r"(?:\s+\d+(?:\.\d+)?(?:\s+international)?)?\s+license",
+            haystack,
+        )
+    ):
         code, commercial, derivatives = "CC-BY", True, True
         rights = RightsStatus.REDISTRIBUTABLE
 

@@ -1866,6 +1866,57 @@ def _picots_text_matches(
         topic_weeks = float(topic_duration.group(1)) * weeks[topic_duration.group(2)]
         if max(float(amount) * weeks[unit] for amount, unit in extracted_durations) < topic_weeks:
             return False
+    # A generic nutrition PICOTS describes a class of exposures, not one
+    # literal ingredient. Keep an explicit marker requirement so unrelated
+    # exercise, medication, or missing-exposure text does not pass.
+    nutrition_topic = any(
+        marker in topic_text
+        for marker in (
+            "dietary pattern",
+            "defined food",
+            "nutrient intervention",
+            "nutrition intervention",
+        )
+    )
+    if nutrition_topic:
+        nutrition_markers = {
+            "diet",
+            "dietary",
+            "food",
+            "nutrient",
+            "protein",
+            "vitamin",
+            "mineral",
+            "supplement",
+            "collagen",
+            "fiber",
+            "fibre",
+            "fat",
+            "oil",
+            "salt",
+            "sodium",
+            "potassium",
+            "calcium",
+            "soy",
+            "isoflavone",
+            "barley",
+            "grain",
+            "fruit",
+            "vegetable",
+            "milk",
+            "tea",
+            "coffee",
+            "beverage",
+            "drink",
+            "water",
+            "alkaline",
+            "electrolyte",
+            "omega",
+            "probiotic",
+            "prebiotic",
+        }
+        extracted_words = set(re.findall(r"[a-z0-9]+", extracted_text.casefold()))
+        return bool(nutrition_markers & extracted_words)
     if re.search(r"\b(?:usual|alternative|placebo)\b", topic_text) and re.search(
         r"\b(?:control|usual|alternative|placebo)\b", extracted_text
     ):
@@ -1909,7 +1960,34 @@ def _normalize_picots_text(value: str) -> str:
         "ckd": "chronic kidney disease",
         "患者": "patients",
         "病人": "patients",
+        "大麦嫩叶": "barley green",
+        "大麦": "barley",
+        "电解碱性水": "electrolyzed alkaline water",
+        "碱性水": "alkaline water",
+        "大豆": "soy",
+        "异黄酮": "isoflavone",
+        "蛋白质": "protein",
+        "营养素": "nutrient",
+        "食物": "food",
+        "饮用": "drink",
+        "服用": "consume",
+        "摄入": "intake",
+        "平衡膳食": "usual diet",
+        "纯净中性水": "control water",
+        "中性水": "control water",
         "碳酸氢钠": "sodium bicarbonate",
+        "氯化钠": "sodium chloride",
+        "低钠高钾盐替代品": "low sodium high potassium salt substitute",
+        "盐替代品": "salt substitute",
+        "低钠": "low sodium",
+        "高钾": "high potassium",
+        "钠摄入": "sodium intake",
+        "钾摄入": "potassium intake",
+        "普通盐": "control salt",
+        "收缩压": "systolic blood pressure",
+        "舒张压": "diastolic blood pressure",
+        "减少": "reduction",
+        "降低": "reduction",
         "胆钙化醇": "cholecalciferol vitamin d",
         "胶原蛋白肽": "collagen protein peptide",
         "胶原蛋白": "collagen protein",
@@ -1960,6 +2038,26 @@ def _normalize_picots_text(value: str) -> str:
         "岁": " years ",
     }
     normalized = value.casefold()
+    normalized = re.sub(
+        r"(\d{1,3})\s*岁\s*(?:或|及)?以上",
+        lambda match: f" aged {match.group(1)} years and older ",
+        normalized,
+    )
+    digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    duration_units = {"天": "days", "周": "weeks", "月": "months", "年": "years"}
+
+    def replace_duration(match: re.Match[str]) -> str:
+        raw, unit = match.groups()
+        if "十" in raw:
+            left, _, right = raw.partition("十")
+            number = digits.get(left, 1) * 10 + digits.get(right, 0)
+        else:
+            number = digits[raw]
+        return f" {number} {duration_units[unit]} "
+
+    normalized = re.sub(
+        r"([一二三四五六七八九十]+)\s*个?\s*(天|周|月|年)", replace_duration, normalized
+    )
     for source, target in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
         normalized = normalized.replace(source, f" {target.strip()} ")
     return normalized
@@ -2419,7 +2517,7 @@ def _review_guidance(
     issues = [
         {
             **issue,
-            "priority": "must_resolve" if _critical_issue(issue) else "verify",
+            "priority": "must_resolve" if _critical_issue(issue, claims) else "verify",
         }
         for issue in (consistency or {}).get("issues", [])
         if isinstance(issue, dict)
@@ -2552,10 +2650,14 @@ def _source_based_consistency_resolution(admission: object) -> bool:
     return bool(resolution) and not resolution.startswith("AI consistency adjudication (")
 
 
-def _critical_issue(issue: dict[str, object]) -> bool:
+def _critical_issue(
+    issue: dict[str, object], claims: list[dict[str, object]] | None = None
+) -> bool:
     severity = str(issue.get("severity") or "").casefold()
     if severity == "low":
         return False
+    if severity == "high":
+        return True
     field = str(issue.get("field") or "").casefold()
     message = str(issue.get("message") or "").casefold()
     value = f"{field} {message}"
@@ -2574,6 +2676,18 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "背景声明",
         "次要结局",
         "研究级 claim",
+        "claim_type",
+        "inference",
+        "标记为",
+        "分类",
+        "格式不一致",
+        "空格",
+        "措辞不一致",
+        "实质内容一致",
+        "额外说明",
+        "仅报告",
+        "format",
+        "spacing",
         "发表偏倚",
         "meta 回归",
         "not include",
@@ -2583,6 +2697,22 @@ def _critical_issue(issue: dict[str, object]) -> bool:
     )
     if severity == "medium" and any(token in value for token in coverage_only):
         return False
+    if claims is not None and "claim" in field:
+        patient_claims = [
+            claim
+            for claim in claims
+            if claim.get("candidate_claim_type") == "intervention_effect"
+            and (claim.get("review_suggestion") or {}).get("decision") == "approved"
+        ]
+        indexed = re.search(r"claims\[(\d+)\]", field)
+        if indexed:
+            extraction_index = int(indexed.group(1)) + 1
+            return any(
+                claim.get("extraction_claim_index") == extraction_index for claim in patient_claims
+            )
+        return any(
+            token in value for token in ("primary outcome", "primary_outcome", "主要结局")
+        )
     tokens = (
         "claim",
         "study_design",
@@ -2608,7 +2738,7 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "撤稿",
         "更正",
     )
-    return severity == "high" or any(token in value for token in tokens)
+    return any(token in value for token in tokens)
 
 
 def _resolution_draft(issues: list[dict[str, object]]) -> str:
