@@ -22,3 +22,7 @@ def test_first_batch_contains_exactly_twelve_unique_conditions() -> None:
 
 def test_constipation_does_not_claim_report_metric_matching() -> None:
     assert CONDITION_BY_CODE["COND_CHRONIC_CONSTIPATION"].metrics == ()
+
+
+def test_dyslipidemia_includes_non_hdl_canonical_metric() -> None:
+    assert "non_hdl_c" in CONDITION_BY_CODE["COND_DYSLIPIDEMIA"].metrics

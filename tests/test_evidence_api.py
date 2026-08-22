@@ -337,6 +337,35 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     assert response.json()["findings"][0]["card"]["scope_key"] == "metric:ldl_c"
 
 
+def test_non_hdl_metric_matches_its_published_card(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:non_hdl_c",
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "2",
+            "observations": [
+                _observation(
+                    metric_code="non_hdl_c",
+                    value=4.0,
+                    reference_low=None,
+                    reference_high=3.4,
+                    evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
+                    observation_id="metric-non-hdl",
+                    source_page=1,
+                )
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["findings"][0]["card"]["scope_key"] == "metric:non_hdl_c"
+
+
 def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
     database, client = _client(tmp_path)
     _publish_scoped_card(database, grade="low")

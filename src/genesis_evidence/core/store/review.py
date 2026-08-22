@@ -1993,6 +1993,12 @@ _PROFILE_OUTCOME_ALIASES = {
         "低密度脂蛋白胆固醇",
     ),
     "total_cholesterol": ("totalcholesterol", "总胆固醇"),
+    "non_hdl_c": (
+        "nonhdlc",
+        "nonhdlcholesterol",
+        "nonhighdensitylipoproteincholesterol",
+        "非高密度脂蛋白胆固醇",
+    ),
     "fasting_glucose": ("fastingglucose", "fastingbloodglucose", "fbg", "空腹血糖"),
     "hba1c": ("hba1c", "glycatedhemoglobin", "glycosylatedhemoglobin", "糖化血红蛋白"),
     "alt": ("alanineaminotransferase", "alaninetransaminase", "alt", "丙氨酸氨基转移酶"),
@@ -2094,7 +2100,8 @@ def _profile_scopes(
     if (
         condition
         and lipid_metrics.intersection(condition.metrics)
-        and (re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result)
+        and re.search(r"\bratio\b", result_outcome.casefold())
+        and "nonhdl" not in compact_result
     ):
         return {}
     scopes = {
