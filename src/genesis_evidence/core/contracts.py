@@ -9,8 +9,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CardStatus = Literal["draft", "in_review", "approved", "published", "rejected", "stale"]
-CardContentLayer = Literal["context_only", "context_and_action"]
-ActionStatus = Literal["available", "not_available"]
+CardContentLayer = Literal["context_only"]
+ActionStatus = Literal["not_available"]
 ProductStatus = Literal["not_implemented"]
 ReportStatus = Literal[
     "uploaded",
@@ -40,13 +40,12 @@ def _validate_bbox(value: list[float] | None, *, upper: float | None, field: str
 def card_capabilities(grade: str) -> dict[str, str]:
     """Map evidence strength to the capabilities exposed to patients."""
 
-    action_eligible = grade in {"moderate", "high"}
     return {
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": (
             "证据确定性已达到行动建议门槛，但当前知识卡尚未包含经审核的具体行动内容。"
-            if action_eligible
+            if grade in {"moderate", "high"}
             else "当前证据确定性尚未达到具体行动建议门槛。"
         ),
         "product_status": "not_implemented",
