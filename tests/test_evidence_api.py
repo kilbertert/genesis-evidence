@@ -354,9 +354,7 @@ def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> Non
     assert finding["product_status"] == "not_implemented"
     assert finding["card"]["content_layer"] == "context_only"
     assert finding["card"]["action_status"] == "not_available"
-    assert response.json()["patient_reply"]["findings"][0]["product_status"] == (
-        "not_implemented"
-    )
+    assert response.json()["patient_reply"]["findings"][0]["product_status"] == ("not_implemented")
 
 
 def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) -> None:
@@ -371,6 +369,7 @@ def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) ->
     assert response.status_code == 200
     assert response.json()["findings"] == []
     assert response.json()["unmatched"][0]["reason"] == "no_published_knowledge_card"
+
 
 def test_evidence_api_requires_key_and_confirmed_status(tmp_path) -> None:
     _, client = _client(tmp_path, api_key="secret-key-012345678901234")

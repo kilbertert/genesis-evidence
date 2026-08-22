@@ -1223,8 +1223,7 @@ class ReviewStore:
                         for row in card_rows
                     )
                     context_publishable_approved = any(
-                        row["status"] == "approved" and row["grade"] == "low"
-                        for row in card_rows
+                        row["status"] == "approved" and row["grade"] == "low" for row in card_rows
                     )
                     if published and published["grade"] == "low":
                         coverage_status = "published_context"
@@ -1371,9 +1370,7 @@ class ReviewStore:
                 (card_id,),
             ).fetchone()
             if high_risk:
-                raise ValueError(
-                    "context cards require resolved non-high risk-of-bias judgments"
-                )
+                raise ValueError("context cards require resolved non-high risk-of-bias judgments")
 
     @staticmethod
     def _stale_cards_for_paper(connection, paper_id: str) -> int:

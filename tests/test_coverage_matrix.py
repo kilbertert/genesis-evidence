@@ -51,8 +51,7 @@ def test_coverage_matrix_reports_published_metric_and_api_auth(tmp_path) -> None
     row = next(
         item
         for item in response.json()
-        if item["condition_code"] == "COND_PREDIABETES"
-        and item["metric_code"] == "fasting_glucose"
+        if item["condition_code"] == "COND_PREDIABETES" and item["metric_code"] == "fasting_glucose"
     )
     assert row["coverage_status"] == "published"
     assert row["published_card"]["status"] == "published"
@@ -197,8 +196,7 @@ def test_screening_backlog_blocks_claim_ready_status(tmp_path) -> None:
     row = next(
         item
         for item in ReviewStore(database).list_coverage_matrix()
-        if item["condition_code"] == "COND_PREDIABETES"
-        and item["metric_code"] == "fasting_glucose"
+        if item["condition_code"] == "COND_PREDIABETES" and item["metric_code"] == "fasting_glucose"
     )
 
     assert row["coverage_status"] == "screening"
