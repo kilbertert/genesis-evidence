@@ -1204,9 +1204,11 @@ def test_ai_blocks_unresolved_material_difference_without_polluting_risk(tmp_pat
     assert result["status"] == "attention_required"
     assert result["stage"] == "consistency_adjudication"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "pending"
+        admission = connection.execute(
+            "SELECT status, consistency_resolution FROM paper_admissions WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        assert tuple(admission) == ("pending", None)
     _admit(
         service,
         paper_id,
