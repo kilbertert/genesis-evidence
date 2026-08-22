@@ -512,6 +512,7 @@ class EvidenceReviewService:
                 and claim.get("decision") == "approved"
                 and str(claim.get("reviewer") or "").startswith("ai:")
                 and (claim.get("review_suggestion") or {}).get("decision") == "approved"
+                and _needs_extraction_risk_migration(claim)
             )
             if (
                 claim.get("status") != "candidate"
@@ -977,6 +978,16 @@ def _claim_review_changed(claim: dict[str, object], review: ClaimReviewInput) ->
             claim.get("condition_code") != review.condition_code,
         )
     )
+
+
+def _needs_extraction_risk_migration(claim: dict[str, object]) -> bool:
+    """Revisit only claims written by the pre-separation risk policy."""
+
+    risk = claim.get("risk_of_bias")
+    if not isinstance(risk, dict):
+        return False
+    rationale = str(risk.get("rationale") or "").casefold()
+    return "material independent-extraction differences were retained" in rationale
 
 
 def _automatic_profile(

@@ -1139,6 +1139,68 @@ def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None
         assert connection.execute("SELECT count(*) FROM knowledge_cards").fetchone()[0] == 1
 
 
+def test_ai_review_migrates_legacy_extraction_risk_once(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database, screened=False)
+    topic_id = _complete_topic(database, paper_id)
+    _admit(service, paper_id)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO claim_reviews(
+                claim_id, decision, corrected_text, corrected_study_design, inference,
+                risk_of_bias_json, applicability, condition_code, reviewer, reviewed_at
+            ) VALUES (?, 'approved', ?, 'cohort_study', 'associational', ?, ?,
+                'COND_VITAMIN_D_DEFICIENCY', 'ai:checker', '2026-08-12T00:00:00Z')
+            """,
+            (
+                claim_id,
+                "Lower vitamin D status was associated with frailty.",
+                json.dumps(
+                    {
+                        "tool": "exposure_study",
+                        "overall": "high",
+                        "rationale": (
+                            "Material independent-extraction differences were retained in the "
+                            "audit trail, so this result is conservatively rated high risk."
+                        ),
+                    }
+                ),
+                "Applies to older adults with measured serum 25(OH)D.",
+            ),
+        )
+        connection.execute("UPDATE claims SET status = 'reviewed' WHERE id = ?", (claim_id,))
+        connection.execute("UPDATE results SET status = 'reviewed' WHERE paper_id = ?", (paper_id,))
+    old_card = service.create_card_draft(
+        topic_id=topic_id,
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="旧版证据背景卡。",
+        profile=_profile(claim_id, certainty="very_low"),
+    )
+    service.transition_card(old_card, reviewer="reviewer-1", target="in_review")
+    service.transition_card(old_card, reviewer="reviewer-1", target="approved")
+
+    first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+    second = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    replacement = first["cards"][0]
+    assert replacement["card_id"] != old_card
+    assert replacement["status"] == "approved"
+    assert replacement["certainty"] == "very_low"
+    assert second["cards"][0]["card_id"] == replacement["card_id"]
+    with database.connect() as connection:
+        cards = connection.execute(
+            "SELECT id, status FROM knowledge_cards ORDER BY version"
+        ).fetchall()
+    assert [tuple(row) for row in cards] == [
+        (old_card, "stale"),
+        (replacement["card_id"], "approved"),
+    ]
+
+
 def test_ai_profile_records_a_null_result_as_not_supporting(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
