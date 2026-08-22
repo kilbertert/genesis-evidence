@@ -283,8 +283,8 @@ class ReviewStore:
             else:
                 connection.execute(
                     """
-                    UPDATE paper_admissions SET status = 'pending', reviewer = ?, reviewed_at = ?
-                    WHERE paper_id = ?
+                    UPDATE paper_admissions SET status = 'pending', consistency_resolution = NULL,
+                        reviewer = ?, reviewed_at = ? WHERE paper_id = ?
                     """,
                     (reviewer, _now(), paper_id),
                 )
