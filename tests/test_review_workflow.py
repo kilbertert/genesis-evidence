@@ -640,6 +640,19 @@ def test_picots_duration_normalizes_days_and_weeks() -> None:
     assert not _picots_text_matches("At least 3 weeks", "After 1 week of intervention")
 
 
+def test_picots_matches_chinese_salt_substitute_as_sodium_reduction() -> None:
+    assert _picots_text_matches(
+        "Dietary sodium reduction",
+        "低钠高钾盐替代品替代普通盐，减少钠摄入并增加钾摄入",
+    )
+    assert _picots_text_matches("Adults aged 40 and older", "282名40岁或以上的西藏高血压患者")
+    assert _picots_text_matches(
+        "Systolic and diastolic blood pressure",
+        "收缩压和舒张压从基线到三个月随访的变化",
+    )
+    assert _picots_text_matches("4 weeks or longer", "三个月")
+
+
 def test_picots_matches_common_chinese_population_terms() -> None:
     topic = "Adults aged 40 and older or postmenopausal adults"
     assert _picots_text_matches(topic, "绝经后女性")
@@ -1445,6 +1458,13 @@ def test_medium_claim_coverage_difference_stays_auditable_without_blocking() -> 
             "field": "claims",
             "severity": "medium",
             "message": "抽取 A 缺少抽取 B 中关于 meta 回归和发表偏倚的声明。",
+        }
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims",
+            "severity": "medium",
+            "message": "B 将结果标记为 intervention_effect/causal，A 标记为 other/descriptive。",
         }
     )
     assert _source_evidence_fragments(

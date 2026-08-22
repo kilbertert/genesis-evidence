@@ -1910,6 +1910,18 @@ def _normalize_picots_text(value: str) -> str:
         "患者": "patients",
         "病人": "patients",
         "碳酸氢钠": "sodium bicarbonate",
+        "氯化钠": "sodium chloride",
+        "低钠高钾盐替代品": "low sodium high potassium salt substitute",
+        "盐替代品": "salt substitute",
+        "低钠": "low sodium",
+        "高钾": "high potassium",
+        "钠摄入": "sodium intake",
+        "钾摄入": "potassium intake",
+        "普通盐": "control salt",
+        "收缩压": "systolic blood pressure",
+        "舒张压": "diastolic blood pressure",
+        "减少": "reduction",
+        "降低": "reduction",
         "胆钙化醇": "cholecalciferol vitamin d",
         "胶原蛋白肽": "collagen protein peptide",
         "胶原蛋白": "collagen protein",
@@ -1960,6 +1972,26 @@ def _normalize_picots_text(value: str) -> str:
         "岁": " years ",
     }
     normalized = value.casefold()
+    normalized = re.sub(
+        r"(\d{1,3})\s*岁\s*(?:或|及)?以上",
+        lambda match: f" aged {match.group(1)} years and older ",
+        normalized,
+    )
+    digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    duration_units = {"天": "days", "周": "weeks", "月": "months", "年": "years"}
+
+    def replace_duration(match: re.Match[str]) -> str:
+        raw, unit = match.groups()
+        if "十" in raw:
+            left, _, right = raw.partition("十")
+            number = digits.get(left, 1) * 10 + digits.get(right, 0)
+        else:
+            number = digits[raw]
+        return f" {number} {duration_units[unit]} "
+
+    normalized = re.sub(
+        r"([一二三四五六七八九十]+)\s*个?\s*(天|周|月|年)", replace_duration, normalized
+    )
     for source, target in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
         normalized = normalized.replace(source, f" {target.strip()} ")
     return normalized
@@ -2574,6 +2606,10 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "背景声明",
         "次要结局",
         "研究级 claim",
+        "claim_type",
+        "inference",
+        "标记为",
+        "分类",
         "发表偏倚",
         "meta 回归",
         "not include",
