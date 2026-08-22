@@ -107,6 +107,99 @@ def test_new_collection_after_profile_creation_remains_screenable(tmp_path) -> N
     )
 
 
+def test_unprofiled_paper_in_an_existing_profile_run_remains_screenable(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    profiled_paper_id, _ = _review_case(database, screened=False)
+    unprofiled_paper_id, _ = _review_case(database, screened=False)
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="same batch")
+    store.add_to_collection(run_id, profiled_paper_id, position=1)
+    store.add_to_collection(run_id, unprofiled_paper_id, position=2)
+    store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'Vitamin D', 'status',
+                'Older adults', 'Not reported', 'Not applicable', 'Higher versus lower',
+                'Frailty', 'Baseline', 'Frailty prevalence', 1, 'low', 'Initial profile',
+                '2026-08-12', 'reviewer-1', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (str(uuid.uuid4()), topic_id),
+        )
+    # The profile has no claim link in this fixture, so both papers are still unprofiled.
+    store.screen_collection_paper(
+        run_id,
+        unprofiled_paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+
+
+def test_profiled_paper_in_an_existing_run_remains_immutable(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, claim_id = _review_case(database, screened=False)
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="profiled")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        profile_id = str(uuid.uuid4())
+        card_id = str(uuid.uuid4())
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'Vitamin D', 'status',
+                'Older adults', 'Not reported', 'Not applicable', 'Higher versus lower',
+                'Frailty', 'Baseline', 'Frailty prevalence', 1, 'low', 'Initial profile',
+                '2026-08-12', 'reviewer-1', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (profile_id, topic_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO knowledge_cards(
+                id, condition_code, version, status, grade, evidence_profile_id,
+                reviewer, reviewed_at, patient_visible_body, created_at
+            ) VALUES (?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'approved', 'low', ?,
+                'reviewer-1', '2026-08-12T00:00:00Z', 'Reviewed context',
+                '2026-08-12T00:00:00Z')
+            """,
+            (card_id, profile_id),
+        )
+        result_id = connection.execute(
+            "SELECT result_id FROM claims WHERE id = ?", (claim_id,)
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO evidence_profile_results(profile_id, result_id, interpretation) "
+            "VALUES (?, ?, 'supports')",
+            (profile_id, result_id),
+        )
+    with pytest.raises(ValueError, match="already used by an evidence profile"):
+        store.screen_collection_paper(
+            run_id,
+            paper_id,
+            stage="title_abstract",
+            decision="included",
+            exclusion_reason=None,
+            reviewer="reviewer-1",
+        )
+
+
 def test_topic_rejects_a_future_evidence_cutoff(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()

@@ -385,14 +385,18 @@ class PaperStore:
                 raise ValueError("screening requires a completed run for a locked topic")
             if connection.execute(
                 """
-                SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
-                    ON cr.topic_id = ep.topic_id
-                WHERE cr.id = ? AND ep.created_at >= cr.created_at LIMIT 1
+                SELECT 1
+                FROM evidence_profile_results epr
+                JOIN results r ON r.id = epr.result_id
+                JOIN claims c ON c.result_id = r.id
+                JOIN evidence_profiles ep ON ep.id = epr.profile_id
+                WHERE ep.topic_id = ? AND c.paper_id = ?
+                LIMIT 1
                 """,
-                (run_id,),
+                (row["topic_id"], paper_id),
             ).fetchone():
                 raise ValueError(
-                    "screening is immutable for collection runs used by an evidence profile"
+                    "screening is immutable for papers already used by an evidence profile"
                 )
             allowed_reasons = set(json.loads(row["exclusion_reasons_json"]))
             if decision == "excluded" and reason not in allowed_reasons:
@@ -507,14 +511,18 @@ class PaperStore:
                 raise ValueError("full-text retrieval requires title/abstract inclusion")
             if connection.execute(
                 """
-                SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
-                    ON cr.topic_id = ep.topic_id
-                WHERE cr.id = ? AND ep.created_at >= cr.created_at LIMIT 1
+                SELECT 1
+                FROM evidence_profile_results epr
+                JOIN results r ON r.id = epr.result_id
+                JOIN claims c ON c.result_id = r.id
+                JOIN evidence_profiles ep ON ep.id = epr.profile_id
+                WHERE ep.topic_id = ? AND c.paper_id = ?
+                LIMIT 1
                 """,
-                (run_id,),
+                (row["topic_id"], paper_id),
             ).fetchone():
                 raise ValueError(
-                    "retrieval is immutable for collection runs used by an evidence profile"
+                    "retrieval is immutable for papers already used by an evidence profile"
                 )
             has_full_text = connection.execute(
                 "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
