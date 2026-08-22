@@ -1866,6 +1866,57 @@ def _picots_text_matches(
         topic_weeks = float(topic_duration.group(1)) * weeks[topic_duration.group(2)]
         if max(float(amount) * weeks[unit] for amount, unit in extracted_durations) < topic_weeks:
             return False
+    # A generic nutrition PICOTS describes a class of exposures, not one
+    # literal ingredient. Keep an explicit marker requirement so unrelated
+    # exercise, medication, or missing-exposure text does not pass.
+    nutrition_topic = any(
+        marker in topic_text
+        for marker in (
+            "dietary pattern",
+            "defined food",
+            "nutrient intervention",
+            "nutrition intervention",
+        )
+    )
+    if nutrition_topic:
+        nutrition_markers = {
+            "diet",
+            "dietary",
+            "food",
+            "nutrient",
+            "protein",
+            "vitamin",
+            "mineral",
+            "supplement",
+            "collagen",
+            "fiber",
+            "fibre",
+            "fat",
+            "oil",
+            "salt",
+            "sodium",
+            "potassium",
+            "calcium",
+            "soy",
+            "isoflavone",
+            "barley",
+            "grain",
+            "fruit",
+            "vegetable",
+            "milk",
+            "tea",
+            "coffee",
+            "beverage",
+            "drink",
+            "water",
+            "alkaline",
+            "electrolyte",
+            "omega",
+            "probiotic",
+            "prebiotic",
+        }
+        extracted_words = set(re.findall(r"[a-z0-9]+", extracted_text.casefold()))
+        return bool(nutrition_markers & extracted_words)
     if re.search(r"\b(?:usual|alternative|placebo)\b", topic_text) and re.search(
         r"\b(?:control|usual|alternative|placebo)\b", extracted_text
     ):
@@ -1909,6 +1960,21 @@ def _normalize_picots_text(value: str) -> str:
         "ckd": "chronic kidney disease",
         "患者": "patients",
         "病人": "patients",
+        "大麦嫩叶": "barley green",
+        "大麦": "barley",
+        "电解碱性水": "electrolyzed alkaline water",
+        "碱性水": "alkaline water",
+        "大豆": "soy",
+        "异黄酮": "isoflavone",
+        "蛋白质": "protein",
+        "营养素": "nutrient",
+        "食物": "food",
+        "饮用": "drink",
+        "服用": "consume",
+        "摄入": "intake",
+        "平衡膳食": "usual diet",
+        "纯净中性水": "control water",
+        "中性水": "control water",
         "碳酸氢钠": "sodium bicarbonate",
         "氯化钠": "sodium chloride",
         "低钠高钾盐替代品": "low sodium high potassium salt substitute",

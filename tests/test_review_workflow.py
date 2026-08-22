@@ -653,6 +653,23 @@ def test_picots_matches_chinese_salt_substitute_as_sodium_reduction() -> None:
     assert _picots_text_matches("4 weeks or longer", "三个月")
 
 
+def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap() -> None:
+    topic = "Dietary pattern or defined food or nutrient intervention"
+
+    assert _picots_text_matches(topic, "每日饮用1.5 L电解碱性水，持续12周")
+    assert _picots_text_matches(topic, "大麦嫩叶（barley green）提取物，每日服用")
+    assert _picots_text_matches(topic, "soy protein or soy isoflavones")
+    assert not _picots_text_matches(topic, "A supervised exercise programme")
+    assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
+
+
+def test_picots_matches_bilingual_dietary_comparators() -> None:
+    topic = "Usual diet, no intervention, placebo, or an alternative diet"
+
+    assert _picots_text_matches(topic, "仅遵循平衡膳食模式")
+    assert _picots_text_matches(topic, "1.5 L/day纯净中性水，pH 7.0")
+
+
 def test_picots_matches_common_chinese_population_terms() -> None:
     topic = "Adults aged 40 and older or postmenopausal adults"
     assert _picots_text_matches(topic, "绝经后女性")
