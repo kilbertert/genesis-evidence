@@ -2553,9 +2553,36 @@ def _source_based_consistency_resolution(admission: object) -> bool:
 
 
 def _critical_issue(issue: dict[str, object]) -> bool:
-    if str(issue.get("severity") or "").casefold() == "low":
+    severity = str(issue.get("severity") or "").casefold()
+    if severity == "low":
         return False
-    value = " ".join(str(issue.get(key) or "") for key in ("field", "message")).casefold()
+    field = str(issue.get("field") or "").casefold()
+    message = str(issue.get("message") or "").casefold()
+    value = f"{field} {message}"
+    coverage_only = (
+        "未包含",
+        "额外包含",
+        "覆盖范围",
+        "结局覆盖",
+        "声明粒度",
+        "拆分",
+        "合并",
+        "未单独列出",
+        "多出一条",
+        "数量不一致",
+        "背景性",
+        "背景声明",
+        "次要结局",
+        "研究级 claim",
+        "发表偏倚",
+        "meta 回归",
+        "not include",
+        "not present in extraction",
+        "coverage",
+        "granularity",
+    )
+    if severity == "medium" and any(token in value for token in coverage_only):
+        return False
     tokens = (
         "claim",
         "study_design",
@@ -2581,7 +2608,7 @@ def _critical_issue(issue: dict[str, object]) -> bool:
         "撤稿",
         "更正",
     )
-    return issue.get("severity") == "high" or any(token in value for token in tokens)
+    return severity == "high" or any(token in value for token in tokens)
 
 
 def _resolution_draft(issues: list[dict[str, object]]) -> str:

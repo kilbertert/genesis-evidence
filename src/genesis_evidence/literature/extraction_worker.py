@@ -198,6 +198,7 @@ def main() -> None:
     database = Database(database_path)
     database.initialize()
     store = PaperStore(database)
+    objects = ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects"))
     reviewer_id = os.getenv("GENESIS_EVIDENCE_REVIEWER_ID", "").strip()
     if not reviewer_id:
         raise SystemExit(
@@ -207,9 +208,9 @@ def main() -> None:
     topic_id = os.getenv("GENESIS_EVIDENCE_ACTIVE_TOPIC_ID") or None
     worker = LiteratureExtractionWorker(
         store=store,
-        objects=ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")),
+        objects=objects,
         analyzer=analyzer,
-        auto_reviewer=EvidenceReviewService(ReviewStore(database), store),
+        auto_reviewer=EvidenceReviewService(ReviewStore(database), store, objects),
         requested_by=reviewer_id,
     )
     lock_path = database_path.with_suffix(f"{database_path.suffix}.extraction-worker.lock")
