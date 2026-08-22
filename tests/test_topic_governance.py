@@ -200,6 +200,79 @@ def test_profiled_paper_in_an_existing_run_remains_immutable(tmp_path) -> None:
         )
 
 
+def test_reconcile_fills_only_blank_duplicate_rows_after_profile_creation(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, claim_id = _review_case(database, screened=False)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="first")
+    store.add_to_collection(first_run, paper_id, position=1)
+    store.finish_collection(first_run, status="completed", detail={})
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="original-reviewer",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO full_texts(
+                paper_id, object_key, sha256, media_type, rights_status, processed_at
+            ) VALUES (?, ?, ?, 'application/xml', 'redistributable', '2026-08-11T00:00:00Z')
+            """,
+            (paper_id, f"test/{paper_id}.xml", "0" * 64),
+        )
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="full_text",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="original-reviewer",
+    )
+    with database.transaction() as connection:
+        profile_id = str(uuid.uuid4())
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'Vitamin D', 'status',
+                'Older adults', 'Not reported', 'Not applicable', 'Higher versus lower',
+                'Frailty', 'Baseline', 'Frailty prevalence', 1, 'low', 'Initial profile',
+                '2026-08-12', 'reviewer-1', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (profile_id, topic_id),
+        )
+        result_id = connection.execute(
+            "SELECT result_id FROM claims WHERE id = ?", (claim_id,)
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO evidence_profile_results(profile_id, result_id, interpretation) "
+            "VALUES (?, ?, 'supports')",
+            (profile_id, result_id),
+        )
+
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="duplicate")
+    store.add_to_collection(second_run, paper_id, position=1)
+    store.finish_collection(second_run, status="completed", detail={})
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert result["conflicts"] == []
+    assert result["normalized_records"] == 1
+    rows = {row["run_id"]: row for row in store.list_topic_ledger(topic_id)}
+    assert rows[first_run]["title_abstract_reviewer"] == "original-reviewer"
+    assert rows[second_run]["title_abstract_decision"] == "included"
+    assert rows[second_run]["full_text_decision"] == "included"
+
+
 def test_topic_rejects_a_future_evidence_cutoff(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
