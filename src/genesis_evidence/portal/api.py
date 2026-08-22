@@ -10,7 +10,11 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..core.contracts import EvidenceMatchRequest, EvidenceMatchResponse
+from ..core.contracts import (
+    EvidenceMatchRequest,
+    EvidenceMatchResponse,
+    EvidenceMatchResponseV2,
+)
 from ..core.metrics import METRIC_LABELS
 from ..core.store import Database, EvidenceStore
 
@@ -88,14 +92,13 @@ def create_app(
 
     @app.post(
         "/api/evidence/matches",
-        response_model=EvidenceMatchResponse,
-        response_model_exclude_none=True,
+        response_model=None,
     )
     def match_evidence(
         request: EvidenceMatchRequest,
         x_genesis_evidence_key: str = Header(default=""),
         x_correlation_id: str = Header(default=""),
-    ) -> EvidenceMatchResponse:
+    ) -> EvidenceMatchResponse | EvidenceMatchResponseV2:
         require_api_key(x_genesis_evidence_key)
         correlation_id = x_correlation_id.strip()
         if correlation_id:
@@ -108,12 +111,15 @@ def create_app(
                 ) from exc
         else:
             correlation_id = str(uuid.uuid4())
-        return EvidenceMatchResponse.model_validate(
-            store.match_published_cards(
-                request.observations,
-                correlation_id=correlation_id,
-            )
+        result = store.match_published_cards(
+            request.observations,
+            correlation_id=correlation_id,
+            schema_version=request.schema_version,
         )
+        response_model = (
+            EvidenceMatchResponseV2 if request.schema_version == "2" else EvidenceMatchResponse
+        )
+        return response_model.model_validate(result).model_dump(mode="json", exclude_none=True)
 
     return app
 

@@ -33,6 +33,7 @@ class EvidenceStore:
         *,
         correlation_id: str,
         actor: str = "health-flow",
+        schema_version: str = "3",
     ) -> dict[str, object]:
         with self.database.transaction() as connection:
             cards = _published_cards(connection)
@@ -188,6 +189,8 @@ class EvidenceStore:
                     datetime.now(UTC).isoformat(),
                 ),
             )
+        if schema_version == "2":
+            return _legacy_v2_response(result)
         return result
 
 
@@ -240,6 +243,104 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
             if source not in card["sources"]:
                 card["sources"].append(source)  # type: ignore[union-attr]
     return cards
+
+
+def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
+    """Flatten the v3 condition groups for clients that still speak v2."""
+
+    v3_findings = result["findings"]
+    v2_findings: list[dict[str, object]] = []
+    matched_observation_ids: set[str] = set()
+    for finding in v3_findings:  # type: ignore[union-attr]
+        for item in finding["evidence_items"]:  # type: ignore[index]
+            source_ids = list(item["source_observation_ids"])  # type: ignore[index]
+            matched_observation_ids.update(source_ids)
+            evidence_strength = str(item["evidence_strength"])
+            sorting = {
+                "urgency": finding["urgency"],
+                "abnormality_severity": finding["abnormality_severity"],
+                "evidence_strength": evidence_strength,
+                "needs_recheck": finding["needs_recheck"],
+                "department": finding["department"],
+                "epidemiology_background": finding["epidemiology_background"],
+            }
+            v2_findings.append(
+                {
+                    "condition_code": finding["condition_code"],
+                    "condition_name": finding["condition_name"],
+                    "card": item["card"],
+                    "source_observation_ids": source_ids,
+                    "urgency": finding["urgency"],
+                    "abnormality_severity": finding["abnormality_severity"],
+                    "evidence_strength": evidence_strength,
+                    "needs_recheck": finding["needs_recheck"],
+                    "department": finding["department"],
+                    "recheck_direction": finding["recheck_direction"],
+                    "epidemiology_background": finding["epidemiology_background"],
+                    "source_observations": item["source_observations"],
+                    "sorting": sorting,
+                    "content_layer": item["card"]["content_layer"],
+                    "action_status": item["card"]["action_status"],
+                    "action_message": item["card"]["action_message"],
+                    "product_status": item["card"]["product_status"],
+                }
+            )
+
+    unmatched = [
+        {key: value for key, value in item.items() if key != "condition_names"}
+        for item in result["unmatched"]  # type: ignore[union-attr]
+        if item["observation_id"] not in matched_observation_ids  # type: ignore[index]
+    ]
+    patient_findings = []
+    for finding in v2_findings:
+        card = finding["card"]
+        patient_findings.append(
+            {
+                "condition_code": finding["condition_code"],
+                "condition_name": finding["condition_name"],
+                "urgency": finding["urgency"],
+                "abnormality_severity": finding["abnormality_severity"],
+                "evidence_strength": finding["evidence_strength"],
+                "needs_recheck": finding["needs_recheck"],
+                "department": finding["department"],
+                "recheck_direction": finding["recheck_direction"],
+                "card_id": card["id"],
+                "card_version": card["version"],
+                "evidence_profile_id": card["evidence_profile_id"],
+                "patient_visible_body": card["patient_visible_body"],
+                "sources": card["sources"],
+                "source_observation_ids": finding["source_observation_ids"],
+                "source_observations": finding["source_observations"],
+                "content_layer": finding["content_layer"],
+                "action_status": finding["action_status"],
+                "action_message": finding["action_message"],
+                "product_status": finding["product_status"],
+            }
+        )
+    return {
+        "schema_version": "2",
+        "sorting_version": result["sorting_version"],
+        "correlation_id": result["correlation_id"],
+        "findings": v2_findings,
+        "unmatched": unmatched,
+        "skipped": result["skipped"],
+        "message": result["message"],
+        "patient_reply": {
+            "title": "体检报告解读与健康风险提示",
+            "summary": (
+                f"根据已确认的报告指标，发现 {len(patient_findings)} 个有正式知识卡支持的健康问题。"
+                if patient_findings
+                else (
+                    "发现异常指标，但当前没有对应的已审核知识卡。"
+                    if unmatched
+                    else "当前没有发现可由已发布知识卡支持的异常指标。"
+                )
+            ),
+            "findings": patient_findings,
+            "unmatched_count": len(unmatched),
+            "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
+        },
+    }
 
 
 def _validate_observation(observation: EvidenceMatchObservation) -> None:

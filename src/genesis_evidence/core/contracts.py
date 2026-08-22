@@ -212,6 +212,100 @@ class PublishedEvidenceCard(BaseModel):
     product_status: ProductStatus
 
 
+class EvidenceSortingV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
+    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    needs_recheck: bool
+    department: str
+    epidemiology_background: str
+
+
+class EvidenceFindingV2(BaseModel):
+    """Legacy one-card finding retained for pre-v3 Health-Flow clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    condition_code: str
+    condition_name: str
+    card: PublishedEvidenceCard
+    source_observation_ids: list[str]
+    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
+    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    needs_recheck: bool
+    department: str
+    recheck_direction: str
+    epidemiology_background: str
+    source_observations: list[EvidenceSourceObservation]
+    sorting: EvidenceSortingV2
+    content_layer: CardContentLayer
+    action_status: ActionStatus
+    action_message: str = ""
+    product_status: ProductStatus
+
+
+class EvidenceUnmatchedV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str
+    metric_code: str
+    metric_label: str
+    condition_codes: list[str]
+    reason: Literal["no_published_knowledge_card"]
+
+
+class PatientReplyFindingV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    condition_code: str
+    condition_name: str
+    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
+    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    needs_recheck: bool
+    department: str
+    recheck_direction: str
+    card_id: str = Field(min_length=1)
+    card_version: str = Field(min_length=1)
+    evidence_profile_id: str = Field(min_length=1)
+    patient_visible_body: str
+    sources: list[EvidenceSourceReference] = Field(min_length=1)
+    source_observation_ids: list[str]
+    source_observations: list[EvidenceSourceObservation]
+    content_layer: CardContentLayer
+    action_status: ActionStatus
+    action_message: str = ""
+    product_status: ProductStatus
+
+
+class PatientReplyV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Literal["体检报告解读与健康风险提示"]
+    summary: str
+    findings: list[PatientReplyFindingV2]
+    unmatched_count: int = Field(ge=0)
+    disclaimer: str
+
+
+class EvidenceMatchResponseV2(BaseModel):
+    """The pre-condition-grouping response contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["2"]
+    sorting_version: Literal["published-card-reference-range-v1"]
+    correlation_id: str
+    findings: list[EvidenceFindingV2]
+    unmatched: list[EvidenceUnmatchedV2]
+    skipped: list[EvidenceSkipped]
+    message: str
+    patient_reply: PatientReplyV2
+
+
 class EvidenceSorting(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -263,7 +357,6 @@ class EvidenceFinding(BaseModel):
     action_status: ActionStatus
     action_message: str = ""
     product_status: ProductStatus
-
 
 
 class EvidenceUnmatched(BaseModel):
