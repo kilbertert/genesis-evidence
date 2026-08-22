@@ -592,12 +592,20 @@ class PaperStore:
             ).fetchone()
             if topic is None or topic["status"] != "locked":
                 raise ValueError("a locked evidence topic is required for ledger reconciliation")
-            if connection.execute(
-                "SELECT 1 FROM evidence_profiles WHERE topic_id = ?", (topic_id,)
-            ).fetchone():
-                raise ValueError(
-                    "ledger reconciliation is immutable after evidence profile creation"
-                )
+            profiled_papers = {
+                str(row["paper_id"])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT c.paper_id
+                    FROM evidence_profile_results epr
+                    JOIN evidence_profiles ep ON ep.id = epr.profile_id
+                    JOIN results r ON r.id = epr.result_id
+                    JOIN claims c ON c.result_id = r.id
+                    WHERE ep.topic_id = ?
+                    """,
+                    (topic_id,),
+                ).fetchall()
+            }
             rows = connection.execute(
                 """
                 SELECT cp.*, cr.created_at AS run_created_at
@@ -655,20 +663,121 @@ class PaperStore:
                 canonical_full_text = next(iter(full_text), None)
                 if canonical_title is None and retrieval is None and canonical_full_text is None:
                     continue
+                title_exclusion_reason = next(
+                    (
+                        str(row["primary_exclusion_reason"])
+                        for row in records
+                        if canonical_title == "excluded"
+                        and row["title_abstract_decision"] == "excluded"
+                        and row["primary_exclusion_reason"]
+                    ),
+                    None,
+                )
+                full_text_exclusion_reason = next(
+                    (
+                        str(row["primary_exclusion_reason"])
+                        for row in records
+                        if row["primary_exclusion_reason"]
+                    ),
+                    None,
+                )
                 now = _now()
+                if paper_id in profiled_papers:
+                    # A profiled paper is immutable.  Duplicate collection rows may
+                    # still be missing the already-known decision; fill only blanks.
+                    for record in records:
+                        assignments: list[str] = []
+                        values: list[object] = []
+                        if (
+                            canonical_title is not None
+                            and record["title_abstract_decision"] is None
+                        ):
+                            assignments.extend(
+                                (
+                                    "title_abstract_decision = ?",
+                                    "title_abstract_reviewer = ?",
+                                    "title_abstract_reviewed_at = ?",
+                                )
+                            )
+                            values.extend((canonical_title, reviewer, now))
+                            if canonical_title == "excluded":
+                                assignments.extend(
+                                    (
+                                        "full_text_decision = NULL",
+                                        "full_text_reviewer = NULL",
+                                        "full_text_reviewed_at = NULL",
+                                        "primary_exclusion_reason = ?",
+                                    )
+                                )
+                                values.append(title_exclusion_reason)
+                        if (
+                            retrieval is not None
+                            and record["full_text_retrieval_status"] in {None, "pending"}
+                        ):
+                            assignments.extend(
+                                (
+                                    "full_text_retrieval_status = ?",
+                                    "full_text_retrieval_reason = ?",
+                                    "full_text_retrieval_reviewer = ?",
+                                    "full_text_retrieval_recorded_at = ?",
+                                )
+                            )
+                            values.extend((retrieval, retrieval_reason, retrieval_reviewer, now))
+                            if retrieval == "not_retrieved":
+                                assignments.extend(
+                                    (
+                                        "full_text_decision = NULL",
+                                        "full_text_reviewer = NULL",
+                                        "full_text_reviewed_at = NULL",
+                                        "primary_exclusion_reason = NULL",
+                                    )
+                                )
+                        if canonical_full_text is not None and record["full_text_decision"] is None:
+                            assignments.extend(
+                                (
+                                    "full_text_decision = ?",
+                                    "primary_exclusion_reason = ?",
+                                    "full_text_reviewer = ?",
+                                    "full_text_reviewed_at = ?",
+                                )
+                            )
+                            values.extend(
+                                (
+                                    canonical_full_text,
+                                    full_text_exclusion_reason
+                                    if canonical_full_text == "excluded"
+                                    else None,
+                                    reviewer,
+                                    now,
+                                )
+                            )
+                        if not assignments:
+                            continue
+                        changed = connection.execute(
+                            "UPDATE collection_papers SET "
+                            + ", ".join(assignments)
+                            + " WHERE run_id = ? AND paper_id = ?",
+                            (*values, record["run_id"], paper_id),
+                        )
+                        normalized += changed.rowcount
+                        self._audit(
+                            connection,
+                            "paper",
+                            paper_id,
+                            "topic_ledger_duplicate_filled",
+                            {
+                                "topic_id": topic_id,
+                                "run_id": record["run_id"],
+                                "title_abstract_decision": canonical_title,
+                                "full_text_retrieval_status": retrieval,
+                                "full_text_decision": canonical_full_text,
+                            },
+                            actor=reviewer,
+                        )
+                    continue
                 assignments: list[str] = []
                 values: list[object] = []
                 if canonical_title is not None:
-                    exclusion_reason = next(
-                        (
-                            str(row["primary_exclusion_reason"])
-                            for row in records
-                            if canonical_title == "excluded"
-                            and row["title_abstract_decision"] == "excluded"
-                            and row["primary_exclusion_reason"]
-                        ),
-                        None,
-                    )
                     assignments.extend(
                         (
                             "title_abstract_decision = ?",
@@ -686,7 +795,7 @@ class PaperStore:
                                 "primary_exclusion_reason = ?",
                             )
                         )
-                        values.append(exclusion_reason)
+                        values.append(title_exclusion_reason)
                 if retrieval is not None:
                     assignments.extend(
                         (
@@ -707,14 +816,6 @@ class PaperStore:
                             )
                         )
                 if canonical_full_text is not None:
-                    exclusion_reason = next(
-                        (
-                            str(row["primary_exclusion_reason"])
-                            for row in records
-                            if row["primary_exclusion_reason"]
-                        ),
-                        None,
-                    )
                     assignments.extend(
                         (
                             "full_text_decision = ?",
@@ -726,7 +827,9 @@ class PaperStore:
                     values.extend(
                         (
                             canonical_full_text,
-                            exclusion_reason if canonical_full_text == "excluded" else None,
+                            full_text_exclusion_reason
+                            if canonical_full_text == "excluded"
+                            else None,
                             reviewer,
                             now,
                         )
