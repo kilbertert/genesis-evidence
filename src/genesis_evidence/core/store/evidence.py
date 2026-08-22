@@ -36,7 +36,7 @@ class EvidenceStore:
     ) -> dict[str, object]:
         with self.database.transaction() as connection:
             cards = _published_cards(connection)
-            findings_by_condition: dict[str, dict[str, object]] = {}
+            findings_by_card: dict[tuple[str, str], dict[str, object]] = {}
             unmatched: list[dict[str, object]] = []
             skipped: list[dict[str, object]] = []
             abnormal_count = 0
@@ -68,8 +68,9 @@ class EvidenceStore:
                         missing.append(condition.code)
                         continue
                     matched = True
-                    finding = findings_by_condition.setdefault(
-                        condition.code,
+                    scope_key = str(card["scope_key"])
+                    finding = findings_by_card.setdefault(
+                        (condition.code, scope_key),
                         {
                             "condition_code": condition.code,
                             "condition_name": condition.name,
@@ -103,12 +104,13 @@ class EvidenceStore:
                     )
 
             findings = sorted(
-                findings_by_condition.values(),
+                findings_by_card.values(),
                 key=lambda item: (
                     {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
                     -int(item["abnormality_severity"]),
                     EVIDENCE_RANK[item["evidence_strength"]],
                     item["department"],
+                    item["card"]["scope_key"],
                 ),
             )
             result_findings = []

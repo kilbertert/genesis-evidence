@@ -33,7 +33,10 @@ def _publish_scoped_card(
     claim_id: str = "claim-1",
     paper_id: str = "paper-1",
     grade: str = "moderate",
+    version: str = "1.0.0",
+    doi: str = "10.1000/test-paper",
 ) -> None:
+    extraction_id = f"extraction-{paper_id}"
     with database.transaction() as connection:
         connection.execute(
             """
@@ -55,20 +58,20 @@ def _publish_scoped_card(
                 population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
                 estimate_target, evidence_body_complete, certainty, certainty_rationale,
                 evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES (?, ?, ?, ?, '1.0.0', 'Test ingredient',
+            ) VALUES (?, ?, ?, ?, ?, 'Test ingredient',
                 'Test form', 'Adults 40+', 'Not reported', 'Test dose', 'Comparator',
                 'Outcome', 'Timepoint', 'Target', 1, 'moderate', 'Test-only profile',
                 '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
             """,
-            (profile_id, topic_id, condition_code, scope_key),
+            (profile_id, topic_id, condition_code, scope_key, version),
         )
         connection.execute(
             """
             INSERT INTO papers(id, title, abstract, doi, created_at)
-            VALUES (?, 'Test paper', 'Test abstract', '10.1000/test-paper',
+            VALUES (?, 'Test paper', 'Test abstract', ?,
                 '2026-08-11T00:00:00Z')
             """,
-            (paper_id,),
+            (paper_id, doi),
         )
         connection.execute(
             """
@@ -76,22 +79,22 @@ def _publish_scoped_card(
                 id, paper_id, model, extraction_run_id, extraction_json,
                 second_model, second_run_id, second_extraction_json,
                 check_model, check_run_id, consistency_status, consistency_json, created_at
-            ) VALUES ('extraction-1', ?, 'test-model', 'run-a', '{}',
+            ) VALUES (?, ?, 'test-model', 'run-a', '{}',
                 'test-model-b', 'run-b', '{}', 'check-model', 'check-run',
                 'consistent', '{}', '2026-08-11T00:00:00Z')
             """,
-            (paper_id,),
+            (extraction_id, paper_id),
         )
         connection.execute(
             """
             INSERT INTO claims(
                 id, paper_id, extraction_id, candidate_text, evidence_text, locator,
                 candidate_study_design, status, created_at
-            ) VALUES (?, ?, 'extraction-1', 'Test claim', 'Test evidence',
+            ) VALUES (?, ?, ?, 'Test claim', 'Test evidence',
                 'p. 4', 'randomized_controlled_trial', 'reviewed',
                 '2026-08-11T00:00:00Z')
             """,
-            (claim_id, paper_id),
+            (claim_id, paper_id, extraction_id),
         )
         connection.execute(
             """
@@ -109,11 +112,11 @@ def _publish_scoped_card(
             INSERT INTO knowledge_cards(
                 id, condition_code, version, status, grade, evidence_profile_id, reviewer,
                 reviewed_at, published_at, patient_visible_body, created_at
-            ) VALUES (?, ?, '1.0.0', 'published', ?,
+            ) VALUES (?, ?, ?, 'published', ?,
                 ?, 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z',
                 '这是经过审核的营养健康知识。', '2026-08-11T00:00:00Z')
             """,
-            (card_id, condition_code, grade, profile_id),
+            (card_id, condition_code, version, grade, profile_id),
         )
         connection.execute(
             """
@@ -364,6 +367,69 @@ def test_non_hdl_metric_matches_its_published_card(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["findings"][0]["card"]["scope_key"] == "metric:non_hdl_c"
+
+
+def test_same_condition_keeps_each_metric_card_and_source_trace(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:total_cholesterol",
+        card_id="card-total-cholesterol",
+        profile_id="profile-total-cholesterol",
+        topic_id="topic-total-cholesterol",
+        claim_id="claim-total-cholesterol",
+        paper_id="paper-total-cholesterol",
+    )
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:non_hdl_c",
+        card_id="card-non-hdl",
+        profile_id="profile-non-hdl",
+        topic_id="topic-non-hdl",
+        claim_id="claim-non-hdl",
+        paper_id="paper-non-hdl",
+        version="1.0.1",
+        doi="10.1000/test-non-hdl",
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "2",
+            "observations": [
+                _observation(
+                    observation_id="metric-total-cholesterol",
+                    metric_code="total_cholesterol",
+                    value=6.2,
+                    reference_low=None,
+                    reference_high=5.2,
+                    evidence_text="总胆固醇 6.2 mmol/L 0-5.2 H",
+                ),
+                _observation(
+                    observation_id="metric-non-hdl",
+                    metric_code="non_hdl_c",
+                    value=4.2,
+                    reference_low=None,
+                    reference_high=3.4,
+                    evidence_text="Non-HDL 4.2 mmol/L 0-3.4 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {item["card"]["id"] for item in body["findings"]} == {
+        "card-total-cholesterol",
+        "card-non-hdl",
+    }
+    assert {
+        item["source_observation_ids"][0] for item in body["findings"]
+    } == {"metric-total-cholesterol", "metric-non-hdl"}
+    assert {
+        item["card_id"] for item in body["patient_reply"]["findings"]
+    } == {"card-total-cholesterol", "card-non-hdl"}
 
 
 def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
