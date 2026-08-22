@@ -12,6 +12,7 @@ CardStatus = Literal["draft", "in_review", "approved", "published", "rejected", 
 CardContentLayer = Literal["context_only"]
 ActionStatus = Literal["not_available"]
 ProductStatus = Literal["not_implemented"]
+EvidenceStrength = Literal["high", "moderate", "low", "very_low", "mixed"]
 ReportStatus = Literal[
     "uploaded",
     "extracted",
@@ -146,7 +147,7 @@ class EvidenceMatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["2"]
+    schema_version: Literal["2", "3"]
     observations: list[EvidenceMatchObservation] = Field(max_length=600)
 
     @model_validator(mode="after")
@@ -216,10 +217,30 @@ class EvidenceSorting(BaseModel):
 
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: EvidenceStrength
     needs_recheck: bool
     department: str
     epidemiology_background: str
+
+
+class EvidenceItem(BaseModel):
+    """One metric-level card and its independent report trace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric_code: str
+    metric_label: str
+    card: PublishedEvidenceCard
+    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    source_observation_ids: list[str] = Field(min_length=1)
+    source_observations: list[EvidenceSourceObservation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> EvidenceItem:
+        expected_scope = f"metric:{self.metric_code}"
+        if self.card.scope_key != expected_scope:
+            raise ValueError("evidence item card scope does not match metric_code")
+        return self
 
 
 class EvidenceFinding(BaseModel):
@@ -227,21 +248,22 @@ class EvidenceFinding(BaseModel):
 
     condition_code: str
     condition_name: str
-    card: PublishedEvidenceCard
     source_observation_ids: list[str]
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: EvidenceStrength
     needs_recheck: bool
     department: str
     recheck_direction: str
     epidemiology_background: str
     source_observations: list[EvidenceSourceObservation]
+    evidence_items: list[EvidenceItem] = Field(default_factory=list)
     sorting: EvidenceSorting
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
     product_status: ProductStatus
+
 
 
 class EvidenceUnmatched(BaseModel):
@@ -251,7 +273,14 @@ class EvidenceUnmatched(BaseModel):
     metric_code: str
     metric_label: str
     condition_codes: list[str]
+    condition_names: list[str] = Field(default_factory=list)
     reason: Literal["no_published_knowledge_card"]
+
+    @model_validator(mode="after")
+    def align_condition_names(self) -> EvidenceUnmatched:
+        if self.condition_names and len(self.condition_names) != len(self.condition_codes):
+            raise ValueError("condition_names must align with condition_codes")
+        return self
 
 
 class EvidenceSkipped(BaseModel):
@@ -276,21 +305,23 @@ class PatientReplyFinding(BaseModel):
     condition_name: str
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: EvidenceStrength
     needs_recheck: bool
     department: str
     recheck_direction: str
-    card_id: str
-    card_version: str
-    evidence_profile_id: str
-    patient_visible_body: str
-    sources: list[EvidenceSourceReference] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[EvidenceSourceObservation]
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
     product_status: ProductStatus
+    evidence_items: list[EvidenceItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_patient_evidence_items(self) -> PatientReplyFinding:
+        if not self.evidence_items:
+            raise ValueError("patient findings require metric-level evidence_items")
+        return self
 
 
 class PatientReply(BaseModel):
@@ -308,7 +339,7 @@ class EvidenceMatchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["2"]
+    schema_version: Literal["3"]
     sorting_version: Literal["published-card-reference-range-v1"]
     correlation_id: str
     findings: list[EvidenceFinding]
@@ -316,3 +347,11 @@ class EvidenceMatchResponse(BaseModel):
     skipped: list[EvidenceSkipped]
     message: str
     patient_reply: PatientReply
+
+    @model_validator(mode="after")
+    def require_metric_evidence(self) -> EvidenceMatchResponse:
+        if any(not finding.evidence_items for finding in self.findings):
+            raise ValueError("findings require metric-level evidence_items")
+        if any(not finding.evidence_items for finding in self.patient_reply.findings):
+            raise ValueError("patient findings require evidence_items")
+        return self

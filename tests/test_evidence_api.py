@@ -184,9 +184,9 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
     assert body["sorting_version"] == "published-card-reference-range-v1"
     assert body["findings"][0]["condition_code"] == "COND_PREDIABETES"
     assert body["findings"][0]["source_observation_ids"] == ["metric-1"]
-    assert body["findings"][0]["card"]["status"] == "published"
-    assert body["findings"][0]["card"]["id"] == "card-1"
-    assert body["findings"][0]["card"]["scope_key"] == "metric:fasting_glucose"
+    assert body["findings"][0]["evidence_items"][0]["card"]["status"] == "published"
+    assert body["findings"][0]["evidence_items"][0]["card"]["id"] == "card-1"
+    assert body["findings"][0]["evidence_items"][0]["card"]["scope_key"] == "metric:fasting_glucose"
     assert body["findings"][0]["source_observations"] == [
         {
             "observation_id": "metric-1",
@@ -202,60 +202,17 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
             "bbox_normalized": [10, 20, 100, 120],
         }
     ]
-    assert body["patient_reply"] == {
-        "title": "体检报告解读与健康风险提示",
-        "summary": "根据已确认的报告指标，发现 1 个有正式知识卡支持的健康问题。",
-        "findings": [
-            {
-                "condition_code": "COND_PREDIABETES",
-                "condition_name": "糖尿病前期 / 糖代谢异常",
-                "urgency": "routine",
-                "abnormality_severity": 1,
-                "evidence_strength": "moderate",
-                "needs_recheck": True,
-                "department": "内分泌科",
-                "recheck_direction": "复查空腹血糖与糖化血红蛋白",
-                "card_id": "card-1",
-                "card_version": "1.0.0",
-                "evidence_profile_id": "profile-1",
-                "patient_visible_body": "这是经过审核的营养健康知识。",
-                "sources": [
-                    {
-                        "claim_id": "claim-1",
-                        "paper_id": "paper-1",
-                        "paper_title": "Test paper",
-                        "doi": "10.1000/test-paper",
-                        "evidence": "Test evidence",
-                        "locator": "p. 4",
-                    }
-                ],
-                "source_observation_ids": ["metric-1"],
-                "source_observations": [
-                    {
-                        "observation_id": "metric-1",
-                        "metric_code": "fasting_glucose",
-                        "value": 6.8,
-                        "unit": "mmol/L",
-                        "reference_low": 3.9,
-                        "reference_high": 6.1,
-                        "evidence_text": "空腹血糖 6.8 mmol/L 3.9-6.1 H",
-                        "source_file_index": 1,
-                        "source_page": 2,
-                        "source_id": "report-1/page-2",
-                        "bbox_normalized": [10, 20, 100, 120],
-                    }
-                ],
-                "content_layer": "context_only",
-                "action_status": "not_available",
-                "action_message": (
-                    "证据确定性已达到行动建议门槛，但当前知识卡尚未包含经审核的具体行动内容。"
-                ),
-                "product_status": "not_implemented",
-            }
-        ],
-        "unmatched_count": 1,
-        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
-    }
+    reply = body["patient_reply"]
+    assert reply["title"] == "体检报告解读与健康风险提示"
+    assert reply["summary"] == (
+        "根据已确认的报告指标，发现 1 个可能相关健康问题，涉及 1 个异常指标。"
+        "另有 2 条指标与健康问题关联暂无已审核知识卡。"
+    )
+    assert reply["unmatched_count"] == 2
+    assert reply["findings"][0]["condition_code"] == "COND_PREDIABETES"
+    assert reply["findings"][0]["evidence_items"][0]["metric_code"] == "fasting_glucose"
+    assert reply["findings"][0]["evidence_items"][0]["card"]["id"] == "card-1"
+    assert reply["disclaimer"] == "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。"
     assert body["findings"][0]["sorting"] == {
         "urgency": "routine",
         "abnormality_severity": 1,
@@ -264,15 +221,9 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
         "department": "内分泌科",
         "epidemiology_background": "",
     }
-    assert body["unmatched"] == [
-        {
-            "observation_id": "metric-unmatched",
-            "metric_code": "uric_acid",
-            "metric_label": "尿酸",
-            "condition_codes": ["COND_HYPERURICEMIA_RISK"],
-            "reason": "no_published_knowledge_card",
-        }
-    ]
+    unmatched_by_id = {item["observation_id"]: item for item in body["unmatched"]}
+    assert unmatched_by_id["metric-1"]["condition_names"] == ["代谢相关脂肪性肝病风险"]
+    assert unmatched_by_id["metric-unmatched"]["condition_names"] == ["高尿酸血症 / 痛风风险"]
 
     assert {item["reason"] for item in body["skipped"]} == {"within_reference_range"}
     with database.connect() as connection:
@@ -320,6 +271,7 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
             "metric_code": "triglycerides",
             "metric_label": "甘油三酯",
             "condition_codes": ["COND_DYSLIPIDEMIA", "COND_MASLD_RISK"],
+            "condition_names": ["血脂异常", "代谢相关脂肪性肝病风险"],
             "reason": "no_published_knowledge_card",
         }
     ]
@@ -337,7 +289,9 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
         json={"schema_version": "2", "observations": [ldl]},
     )
     assert response.status_code == 200
-    assert response.json()["findings"][0]["card"]["scope_key"] == "metric:ldl_c"
+    assert response.json()["findings"][0]["evidence_items"][0]["card"]["scope_key"] == (
+        "metric:ldl_c"
+    )
 
 
 def test_non_hdl_metric_matches_its_published_card(tmp_path) -> None:
@@ -366,7 +320,9 @@ def test_non_hdl_metric_matches_its_published_card(tmp_path) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["findings"][0]["card"]["scope_key"] == "metric:non_hdl_c"
+    assert response.json()["findings"][0]["evidence_items"][0]["card"]["scope_key"] == (
+        "metric:non_hdl_c"
+    )
 
 
 def test_same_condition_keeps_each_metric_card_and_source_trace(tmp_path) -> None:
@@ -420,16 +376,125 @@ def test_same_condition_keeps_each_metric_card_and_source_trace(tmp_path) -> Non
 
     assert response.status_code == 200
     body = response.json()
-    assert {item["card"]["id"] for item in body["findings"]} == {
+    assert len(body["findings"]) == 1
+    finding = body["findings"][0]
+    assert finding["condition_code"] == "COND_DYSLIPIDEMIA"
+    assert "card" not in finding
+    assert {item["card"]["id"] for item in finding["evidence_items"]} == {
         "card-total-cholesterol",
         "card-non-hdl",
     }
+    assert {item["source_observation_ids"][0] for item in finding["evidence_items"]} == {
+        "metric-total-cholesterol",
+        "metric-non-hdl",
+    }
+    assert finding["evidence_strength"] == "moderate"
+    assert len(body["patient_reply"]["findings"]) == 1
     assert {
-        item["source_observation_ids"][0] for item in body["findings"]
-    } == {"metric-total-cholesterol", "metric-non-hdl"}
-    assert {
-        item["card_id"] for item in body["patient_reply"]["findings"]
+        item["card"]["id"] for item in body["patient_reply"]["findings"][0]["evidence_items"]
     } == {"card-total-cholesterol", "card-non-hdl"}
+
+
+def test_condition_grouping_is_generic_for_multiple_non_lipid_metrics(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(database, card_id="card-glucose", profile_id="profile-glucose")
+    _publish_scoped_card(
+        database,
+        condition_code="COND_PREDIABETES",
+        scope_key="metric:hba1c",
+        card_id="card-hba1c",
+        profile_id="profile-hba1c",
+        topic_id="topic-hba1c",
+        claim_id="claim-hba1c",
+        paper_id="paper-hba1c",
+        grade="low",
+        version="1.0.1",
+        doi="10.1000/test-hba1c",
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "3",
+            "observations": [
+                _observation(observation_id="metric-glucose"),
+                _observation(
+                    observation_id="metric-hba1c",
+                    metric_code="hba1c",
+                    value=6.2,
+                    unit="%",
+                    reference_low=None,
+                    reference_high=5.6,
+                    evidence_text="糖化血红蛋白 6.2% <5.6 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["findings"]) == 1
+    finding = body["findings"][0]
+    assert finding["condition_code"] == "COND_PREDIABETES"
+    assert finding["evidence_strength"] == "mixed"
+    assert {item["metric_code"] for item in finding["evidence_items"]} == {
+        "fasting_glucose",
+        "hba1c",
+    }
+    assert body["patient_reply"]["summary"].startswith(
+        "根据已确认的报告指标，发现 1 个可能相关健康问题，涉及 2 个异常指标。"
+    )
+
+
+def test_partial_condition_coverage_keeps_unmatched_metric_condition_link(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:ldl_c",
+        card_id="card-ldl",
+        profile_id="profile-ldl",
+        topic_id="topic-ldl",
+        claim_id="claim-ldl",
+        paper_id="paper-ldl",
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "3",
+            "observations": [
+                _observation(
+                    observation_id="metric-ldl",
+                    metric_code="ldl_c",
+                    value=4.2,
+                    reference_low=0,
+                    reference_high=3.4,
+                    evidence_text="低密度脂蛋白胆固醇 4.2 mmol/L 0-3.4 H",
+                ),
+                _observation(
+                    observation_id="metric-triglycerides",
+                    metric_code="triglycerides",
+                    value=2.4,
+                    reference_low=0.3,
+                    reference_high=1.7,
+                    evidence_text="甘油三酯 2.4 mmol/L 0.3-1.7 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [finding["condition_code"] for finding in body["findings"]] == [
+        "COND_DYSLIPIDEMIA"
+    ]
+    assert [item["metric_code"] for item in body["findings"][0]["evidence_items"]] == [
+        "ldl_c"
+    ]
+    assert body["unmatched"][0]["observation_id"] == "metric-triglycerides"
+    assert body["unmatched"][0]["condition_names"] == [
+        "血脂异常",
+        "代谢相关脂肪性肝病风险",
+    ]
 
 
 def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
@@ -447,8 +512,8 @@ def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> Non
     assert finding["action_status"] == "not_available"
     assert "行动建议门槛" in finding["action_message"]
     assert finding["product_status"] == "not_implemented"
-    assert finding["card"]["content_layer"] == "context_only"
-    assert finding["card"]["action_status"] == "not_available"
+    assert finding["evidence_items"][0]["card"]["content_layer"] == "context_only"
+    assert finding["evidence_items"][0]["card"]["action_status"] == "not_available"
     assert response.json()["patient_reply"]["findings"][0]["product_status"] == ("not_implemented")
 
 
@@ -542,7 +607,7 @@ def test_evidence_api_keeps_versioned_response_contract_private(tmp_path) -> Non
 
     assert client.get("/openapi.json").status_code == 404
     assert EvidenceMatchResponse.model_json_schema()["properties"]["schema_version"] == {
-        "const": "2",
+        "const": "3",
         "title": "Schema Version",
         "type": "string",
     }
