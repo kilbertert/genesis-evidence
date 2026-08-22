@@ -226,10 +226,6 @@ class PaperStore:
             ).fetchone()
             if topic is None or topic["status"] != "locked":
                 raise ValueError("a locked evidence topic is required before collection")
-            if connection.execute(
-                "SELECT 1 FROM evidence_profiles WHERE topic_id = ?", (topic_id,)
-            ).fetchone():
-                raise ValueError("collection is closed after evidence profile creation")
             if search_stream not in json.loads(topic["required_search_streams_json"]):
                 raise ValueError("search stream is not required by the locked topic")
             connection.execute(
@@ -391,11 +387,13 @@ class PaperStore:
                 """
                 SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
                     ON cr.topic_id = ep.topic_id
-                WHERE cr.id = ? LIMIT 1
+                WHERE cr.id = ? AND ep.created_at >= cr.created_at LIMIT 1
                 """,
                 (run_id,),
             ).fetchone():
-                raise ValueError("screening is immutable after evidence profile creation")
+                raise ValueError(
+                    "screening is immutable for collection runs used by an evidence profile"
+                )
             allowed_reasons = set(json.loads(row["exclusion_reasons_json"]))
             if decision == "excluded" and reason not in allowed_reasons:
                 raise ValueError("an excluded record requires one catalogued primary reason")
@@ -511,11 +509,13 @@ class PaperStore:
                 """
                 SELECT 1 FROM evidence_profiles ep JOIN collection_runs cr
                     ON cr.topic_id = ep.topic_id
-                WHERE cr.id = ? LIMIT 1
+                WHERE cr.id = ? AND ep.created_at >= cr.created_at LIMIT 1
                 """,
                 (run_id,),
             ).fetchone():
-                raise ValueError("retrieval is immutable after evidence profile creation")
+                raise ValueError(
+                    "retrieval is immutable for collection runs used by an evidence profile"
+                )
             has_full_text = connection.execute(
                 "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
             ).fetchone()
@@ -612,9 +612,7 @@ class PaperStore:
                     if row["title_abstract_decision"]
                 }
                 full_text = {
-                    str(row["full_text_decision"])
-                    for row in records
-                    if row["full_text_decision"]
+                    str(row["full_text_decision"]) for row in records if row["full_text_decision"]
                 }
                 if len(titles) > 1 or len(full_text) > 1:
                     conflicts.append(
@@ -653,6 +651,16 @@ class PaperStore:
                 assignments: list[str] = []
                 values: list[object] = []
                 if canonical_title is not None:
+                    exclusion_reason = next(
+                        (
+                            str(row["primary_exclusion_reason"])
+                            for row in records
+                            if canonical_title == "excluded"
+                            and row["title_abstract_decision"] == "excluded"
+                            and row["primary_exclusion_reason"]
+                        ),
+                        None,
+                    )
                     assignments.extend(
                         (
                             "title_abstract_decision = ?",
@@ -667,9 +675,10 @@ class PaperStore:
                                 "full_text_decision = NULL",
                                 "full_text_reviewer = NULL",
                                 "full_text_reviewed_at = NULL",
-                                "primary_exclusion_reason = NULL",
+                                "primary_exclusion_reason = ?",
                             )
                         )
+                        values.append(exclusion_reason)
                 if retrieval is not None:
                     assignments.extend(
                         (
@@ -739,11 +748,11 @@ class PaperStore:
                 )
         return {"topic_id": topic_id, "normalized_records": normalized, "conflicts": conflicts}
 
-    def list_pending_full_texts(self) -> list[dict[str, object]]:
+    def list_pending_full_texts(self, *, topic_id: str | None = None) -> list[dict[str, object]]:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT cp.run_id, cp.paper_id, p.pmcid
+                SELECT cp.run_id, cp.paper_id, p.doi, p.pmid, p.pmcid
                 FROM collection_papers cp
                 JOIN collection_runs cr ON cr.id = cp.run_id
                 JOIN evidence_topics et ON et.id = cr.topic_id
@@ -751,8 +760,10 @@ class PaperStore:
                 WHERE cp.title_abstract_decision = 'included'
                     AND cp.full_text_retrieval_status = 'pending'
                     AND cr.status = 'completed' AND et.status = 'locked'
+                    AND (? IS NULL OR cr.topic_id = ?)
                 ORDER BY cp.paper_id, cp.run_id
-                """
+                """,
+                (topic_id, topic_id),
             ).fetchall()
         pending: dict[str, dict[str, object]] = {}
         for row in rows:
@@ -760,6 +771,8 @@ class PaperStore:
                 str(row["paper_id"]),
                 {
                     "paper_id": str(row["paper_id"]),
+                    "doi": str(row["doi"] or ""),
+                    "pmid": str(row["pmid"] or ""),
                     "pmcid": str(row["pmcid"] or ""),
                     "run_ids": [],
                 },
@@ -767,28 +780,43 @@ class PaperStore:
             item["run_ids"].append(str(row["run_id"]))  # type: ignore[union-attr]
         return list(pending.values())
 
-    def supersede_excluded_extraction_failures(self, *, reviewer: str) -> int:
+    def supersede_excluded_extraction_failures(
+        self, *, reviewer: str, topic_id: str | None = None
+    ) -> int:
         with self.database.transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT job.id, job.paper_id, job.error_class, job.error_message
                 FROM paper_extraction_jobs job
-                WHERE job.status = 'failed'
-                    AND job.error_class <> 'ScreeningExcluded'
-                    AND NOT EXISTS (
+                WHERE job.status IN ('failed', 'queued')
+                    AND (job.error_class IS NULL OR job.error_class <> 'ScreeningExcluded')
+                    AND (? IS NULL OR EXISTS (
+                        SELECT 1 FROM collection_runs scoped_run
+                        WHERE scoped_run.id = job.collection_run_id
+                            AND scoped_run.topic_id = ?
+                    ))
+                    AND EXISTS (
                         SELECT 1 FROM collection_papers cp
                         WHERE cp.paper_id = job.paper_id
-                            AND cp.title_abstract_decision = 'included'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs related_run ON related_run.id = cp.run_id
+                        WHERE cp.paper_id = job.paper_id
+                            AND (? IS NULL OR related_run.topic_id = ?)
+                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
                             AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
                     )
-                """
+                """,
+                (topic_id, topic_id, topic_id, topic_id),
             ).fetchall()
             now = _now()
             for row in rows:
                 connection.execute(
                     """
-                    UPDATE paper_extraction_jobs SET error_class = 'ScreeningExcluded',
-                        error_message = ?, updated_at = ? WHERE id = ?
+                    UPDATE paper_extraction_jobs SET status = 'failed',
+                        error_class = 'ScreeningExcluded', error_message = ?, updated_at = ?
+                        WHERE id = ?
                     """,
                     (
                         "No retry is required because screening excluded the paper.",
@@ -806,6 +834,61 @@ class PaperStore:
                         "previous_error_class": row["error_class"],
                         "previous_error_message": row["error_message"],
                     },
+                    actor=reviewer,
+                )
+        return len(rows)
+
+    def restore_screening_excluded_extractions(
+        self, *, reviewer: str, topic_id: str | None = None
+    ) -> int:
+        """Reopen jobs closed before a newly collected batch was screened."""
+
+        with self.database.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job.id, job.paper_id
+                FROM paper_extraction_jobs job
+                WHERE job.status = 'failed' AND job.error_class = 'ScreeningExcluded'
+                    AND job.id = (
+                        SELECT latest.id FROM paper_extraction_jobs latest
+                        WHERE latest.paper_id = job.paper_id
+                        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs cr ON cr.id = cp.run_id
+                        WHERE cp.run_id = job.collection_run_id
+                            AND cp.paper_id = job.paper_id
+                            AND (? IS NULL OR cr.topic_id = ?)
+                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
+                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                    )
+                """,
+                (topic_id, topic_id),
+            ).fetchall()
+            now = _now()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE paper_extraction_jobs
+                    SET status = 'queued', stage = CASE
+                            WHEN consistency_json IS NOT NULL THEN 'consistency'
+                            WHEN second_extraction_json IS NOT NULL THEN 'consistency'
+                            WHEN extraction_json IS NOT NULL THEN 'extraction_b'
+                            ELSE 'extraction_a'
+                        END,
+                        error_class = NULL, error_message = NULL,
+                        started_at = NULL, completed_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, row["id"]),
+                )
+                self._audit(
+                    connection,
+                    "paper_extraction_job",
+                    row["id"],
+                    "extraction_reopened_after_screening",
+                    {"paper_id": row["paper_id"]},
                     actor=reviewer,
                 )
         return len(rows)
@@ -900,7 +983,12 @@ class PaperStore:
                     full_text_retrieval_reason = NULL,
                     full_text_retrieval_reviewer = 'system:ingestion',
                     full_text_retrieval_recorded_at = ?
-                WHERE paper_id = ? AND (? IS NULL OR run_id = ?)
+                WHERE paper_id = ? AND (? IS NULL OR run_id IN (
+                    SELECT scoped.id FROM collection_runs scoped
+                    WHERE scoped.topic_id = (
+                        SELECT target.topic_id FROM collection_runs target WHERE target.id = ?
+                    )
+                ))
             """
             updated = connection.execute(
                 retrieval_query,
@@ -949,12 +1037,38 @@ class PaperStore:
             )
         return job_id
 
-    def claim_next_extraction_job(self) -> dict[str, object] | None:
+    def claim_next_extraction_job(self, *, topic_id: str | None = None) -> dict[str, object] | None:
         with self.database.transaction() as connection:
             row = connection.execute(
                 """
                 SELECT * FROM paper_extraction_jobs
                 WHERE status = 'queued'
+                    AND (? IS NULL OR EXISTS (
+                        SELECT 1 FROM collection_runs scoped_run
+                        WHERE scoped_run.id = paper_extraction_jobs.collection_run_id
+                            AND scoped_run.topic_id = ?
+                    ))
+                    AND (? IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM collection_papers other_item
+                        JOIN collection_runs other_run ON other_run.id = other_item.run_id
+                        WHERE other_item.paper_id = paper_extraction_jobs.paper_id
+                            AND other_run.topic_id <> ?
+                            AND COALESCE(other_item.title_abstract_decision, 'included')
+                                <> 'excluded'
+                            AND COALESCE(other_item.full_text_decision, 'included')
+                                <> 'excluded'
+                    ))
+                    AND (NOT EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        WHERE cp.paper_id = paper_extraction_jobs.paper_id
+                    ) OR EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs eligible_run ON eligible_run.id = cp.run_id
+                        WHERE cp.paper_id = paper_extraction_jobs.paper_id
+                            AND (? IS NULL OR eligible_run.topic_id = ?)
+                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
+                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                    ))
                 ORDER BY CASE WHEN EXISTS (
                     SELECT 1 FROM collection_runs run
                     WHERE run.id = paper_extraction_jobs.collection_run_id
@@ -975,7 +1089,8 @@ class PaperStore:
                 ) THEN 0 ELSE 1 END,
                 created_at, id
                 LIMIT 1
-                """
+                """,
+                (topic_id, topic_id, topic_id, topic_id, topic_id, topic_id),
             ).fetchone()
             if row is None:
                 return None
@@ -994,11 +1109,16 @@ class PaperStore:
             ).fetchone()
         return dict(claimed)
 
-    def recover_running_extraction_jobs(self) -> int:
+    def recover_running_extraction_jobs(self, *, topic_id: str | None = None) -> int:
         with self.database.transaction() as connection:
             now = _now()
             rows = connection.execute(
-                "SELECT id FROM paper_extraction_jobs WHERE status = 'running'"
+                """
+                SELECT job.id FROM paper_extraction_jobs job
+                LEFT JOIN collection_runs run ON run.id = job.collection_run_id
+                WHERE job.status = 'running' AND (? IS NULL OR run.topic_id = ?)
+                """,
+                (topic_id, topic_id),
             ).fetchall()
             for row in rows:
                 connection.execute(
@@ -1142,7 +1262,13 @@ class PaperStore:
                 {"error_class": type(error).__name__, "error_message": str(error)[:4000]},
             )
 
-    def list_extraction_jobs(self, *, limit: int = 100) -> list[dict[str, object]]:
+    def list_extraction_jobs(
+        self,
+        *,
+        limit: int = 100,
+        topic_id: str | None = None,
+        latest_per_paper: bool = False,
+    ) -> list[dict[str, object]]:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """
@@ -1153,10 +1279,22 @@ class PaperStore:
                     pej.completed_at, p.title, p.doi
                 FROM paper_extraction_jobs pej
                 JOIN papers p ON p.id = pej.paper_id
-                WHERE pej.error_class IS NULL OR pej.error_class <> 'ScreeningExcluded'
+                LEFT JOIN collection_runs cr ON cr.id = pej.collection_run_id
+                WHERE (pej.error_class IS NULL OR pej.error_class <> 'ScreeningExcluded')
+                    AND (? IS NULL OR cr.topic_id = ?)
+                    AND (? = 0 OR pej.id = (
+                        SELECT latest.id FROM paper_extraction_jobs latest
+                        WHERE latest.paper_id = pej.paper_id
+                        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                    ))
                 ORDER BY pej.created_at DESC, pej.id DESC LIMIT ?
                 """,
-                (max(1, min(limit, 500)),),
+                (
+                    topic_id,
+                    topic_id,
+                    int(latest_per_paper),
+                    max(1, min(limit, 500)),
+                ),
             ).fetchall()
         return [dict(row) for row in rows]
 

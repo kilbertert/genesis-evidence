@@ -100,12 +100,19 @@ def test_normalize_consistency_payload_accepts_legacy_issue_field() -> None:
         _normalize_consistency_payload(
             {
                 "verdict": "needs_review",
-                "issues": [{"field": "claims", "issue": "The two claims differ."}],
+                "issues": [
+                    {
+                        "field": "claims",
+                        "issue": "The two claims differ.",
+                        "root_cause": "provider-specific annotation",
+                    }
+                ],
             }
         )
     )
     assert report.issues[0].severity == "medium"
     assert report.issues[0].message == "The two claims differ."
+    assert "root_cause" not in report.issues[0].model_dump()
 
 
 def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
@@ -255,9 +262,7 @@ def test_oversized_extraction_uses_bounded_correction() -> None:
             content = {"verdict": "consistent", "issues": []}
         return _stream(f"run-{calls}", content)
 
-    result = ArkPaperAnalyzer(
-        api_key="secret", transport=httpx.MockTransport(handler)
-    ).analyze(
+    result = ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
         PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
         {
             "abstract": "Serum 25-hydroxyvitamin D was measured.",
@@ -325,9 +330,7 @@ def test_invalid_consistency_report_preserves_validation_reason() -> None:
                 "sections": [
                     {
                         "title": "Results",
-                        "text": (
-                            "Lower 25(OH)D was associated with higher frailty prevalence."
-                        ),
+                        "text": ("Lower 25(OH)D was associated with higher frailty prevalence."),
                     }
                 ],
             },
@@ -359,9 +362,7 @@ def test_invalid_consistency_report_uses_bounded_correction() -> None:
             }
         return _stream(f"run-{calls}", content)
 
-    result = ArkPaperAnalyzer(
-        api_key="secret", transport=httpx.MockTransport(handler)
-    ).analyze(
+    result = ArkPaperAnalyzer(api_key="secret", transport=httpx.MockTransport(handler)).analyze(
         PaperRecord(SourceName.EUROPE_PMC, "MED:1", "Vitamin D and frailty"),
         {
             "abstract": "Serum 25-hydroxyvitamin D was measured.",

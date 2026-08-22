@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from ..conditions import CONDITIONS
-from ..contracts import EvidenceMatchObservation
+from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..metrics import METRIC_LABELS, evidence_contains_value
 from .database import Database
 
@@ -83,6 +83,10 @@ class EvidenceStore:
                             "recheck_direction": condition.recheck_direction,
                             "epidemiology_background": "",
                             "source_observations": [],
+                            "content_layer": card["content_layer"],
+                            "action_status": card["action_status"],
+                            "action_message": card["action_message"],
+                            "product_status": card["product_status"],
                         },
                     )
                     finding["source_observation_ids"].append(observation.observation_id)  # type: ignore[union-attr]
@@ -169,7 +173,7 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
         LEFT JOIN card_claims cc ON cc.card_id = kc.id
         LEFT JOIN claims cl ON cl.id = cc.claim_id
         LEFT JOIN papers p ON p.id = cl.paper_id
-        WHERE kc.status = 'published'
+        WHERE kc.status = 'published' AND kc.grade IN ('high', 'moderate', 'low')
         ORDER BY kc.published_at DESC, kc.version DESC
         """
     ).fetchall()
@@ -191,6 +195,7 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
                 "evidence_profile_id": row["evidence_profile_id"],
                 "patient_visible_body": row["patient_visible_body"],
                 "sources": [],
+                **card_capabilities(str(row["grade"])),
             },
         )
         if row["claim_id"]:
@@ -277,6 +282,10 @@ def _patient_reply(
                 "sources": card["sources"],
                 "source_observation_ids": finding["source_observation_ids"],
                 "source_observations": finding["source_observations"],
+                "content_layer": finding["content_layer"],
+                "action_status": finding["action_status"],
+                "action_message": finding["action_message"],
+                "product_status": finding["product_status"],
             }
         )
     if visible_findings:

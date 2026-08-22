@@ -477,8 +477,11 @@ class EvidenceReviewService:
         item = self.store.get_review_item(paper_id)
         assert item is not None
         admitted_conditions = list((item.get("admission") or {}).get("condition_codes") or [])
+        current_extraction_id = str((item.get("extraction_trace") or {}).get("id") or "")
         reviewed_claims: list[str] = []
         for claim in item["claims"]:
+            if str(claim.get("extraction_id") or "") != current_extraction_id:
+                continue
             ai_rejection_reopened = (
                 claim.get("status") == "rejected"
                 and str(claim.get("reviewer") or "").startswith("ai:")
@@ -659,7 +662,7 @@ class EvidenceReviewService:
                     results.append(detail)
                     continue
                 status = card_status
-                if card_status == "approved" and profile.certainty in {"high", "moderate"}:
+                if card_status == "approved" and profile.certainty in {"high", "moderate", "low"}:
                     try:
                         self.transition_card(card_id, reviewer=actor, target="published")
                         status = "published"

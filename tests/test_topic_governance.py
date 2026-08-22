@@ -49,6 +49,64 @@ def test_collection_requires_a_locked_versioned_topic(tmp_path) -> None:
         store.start_collection(topic_id=topic_id, source="test", query="vitamin D")
 
 
+def test_locked_topic_can_extend_collection_after_profile_creation(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'Vitamin D', 'status',
+                'Older adults', 'Not reported', 'Not applicable', 'Higher versus lower',
+                'Frailty', 'Baseline', 'Frailty prevalence', 1, 'low', 'Initial profile',
+                '2026-08-12', 'reviewer-1', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (str(uuid.uuid4()), topic_id),
+        )
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="vitamin D update")
+    assert run_id
+
+
+def test_new_collection_after_profile_creation_remains_screenable(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name, ingredient_form,
+                population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '1.0.0', 'Vitamin D', 'status',
+                'Older adults', 'Not reported', 'Not applicable', 'Higher versus lower',
+                'Frailty', 'Baseline', 'Frailty prevalence', 1, 'low', 'Initial profile',
+                '2026-08-12', 'reviewer-1', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (str(uuid.uuid4()), topic_id),
+        )
+    paper_id, _ = _review_case(database, screened=False)
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="new batch")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+
+
 def test_topic_rejects_a_future_evidence_cutoff(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
@@ -204,9 +262,7 @@ def test_not_retrieved_report_closes_ledger_without_scientific_exclusion(tmp_pat
         reviewer="reviewer-1",
     )
     service = EvidenceReviewService(ReviewStore(database), paper_store)
-    terminal = service.auto_review_paper(
-        missing_paper, requested_by="authenticated-reviewer"
-    )
+    terminal = service.auto_review_paper(missing_paper, requested_by="authenticated-reviewer")
     assert terminal["status"] == "completed"
     assert terminal["decision"] == "not_retrieved"
     queue_item = next(
@@ -284,9 +340,12 @@ def test_ai_closes_title_abstract_exclusion_without_full_text_or_admission_row(t
             "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?", (paper_id,)
         ).fetchone()
         assert tuple(admission) == ("rejected", "ai:screening-ledger")
-        assert connection.execute(
-            "SELECT count(*) FROM paper_extraction_jobs WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM paper_extraction_jobs WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_screening_and_retrieval_propagate_across_runs_for_one_topic(tmp_path) -> None:
@@ -394,6 +453,35 @@ def test_reconcile_topic_ledger_copies_one_known_decision_to_duplicates(tmp_path
     assert result["conflicts"] == []
     assert result["normalized_records"] == 2
     assert all(
-        row["title_abstract_decision"] == "included"
+        row["title_abstract_decision"] == "included" for row in store.list_topic_ledger(topic_id)
+    )
+
+
+def test_reconcile_topic_ledger_preserves_title_exclusion_reason(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        first_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert result["conflicts"] == []
+    assert all(
+        (row["title_abstract_decision"], row["primary_exclusion_reason"])
+        == ("excluded", "wrong_population")
         for row in store.list_topic_ledger(topic_id)
     )

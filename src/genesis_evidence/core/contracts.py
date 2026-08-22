@@ -9,6 +9,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CardStatus = Literal["draft", "in_review", "approved", "published", "rejected", "stale"]
+CardContentLayer = Literal["context_only"]
+ActionStatus = Literal["not_available"]
+ProductStatus = Literal["not_implemented"]
 ReportStatus = Literal[
     "uploaded",
     "extracted",
@@ -32,6 +35,21 @@ def _validate_bbox(value: list[float] | None, *, upper: float | None, field: str
         raise ValueError(f"{field} coordinates must be finite values{suffix}")
     if value[0] > value[2] or value[1] > value[3]:
         raise ValueError(f"{field} must be ordered as x1,y1,x2,y2")
+
+
+def card_capabilities(grade: str) -> dict[str, str]:
+    """Map evidence strength to the capabilities exposed to patients."""
+
+    return {
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": (
+            "证据确定性已达到行动建议门槛，但当前知识卡尚未包含经审核的具体行动内容。"
+            if grade in {"moderate", "high"}
+            else "当前证据确定性尚未达到具体行动建议门槛。"
+        ),
+        "product_status": "not_implemented",
+    }
 
 
 class ClaimReference(BaseModel):
@@ -187,6 +205,10 @@ class PublishedEvidenceCard(BaseModel):
     evidence_profile_id: str
     patient_visible_body: str
     sources: list[EvidenceSourceReference] = Field(min_length=1)
+    content_layer: CardContentLayer
+    action_status: ActionStatus
+    action_message: str = ""
+    product_status: ProductStatus
 
 
 class EvidenceSorting(BaseModel):
@@ -216,6 +238,10 @@ class EvidenceFinding(BaseModel):
     epidemiology_background: str
     source_observations: list[EvidenceSourceObservation]
     sorting: EvidenceSorting
+    content_layer: CardContentLayer
+    action_status: ActionStatus
+    action_message: str = ""
+    product_status: ProductStatus
 
 
 class EvidenceUnmatched(BaseModel):
@@ -261,6 +287,10 @@ class PatientReplyFinding(BaseModel):
     sources: list[EvidenceSourceReference] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[EvidenceSourceObservation]
+    content_layer: CardContentLayer
+    action_status: ActionStatus
+    action_message: str = ""
+    product_status: ProductStatus
 
 
 class PatientReply(BaseModel):

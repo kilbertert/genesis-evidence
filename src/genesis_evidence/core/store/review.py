@@ -493,6 +493,11 @@ class ReviewStore:
                     AND EXISTS (
                         SELECT 1 FROM json_each(pa.condition_codes_json) WHERE value = ?
                     )
+                    AND c.extraction_id = (
+                        SELECT latest.id FROM paper_extractions latest
+                        WHERE latest.paper_id = p.id
+                        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                    )
                     AND EXISTS (
                         SELECT 1 FROM collection_papers cp
                         JOIN collection_runs cr ON cr.id = cp.run_id
@@ -584,12 +589,19 @@ class ReviewStore:
                     now,
                 ),
             )
+            profile_results: dict[str, str] = {}
+            for row in rows:
+                result_id = str(row["result_id"])
+                interpretation = interpretations[row["id"]]
+                if result_id in profile_results and profile_results[result_id] != interpretation:
+                    raise ValueError("claims for one result require one shared interpretation")
+                profile_results[result_id] = interpretation
             connection.executemany(
                 """
                 INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
                 VALUES (?, ?, ?)
                 """,
-                [(profile_id, row["result_id"], interpretations[row["id"]]) for row in rows],
+                [(profile_id, result_id, value) for result_id, value in profile_results.items()],
             )
             connection.execute(
                 """
@@ -655,9 +667,9 @@ class ReviewStore:
                 raise ValueError(f"invalid card transition: {card['status']} -> {target}")
             if target == "published":
                 self._require_publishable(connection, card_id)
-                if card["grade"] not in {"high", "moderate"}:
+                if card["grade"] not in {"high", "moderate", "low"}:
                     raise ValueError(
-                        "patient-visible benefit cards require high or moderate certainty"
+                        "patient-visible context cards require low, moderate, or high certainty"
                     )
                 connection.execute(
                     """
@@ -988,6 +1000,11 @@ class ReviewStore:
                         AND cr.corrected_study_design NOT IN (
                             'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                         )
+                        AND c.extraction_id = (
+                            SELECT latest.id FROM paper_extractions latest
+                            WHERE latest.paper_id = p.id
+                            ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+                        )
                         AND EXISTS (
                             SELECT 1 FROM collection_papers cp
                             JOIN collection_runs run ON run.id = cp.run_id
@@ -1111,7 +1128,16 @@ class ReviewStore:
                             f"""
                             SELECT count(DISTINCT cr.id) AS completed_runs,
                                 count(DISTINCT CASE WHEN cp.full_text_decision = 'included'
-                                    THEN cp.paper_id END) AS full_text_included
+                                    THEN cp.paper_id END) AS full_text_included,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision IS NULL
+                                    THEN cp.paper_id END) AS title_abstract_pending,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision = 'included'
+                                    AND cp.full_text_retrieval_status = 'pending'
+                                    THEN cp.paper_id END) AS retrieval_pending,
+                                count(DISTINCT CASE WHEN cp.title_abstract_decision = 'included'
+                                    AND cp.full_text_retrieval_status = 'retrieved'
+                                    AND cp.full_text_decision IS NULL
+                                    THEN cp.paper_id END) AS full_text_screening_pending
                             FROM collection_runs cr
                             LEFT JOIN collection_papers cp ON cp.run_id = cr.id
                             WHERE cr.topic_id IN ({placeholders}) AND cr.status = 'completed'
@@ -1119,16 +1145,27 @@ class ReviewStore:
                             topic_ids,
                         ).fetchone()
                     else:
-                        run_counts = {"completed_runs": 0, "full_text_included": 0}
+                        run_counts = {
+                            "completed_runs": 0,
+                            "full_text_included": 0,
+                            "title_abstract_pending": 0,
+                            "retrieval_pending": 0,
+                            "full_text_screening_pending": 0,
+                        }
                     claim_rows = (
                         connection.execute(
                             f"""
-                            SELECT DISTINCT cr.claim_id, r.outcome
+                            SELECT DISTINCT cr.claim_id, r.population, r.ingredient_name,
+                                r.outcome, r.timepoint, topic.picots_json
                             FROM claim_reviews cr
                             JOIN claims c ON c.id = cr.claim_id
                             JOIN results r ON r.id = c.result_id
                             JOIN papers p ON p.id = c.paper_id
                             JOIN paper_admissions pa ON pa.paper_id = p.id
+                            JOIN collection_papers cp ON cp.paper_id = c.paper_id
+                                AND cp.full_text_decision = 'included'
+                            JOIN collection_runs run ON run.id = cp.run_id
+                            JOIN evidence_topics topic ON topic.id = run.topic_id
                             WHERE cr.condition_code = ? AND cr.decision = 'approved'
                                 AND p.integrity_status = 'clear'
                                 AND p.publication_status = 'formal'
@@ -1137,22 +1174,25 @@ class ReviewStore:
                                 AND cr.corrected_study_design NOT IN (
                                     'animal_study', 'in_vitro_study', 'case_series', 'case_report'
                                 )
-                                AND EXISTS (
-                                    SELECT 1 FROM collection_papers cp
-                                    JOIN collection_runs run ON run.id = cp.run_id
-                                    WHERE run.topic_id IN ({_placeholders(topic_ids)})
-                                        AND cp.paper_id = c.paper_id
-                                        AND cp.full_text_decision = 'included'
-                                )
+                                AND run.topic_id IN ({_placeholders(topic_ids)})
                             """,
                             (condition["code"], *topic_ids),
                         ).fetchall()
                         if topic_ids
                         else []
                     )
-                    approved_claims = sum(
-                        not metric_code or _metric_outcome_matches(metric_code, row["outcome"])
-                        for row in claim_rows
+                    approved_claims = len(
+                        {
+                            row["claim_id"]
+                            for row in claim_rows
+                            if not metric_code
+                            or f"metric:{metric_code}"
+                            in _profile_scopes(
+                                json.loads(row["picots_json"]),
+                                str(condition["code"]),
+                                dict(row),
+                            )
+                        }
                     )
                     profiles = connection.execute(
                         """
@@ -1178,24 +1218,41 @@ class ReviewStore:
                     published = next(
                         (row for row in card_rows if row["status"] == "published"), None
                     )
-                    publishable_approved = any(
+                    action_publishable_approved = any(
                         row["status"] == "approved" and row["grade"] in {"high", "moderate"}
                         for row in card_rows
                     )
-                    low_approved = any(
-                        row["status"] == "approved" and row["grade"] in {"low", "very_low"}
-                        for row in card_rows
+                    context_publishable_approved = any(
+                        row["status"] == "approved" and row["grade"] == "low" for row in card_rows
                     )
-                    if published:
+                    if published and published["grade"] == "low":
+                        coverage_status = "published_context"
+                        next_action = "已发布证据背景卡；补充证据达到中等或高确定性后再开放行动建议"
+                    elif published:
                         coverage_status, next_action = "published", "已覆盖，可继续扩充同主题证据"
-                    elif publishable_approved:
+                    elif action_publishable_approved:
                         coverage_status = "ready_to_publish"
                         next_action = "按发布状态机完成最后审核"
-                    elif low_approved:
-                        coverage_status = "blocked_low_certainty"
-                        next_action = "补充或合并证据体，提高确定性后再发布"
+                    elif context_publishable_approved:
+                        coverage_status = "ready_to_publish_context"
+                        next_action = "发布为证据背景卡；行动建议仍需中等或高确定性"
+                    elif any(
+                        row["status"] == "approved" and row["grade"] == "very_low"
+                        for row in card_rows
+                    ):
+                        coverage_status = "blocked_very_low_certainty"
+                        next_action = "补充或合并证据体后再进入患者端"
                     elif profiles:
                         coverage_status, next_action = "profile_ready", "创建并审核患者知识卡"
+                    elif any(
+                        run_counts[key]
+                        for key in (
+                            "title_abstract_pending",
+                            "retrieval_pending",
+                            "full_text_screening_pending",
+                        )
+                    ):
+                        coverage_status, next_action = "screening", "完成题录、全文获取和筛选"
                     elif approved_claims and run_counts["full_text_included"]:
                         coverage_status = "claims_ready"
                         next_action = "合并同一 PICOTS 的 Evidence Profile"
@@ -1203,26 +1260,8 @@ class ReviewStore:
                         coverage_status = "full_text_ready"
                         next_action = "完成全文抽取与 Claim 审核"
                     elif run_counts["completed_runs"]:
-                        incomplete_screening = connection.execute(
-                            f"""
-                            SELECT 1 FROM collection_papers cp
-                            JOIN collection_runs cr ON cr.id = cp.run_id
-                            WHERE cr.topic_id IN ({_placeholders(topic_ids)})
-                                AND cr.status = 'completed' AND (
-                                    cp.title_abstract_decision IS NULL
-                                    OR (cp.title_abstract_decision = 'included'
-                                        AND cp.full_text_retrieval_status = 'pending')
-                                    OR (cp.full_text_retrieval_status = 'retrieved'
-                                        AND cp.full_text_decision IS NULL)
-                                ) LIMIT 1
-                            """,
-                            topic_ids,
-                        ).fetchone()
-                        if incomplete_screening:
-                            coverage_status, next_action = "screening", "完成全文获取和筛选"
-                        else:
-                            coverage_status = "no_eligible_evidence"
-                            next_action = "扩展检索，当前主题尚无全文纳入证据"
+                        coverage_status = "no_eligible_evidence"
+                        next_action = "扩展检索，当前主题尚无全文纳入证据"
                     elif topic_counts["locked"]:
                         coverage_status, next_action = "topic_locked", "启动该主题的论文检索"
                     else:
@@ -1240,6 +1279,11 @@ class ReviewStore:
                             "locked_topic_count": topic_counts["locked"] or 0,
                             "completed_run_count": run_counts["completed_runs"] or 0,
                             "full_text_included_count": run_counts["full_text_included"] or 0,
+                            "screening_backlog": {
+                                "title_abstract": run_counts["title_abstract_pending"] or 0,
+                                "retrieval": run_counts["retrieval_pending"] or 0,
+                                "full_text": run_counts["full_text_screening_pending"] or 0,
+                            },
                             "approved_claim_count": approved_claims,
                             "evidence_profile_count": profiles,
                             "cards": card_counts,
@@ -1254,7 +1298,7 @@ class ReviewStore:
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(
             """
-            SELECT kc.condition_code, kc.evidence_profile_id, ep.topic_id
+            SELECT kc.condition_code, kc.evidence_profile_id, kc.grade, ep.topic_id
             FROM knowledge_cards kc
             LEFT JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
             WHERE kc.id = ?
@@ -1312,6 +1356,21 @@ class ReviewStore:
             or not str(scope_key or "").strip()
         ):
             raise ValueError("knowledge card has ineligible evidence")
+        if card["grade"] == "low":
+            high_risk = connection.execute(
+                """
+                SELECT 1
+                FROM card_claims cc
+                JOIN claim_reviews cr ON cr.claim_id = cc.claim_id
+                WHERE cc.card_id = ?
+                    AND json_extract(cr.risk_of_bias_json, '$.overall')
+                        IN ('high', 'critical', 'uncertain')
+                LIMIT 1
+                """,
+                (card_id,),
+            ).fetchone()
+            if high_risk:
+                raise ValueError("context cards require resolved non-high risk-of-bias judgments")
 
     @staticmethod
     def _stale_cards_for_paper(connection, paper_id: str) -> int:
@@ -1688,6 +1747,7 @@ def _picots_text_matches(
         "placebo": ("placebo", "usual", "control"),
         "alternative": ("alternative", "intervention"),
         "supplement": ("supplement", "intervention"),
+        "collagen": ("collagen", "protein"),
         "25ohd": ("25", "vitamin"),
         "hydroxyvitamin": ("vitamin",),
     }
@@ -1802,15 +1862,27 @@ def _normalize_picots_text(value: str) -> str:
         "骨质疏松": "osteoporosis",
         "骨量减少": "osteopenia",
         "骨密度": "bone mineral density",
+        "bmd": "bone mineral density",
         "慢性肾脏病": "chronic kidney disease",
         "肾脏病": "kidney disease",
         "肾功能": "kidney function",
+        "ckd": "chronic kidney disease",
+        "患者": "patients",
+        "病人": "patients",
         "碳酸氢钠": "sodium bicarbonate",
         "胆钙化醇": "cholecalciferol vitamin d",
+        "胶原蛋白肽": "collagen protein peptide",
+        "胶原蛋白": "collagen protein",
         "蛋白质补充剂": "protein supplementation",
         "膳食": "dietary",
         "饮食": "dietary",
         "对照组": "control",
+        "普通鲜奶": "control milk",
+        "普通牛奶": "control milk",
+        "常规牛奶": "control milk",
+        "对照牛奶": "control milk",
+        "regular milk": "control milk",
+        "plain milk": "control milk",
         "安慰剂": "placebo",
         "常规护理": "usual care",
         "标准治疗": "standard care",
@@ -1948,9 +2020,12 @@ _PROFILE_OUTCOME_ALIASES = {
     ),
     "bone_density_t_score": (
         "bonemineraldensity",
+        "bmd",
+        "tscore",
         "bonedensitytscore",
         "bonemineraldensitytscore",
         "bmdtscore",
+        "骨密度",
         "骨密度t值",
     ),
     "calcium": ("calcium", "serumcalcium", "bloodcalcium", "血钙", "钙"),
@@ -2014,9 +2089,14 @@ def _profile_scopes(
     topic_outcome = str(picots.get("outcomes") or "").strip()
     result_outcome = values.get("outcome", "")
     compact_result = _compact_text(result_outcome)
-    if re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result:
-        return {}
     condition = CONDITION_BY_CODE.get(condition_code)
+    lipid_metrics = {"hdl_c", "ldl_c", "total_cholesterol"}
+    if (
+        condition
+        and lipid_metrics.intersection(condition.metrics)
+        and (re.search(r"\bratio\b", result_outcome.casefold()) or "nonhdl" in compact_result)
+    ):
+        return {}
     scopes = {
         f"metric:{metric_code}": METRIC_LABELS[metric_code]
         for metric_code in (condition.metrics if condition else ())
@@ -2027,6 +2107,10 @@ def _profile_scopes(
     if scopes:
         return scopes
     for component in _topic_outcome_components(topic_outcome):
+        if condition and any(
+            _metric_outcome_matches(metric_code, component) for metric_code in condition.metrics
+        ):
+            continue
         if _picots_text_matches(component, result_outcome, require_qualifiers=False):
             scopes[_generic_scope_key(component)] = component
     return scopes
@@ -2119,9 +2203,11 @@ def _claim_dict(
         and item.get("full_text_decision") != "excluded"
     ]
     dimensions = {
-        field: str(claim.get(field) or "")
-        for field in ("population", "ingredient_name", "outcome", "timepoint")
+        field: str(claim.get(field) or "") for field in ("population", "outcome", "timepoint")
     }
+    dimensions["ingredient_name"] = " ".join(
+        str(claim.get(field) or "") for field in ("ingredient_name", "ingredient_form", "dose")
+    )
     dimensions["population"] = " ".join(
         (
             dimensions["population"],
@@ -2134,7 +2220,7 @@ def _claim_dict(
         dict.fromkeys(
             str(item["topic_condition_code"])
             for item in active_collections
-            if _profile_scope_matches(item["picots"], dimensions)
+            if _profile_scopes(item["picots"], str(item["topic_condition_code"]), dimensions)
         )
     )
     limitations = [str(value) for value in extraction.get("limitations", []) if str(value).strip()]
