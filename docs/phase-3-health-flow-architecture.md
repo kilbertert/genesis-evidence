@@ -36,7 +36,7 @@ The boundary is HTTP/JSON. No shared SQLite file, ORM model, vector index, or
 LLM prompt is shared between the services. A local deployment may put both
 processes on the same host, but the contract remains the same.
 
-## Evidence API v2
+## Evidence API v3
 
 `POST /api/evidence/matches`
 
@@ -51,7 +51,7 @@ Request (only confirmed observations are accepted):
 
 ```json
 {
-  "schema_version": "2",
+  "schema_version": "3",
   "observations": [
     {
       "observation_id": "hf-metric-1",
@@ -70,13 +70,20 @@ Request (only confirmed observations are accepted):
 }
 ```
 
+Request compatibility: the service accepts request `schema_version` `2` and `3`; all
+responses use `schema_version` `3`.
+
 Response guarantees:
 
-- `findings` contains only abnormal observations linked to the newest
-  `published` card for each condition.
-- Every finding includes card version, grade, patient copy, source observation
-  IDs, and Claim/paper locators when the card has them.
-- `unmatched` explicitly reports an abnormal metric with no published card.
+- `findings` contains one health-problem entry per `condition_code`, not one
+  entry per metric or card.
+- Every finding contains `evidence_items`; each item keeps its own canonical
+  metric, published card, grade, source observation IDs, report evidence and
+  Claim/paper locators. A finding with different item grades is reported as
+  `evidence_strength = "mixed"`; it is never collapsed into one card grade.
+- `unmatched` explicitly reports each abnormal metric-to-condition association
+  without a published card, even when another metric for the same condition is
+  covered.
 - `skipped` reports normal observations or invalid/insufficient evidence; they
   never enter condition matching.
 - A request is recorded in `audit_events` using its correlation ID and the
@@ -146,10 +153,10 @@ schema does not yet persist a confirmation field.
 | Stage | Deliverable | Exit check |
 |---|---|---|
 | 0 | Baseline backup and audit | SHA-256 manifest and preserved legacy worktree |
-| 1 | Evidence API v2 in this branch | Contract tests; published-only and evidence gates pass |
+| 1 | Evidence API v3 in this branch | Contract tests; condition grouping and published-only evidence gates pass |
 | 2 | Repository adapter | Deterministic Health-Flow row mapping and contract test pass |
 | 3 | Real canary | De-identified report set, metric accuracy and traceability measured |
-| 4 | Upstream cutover | Health-Flow confirmation UI calls v2; old portal frozen and rollback documented |
+| 4 | Upstream cutover | Health-Flow confirmation UI calls v3; old portal frozen and rollback documented |
 
 Stage 1 intentionally does not copy Health-Flow code into this repository and
 does not add Milvus, Neo4j, GraphRAG, or a second evidence database.

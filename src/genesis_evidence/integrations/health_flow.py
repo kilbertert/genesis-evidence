@@ -1,4 +1,4 @@
-"""Deterministic adapter from Health-Flow metric rows to Evidence API v2."""
+"""Deterministic adapter from Health-Flow metric rows to Evidence API v3."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def build_evidence_request(
 
     if not confirmed:
         return HealthFlowAdapterResult(
-            request=EvidenceMatchRequest(schema_version="2", observations=[]),
+            request=EvidenceMatchRequest(schema_version="3", observations=[]),
             skipped=tuple(
                 _skip(position, "confirmation_required") for position, _ in enumerate(records, 1)
             ),
@@ -110,7 +110,7 @@ def build_evidence_request(
             )
         )
     return HealthFlowAdapterResult(
-        request=EvidenceMatchRequest(schema_version="2", observations=observations),
+        request=EvidenceMatchRequest(schema_version="3", observations=observations),
         skipped=tuple(skipped),
     )
 
