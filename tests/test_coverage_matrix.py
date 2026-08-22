@@ -17,7 +17,7 @@ def test_coverage_matrix_expands_first_batch_metrics(tmp_path) -> None:
 
     matrix = ReviewStore(database).list_coverage_matrix()
 
-    assert len(matrix) == 32
+    assert len(matrix) == 33
     assert {row["condition_code"] for row in matrix} == {
         "COND_HYPERTENSION_RISK",
         "COND_PREDIABETES",

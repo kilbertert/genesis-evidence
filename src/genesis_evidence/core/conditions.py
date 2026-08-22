@@ -32,7 +32,7 @@ CONDITIONS = (
     ConditionDefinition(
         "COND_DYSLIPIDEMIA",
         "血脂异常",
-        ("triglycerides", "hdl_c", "ldl_c", "total_cholesterol"),
+        ("triglycerides", "hdl_c", "ldl_c", "total_cholesterol", "non_hdl_c"),
         "心血管内科",
         "空腹复查血脂组合",
     ),

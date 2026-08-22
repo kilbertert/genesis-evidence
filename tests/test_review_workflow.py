@@ -747,6 +747,11 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     dimensions["outcome"] = "Change in TC/HDL-C ratio and non-HDL-C"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
+    picots["outcomes"] += ", non-HDL cholesterol"
+    assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {
+        "metric:non_hdl_c": "非高密度脂蛋白胆固醇"
+    }
+
     dimensions["outcome"] = "Total body fat (%)"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
