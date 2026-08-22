@@ -157,7 +157,7 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
         "/api/evidence/matches",
         headers={"X-Correlation-Id": "00000000-0000-4000-8000-000000000001"},
         json={
-            "schema_version": "2",
+            "schema_version": "3",
             "observations": [
                 _observation(),
                 _observation(
@@ -259,7 +259,7 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     )
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "2", "observations": [triglycerides]},
+        json={"schema_version": "3", "observations": [triglycerides]},
     )
 
     assert response.status_code == 200
@@ -286,7 +286,7 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
     )
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "2", "observations": [ldl]},
+        json={"schema_version": "3", "observations": [ldl]},
     )
     assert response.status_code == 200
     assert response.json()["findings"][0]["evidence_items"][0]["card"]["scope_key"] == (
@@ -304,7 +304,7 @@ def test_non_hdl_metric_matches_its_published_card(tmp_path) -> None:
     response = client.post(
         "/api/evidence/matches",
         json={
-            "schema_version": "2",
+            "schema_version": "3",
             "observations": [
                 _observation(
                     metric_code="non_hdl_c",
@@ -352,7 +352,7 @@ def test_same_condition_keeps_each_metric_card_and_source_trace(tmp_path) -> Non
     response = client.post(
         "/api/evidence/matches",
         json={
-            "schema_version": "2",
+            "schema_version": "3",
             "observations": [
                 _observation(
                     observation_id="metric-total-cholesterol",
@@ -393,6 +393,61 @@ def test_same_condition_keeps_each_metric_card_and_source_trace(tmp_path) -> Non
     assert {
         item["card"]["id"] for item in body["patient_reply"]["findings"][0]["evidence_items"]
     } == {"card-total-cholesterol", "card-non-hdl"}
+
+
+def test_v2_request_returns_legacy_flat_shape(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:total_cholesterol",
+        card_id="card-total-cholesterol",
+    )
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:non_hdl_c",
+        card_id="card-non-hdl",
+        profile_id="profile-non-hdl",
+        topic_id="topic-non-hdl",
+        claim_id="claim-non-hdl",
+        paper_id="paper-non-hdl",
+        version="1.0.1",
+        doi="10.1000/test-non-hdl",
+    )
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "2",
+            "observations": [
+                _observation(
+                    observation_id="metric-total-cholesterol",
+                    metric_code="total_cholesterol",
+                    value=6.2,
+                    reference_low=None,
+                    reference_high=5.2,
+                    evidence_text="总胆固醇 6.2 mmol/L 0-5.2 H",
+                ),
+                _observation(
+                    observation_id="metric-non-hdl",
+                    metric_code="non_hdl_c",
+                    value=4.2,
+                    reference_low=None,
+                    reference_high=3.4,
+                    evidence_text="Non-HDL 4.2 mmol/L 0-3.4 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == "2"
+    assert len(body["findings"]) == 2
+    assert all("evidence_items" not in finding for finding in body["findings"])
+    assert all("condition_names" not in item for item in body["unmatched"])
+    assert all("card_id" in finding for finding in body["patient_reply"]["findings"])
+    assert all("evidence_items" not in finding for finding in body["patient_reply"]["findings"])
 
 
 def test_condition_grouping_is_generic_for_multiple_non_lipid_metrics(tmp_path) -> None:
@@ -484,12 +539,8 @@ def test_partial_condition_coverage_keeps_unmatched_metric_condition_link(tmp_pa
 
     assert response.status_code == 200
     body = response.json()
-    assert [finding["condition_code"] for finding in body["findings"]] == [
-        "COND_DYSLIPIDEMIA"
-    ]
-    assert [item["metric_code"] for item in body["findings"][0]["evidence_items"]] == [
-        "ldl_c"
-    ]
+    assert [finding["condition_code"] for finding in body["findings"]] == ["COND_DYSLIPIDEMIA"]
+    assert [item["metric_code"] for item in body["findings"][0]["evidence_items"]] == ["ldl_c"]
     assert body["unmatched"][0]["observation_id"] == "metric-triglycerides"
     assert body["unmatched"][0]["condition_names"] == [
         "血脂异常",
@@ -503,7 +554,7 @@ def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> Non
 
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "2", "observations": [_observation()]},
+        json={"schema_version": "3", "observations": [_observation()]},
     )
 
     assert response.status_code == 200
@@ -523,7 +574,7 @@ def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) ->
 
     response = client.post(
         "/api/evidence/matches",
-        json={"schema_version": "2", "observations": [_observation()]},
+        json={"schema_version": "3", "observations": [_observation()]},
     )
 
     assert response.status_code == 200

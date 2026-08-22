@@ -70,8 +70,10 @@ Request (only confirmed observations are accepted):
 }
 ```
 
-Request compatibility: the service accepts request `schema_version` `2` and `3`; all
-responses use `schema_version` `3`.
+Request/response compatibility: the service accepts request `schema_version` `2` and
+`3`. A v2 request returns the original flat one-card-per-finding response shape;
+the v3 request returns condition-grouped findings with metric-level `evidence_items`.
+This allows the Health-Flow cutover to be deployed independently.
 
 Response guarantees:
 
