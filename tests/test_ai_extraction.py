@@ -76,6 +76,17 @@ def test_observational_study_cannot_emit_causal_claim() -> None:
         PaperExtraction.model_validate(_extraction(inference="causal"))
 
 
+def test_long_disclosure_fields_are_preserved() -> None:
+    payload = _extraction()
+    payload["conflicts_of_interest"] = "利益冲突：" + ("研究者披露。" * 400)
+    payload["funding"] = "资助信息：" + ("项目资助。" * 400)
+
+    extraction = PaperExtraction.model_validate(payload)
+
+    assert len(extraction.conflicts_of_interest) > 1500
+    assert len(extraction.funding) > 1500
+
+
 def test_consistency_report_keeps_large_auditable_difference_set() -> None:
     report = ConsistencyReport.model_validate(
         {
