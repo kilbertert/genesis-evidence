@@ -919,6 +919,26 @@ def test_profile_scope_splits_compound_kidney_outcomes() -> None:
     }
 
 
+def test_profile_scope_matches_muscle_mass_aliases() -> None:
+    picots = {
+        "population": "Adults aged 60 and older or older adults at risk of sarcopenia/frailty",
+        "intervention_or_exposure": (
+            "Protein, amino acid, oral nutrition, or nutrition-plus-exercise intervention"
+        ),
+        "outcomes": "Muscle mass, grip strength, gait speed, or frailty outcomes",
+        "timing": "At least 8 weeks",
+    }
+    dimensions = {
+        "population": "Older adults with sarcopenia",
+        "ingredient_name": "Oral oligopeptide nutrition",
+        "outcome": "肌肉质量、四肢骨骼肌质量（ASMM）和骨骼肌质量指数（SMI）",
+        "timepoint": "After 16 weeks",
+    }
+    assert _profile_scopes(picots, "COND_SARCOPENIA_FRAILTY", dimensions) == {
+        "metric:muscle_mass": "肌肉量"
+    }
+
+
 def test_profile_scope_recognizes_gait_and_lean_mass_aliases() -> None:
     picots = {
         "population": "Adults aged 60 and older",
