@@ -436,6 +436,7 @@ class ReviewStore:
             rows = connection.execute(
                 f"""
                 SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
+                    c.extraction_id,
                     c.candidate_claim_type,
                     cr.decision, cr.condition_code, cr.corrected_study_design,
                     cr.risk_of_bias_json,
@@ -452,6 +453,7 @@ class ReviewStore:
             ).fetchall()
             if len(rows) != len(claim_ids):
                 raise ValueError("one or more reviewed claims were not found")
+            rows = [_augment_profile_population(connection, dict(row)) for row in rows]
             if any(
                 row["decision"] != "approved"
                 or row["condition_code"] != condition_code
@@ -516,6 +518,7 @@ class ReviewStore:
             eligible = connection.execute(
                 """
                 SELECT c.id, c.status, cr.decision,
+                    c.extraction_id,
                     r.population, r.baseline_nutrient_status, r.ingredient_name,
                     r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint
                 FROM claims c
@@ -547,11 +550,12 @@ class ReviewStore:
                 """,
                 (condition_code, topic_id),
             ).fetchall()
-            eligible = [
-                row
-                for row in eligible
-                if scope_key in _profile_scopes(picots, condition_code, dict(row))
-            ]
+            scoped_eligible = []
+            for row in eligible:
+                item = _augment_profile_population(connection, dict(row))
+                if scope_key in _profile_scopes(picots, condition_code, item):
+                    scoped_eligible.append(item)
+            eligible = scoped_eligible
             if any(
                 row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
             ):
@@ -1024,6 +1028,7 @@ class ReviewStore:
                 rows = connection.execute(
                     """
                     SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
+                        c.extraction_id,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
                         r.study_id, r.population, r.baseline_nutrient_status, r.ingredient_name,
                         r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
@@ -1057,7 +1062,7 @@ class ReviewStore:
                 ).fetchall()
                 groups: dict[str, dict[str, object]] = {}
                 for row in rows:
-                    item = dict(row)
+                    item = _augment_profile_population(connection, dict(row))
                     item["risk_of_bias"] = json.loads(item.pop("risk_of_bias_json"))
                     for scope_key, scope_label in _profile_scopes(
                         base["picots"], str(topic["condition_code"]), item
@@ -1195,7 +1200,8 @@ class ReviewStore:
                     claim_rows = (
                         connection.execute(
                             f"""
-                            SELECT DISTINCT cr.claim_id, r.population, r.ingredient_name,
+                            SELECT DISTINCT cr.claim_id, c.extraction_id, r.population,
+                                r.ingredient_name, r.ingredient_form, r.dose,
                                 r.outcome, r.timepoint, topic.picots_json
                             FROM claim_reviews cr
                             JOIN claims c ON c.id = cr.claim_id
@@ -1230,7 +1236,7 @@ class ReviewStore:
                             in _profile_scopes(
                                 json.loads(row["picots_json"]),
                                 str(condition["code"]),
-                                dict(row),
+                                _augment_profile_population(connection, dict(row)),
                             )
                         }
                     )
@@ -1258,12 +1264,24 @@ class ReviewStore:
                     published = next(
                         (row for row in card_rows if row["status"] == "published"), None
                     )
+                    publishable_approved = {
+                        str(row["id"])
+                        for row in card_rows
+                        if row["status"] == "approved"
+                        and _card_passes_publish_gate(connection, row)
+                    }
                     action_publishable_approved = any(
-                        row["status"] == "approved" and row["grade"] in {"high", "moderate"}
+                        str(row["id"]) in publishable_approved
+                        and row["grade"] in {"high", "moderate"}
                         for row in card_rows
                     )
                     context_publishable_approved = any(
-                        row["status"] == "approved" and row["grade"] == "low" for row in card_rows
+                        str(row["id"]) in publishable_approved and row["grade"] == "low"
+                        for row in card_rows
+                    )
+                    approved_gate_blocked = any(
+                        row["status"] == "approved" and str(row["id"]) not in publishable_approved
+                        for row in card_rows
                     )
                     if published and published["grade"] == "low":
                         coverage_status = "published_context"
@@ -1282,6 +1300,9 @@ class ReviewStore:
                     ):
                         coverage_status = "blocked_very_low_certainty"
                         next_action = "补充或合并证据体后再进入患者端"
+                    elif approved_gate_blocked:
+                        coverage_status = "publication_gate_blocked"
+                        next_action = "解决证据、偏倚或原文完整性闸门后再发布"
                     elif profiles:
                         coverage_status, next_action = "profile_ready", "创建并审核患者知识卡"
                     elif any(
@@ -1441,6 +1462,14 @@ class ReviewStore:
             """,
             (entity_type, entity_id, action, actor, json.dumps(detail, ensure_ascii=False), _now()),
         )
+
+
+def _card_passes_publish_gate(connection, card) -> bool:
+    try:
+        ReviewStore._require_publishable(connection, str(card["id"]))
+    except ValueError:
+        return False
+    return True
 
 
 def _placeholders(values: tuple[str, ...]) -> str:
@@ -1766,6 +1795,13 @@ def _picots_text_matches(
 ) -> bool:
     topic_text = _normalize_picots_text(topic_text)
     extracted_text = _normalize_picots_text(extracted_text)
+    # Comparator phrases can contain "nutrition intervention" while the
+    # actual match is the no-treatment/placebo arm; resolve that explicit
+    # overlap before the nutrition-exposure guard below.
+    if "no intervention" in topic_text and "no intervention" in extracted_text:
+        return True
+    if "placebo" in topic_text and "placebo" in extracted_text:
+        return True
     aliases = {
         "bp": ("blood", "pressure"),
         "sbp": ("blood", "pressure"),
@@ -1875,6 +1911,9 @@ def _picots_text_matches(
             "diet",
             "dietary",
             "food",
+            "ferric",
+            "ferrous",
+            "iron",
             "nutrient",
             "protein",
             "vitamin",
@@ -1952,6 +1991,10 @@ def _normalize_picots_text(value: str) -> str:
         "ckd": "chronic kidney disease",
         "患者": "patients",
         "病人": "patients",
+        "缺铁性贫血": "iron deficiency anemia",
+        "缺铁": "iron deficiency",
+        "贫血": "anemia",
+        "ida": "iron deficiency anemia",
         "大麦嫩叶": "barley green",
         "大麦": "barley",
         "电解碱性水": "electrolyzed alkaline water",
@@ -1961,6 +2004,8 @@ def _normalize_picots_text(value: str) -> str:
         "蛋白质": "protein",
         "营养素": "nutrient",
         "食物": "food",
+        "口服": "oral",
+        "铁": "iron",
         "饮用": "drink",
         "服用": "consume",
         "摄入": "intake",
@@ -1991,6 +2036,8 @@ def _normalize_picots_text(value: str) -> str:
         "普通牛奶": "control milk",
         "常规牛奶": "control milk",
         "对照牛奶": "control milk",
+        "no treatment": "no intervention",
+        "no-treatment": "no intervention",
         "regular milk": "control milk",
         "plain milk": "control milk",
         "安慰剂": "placebo",
@@ -2073,6 +2120,11 @@ def _matches_alternate_population_scope(topic_text: str, extracted_text: str) ->
         "nutritional risk": ("nutritional risk", "malnutrition", "undernutrition"),
         "sarcopenia/frailty": ("sarcopenia", "frailty"),
     }
+    if "nutritional risk" in topic_text and any(
+        marker in extracted_text
+        for marker in ("mna-sf", "mini nutritional assessment", "mna score")
+    ):
+        return True
     return any(
         marker in topic_text and any(term in extracted_text for term in terms)
         for marker, terms in alternatives.items()
@@ -2090,6 +2142,12 @@ def _profile_scope_matches(picots: object, dimensions: dict[str, str]) -> bool:
     ):
         topic_value = str(picots.get(topic_field) or "").strip()
         result_value = dimensions[result_field].strip()
+        if topic_field == "intervention_or_exposure":
+            result_value = " ".join(
+                value
+                for key in ("ingredient_name", "ingredient_form", "dose")
+                if (value := dimensions.get(key, "")).strip()
+            )
         if topic_value and (
             not result_value
             or not _picots_text_matches(topic_value, result_value, require_qualifiers=False)
@@ -2167,8 +2225,22 @@ _PROFILE_OUTCOME_ALIASES = {
     "calcium": ("calcium", "serumcalcium", "bloodcalcium", "血钙", "钙"),
     "alp": ("alkalinephosphatase", "alp", "碱性磷酸酶"),
     "grip_strength": ("gripstrength", "handgripstrength", "握力"),
-    "walking_speed": ("walkingspeed", "gaitspeed", "步速"),
-    "muscle_mass": ("musclemass", "skeletalmusclemass", "肌肉量"),
+    "walking_speed": (
+        "walkingspeed",
+        "6mwalkingspeed",
+        "gaitspeed",
+        "walkingperformance",
+        "步行速度",
+        "步速",
+    ),
+    "muscle_mass": (
+        "musclemass",
+        "skeletalmusclemass",
+        "leanmass",
+        "fatfreemass",
+        "softleanmass",
+        "肌肉量",
+    ),
     "albumin": ("albumin", "serumalbumin", "白蛋白"),
     "bmi": ("bodymassindex", "bmi", "体重指数"),
     "prealbumin": ("prealbumin", "transthyretin", "前白蛋白"),
@@ -2208,6 +2280,32 @@ def _topic_outcome_components(value: str) -> tuple[str, ...]:
     return components or (value.strip(),)
 
 
+def _augment_profile_population(connection, row: dict[str, object]) -> dict[str, object]:
+    """Include the paper-level population when validating a result's PICOTS scope."""
+
+    extraction_id = str(row.get("extraction_id") or "").strip()
+    if not extraction_id:
+        return row
+    stored = connection.execute(
+        "SELECT extraction_json FROM paper_extractions WHERE id = ?", (extraction_id,)
+    ).fetchone()
+    if stored is None:
+        return row
+    try:
+        payload = json.loads(stored["extraction_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return row
+    population = payload.get("population") if isinstance(payload, dict) else None
+    if not isinstance(population, list):
+        return row
+    extracted = " ".join(str(value).strip() for value in population if str(value).strip())
+    if extracted:
+        row["population"] = " ".join(
+            value for value in (str(row.get("population") or "").strip(), extracted) if value
+        )
+    return row
+
+
 def _generic_scope_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     slug = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", normalized).strip("-")
@@ -2226,6 +2324,10 @@ def _profile_scopes(
     result_outcome = values.get("outcome", "")
     compact_result = _compact_text(result_outcome)
     condition = CONDITION_BY_CODE.get(condition_code)
+    if condition and not condition.metrics:
+        if _picots_text_matches(topic_outcome, result_outcome, require_qualifiers=False):
+            return {f"condition:{condition_code}": condition.name}
+        return {}
     lipid_metrics = {"hdl_c", "ldl_c", "total_cholesterol"}
     if (
         condition
@@ -2514,10 +2616,9 @@ def _review_guidance(
         for issue in (consistency or {}).get("issues", [])
         if isinstance(issue, dict)
     ]
-    unresolved_consistency = (
-        (consistency or {}).get("verdict") == "needs_review"
-        and not _source_based_consistency_resolution(admission)
-    )
+    unresolved_consistency = (consistency or {}).get(
+        "verdict"
+    ) == "needs_review" and not _source_based_consistency_resolution(admission)
     material_issues = [issue for issue in issues if issue["priority"] == "must_resolve"]
     pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
     checks = [
@@ -2702,9 +2803,7 @@ def _critical_issue(
             return any(
                 claim.get("extraction_claim_index") == extraction_index for claim in patient_claims
             )
-        return any(
-            token in value for token in ("primary outcome", "primary_outcome", "主要结局")
-        )
+        return any(token in value for token in ("primary outcome", "primary_outcome", "主要结局"))
     tokens = (
         "claim",
         "study_design",

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore, ReviewStore
 from genesis_evidence.core.store.review import (
+    _augment_profile_population,
     _critical_issue,
     _picots_text_matches,
     _profile_scopes,
@@ -663,11 +664,25 @@ def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap
     assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
 
 
+def test_picots_matches_explicit_oral_iron_nutrition_intervention() -> None:
+    topic = "Oral iron supplementation or iron-focused nutrition intervention"
+
+    assert _picots_text_matches(topic, "oral ferric maltol 30 mg twice daily")
+    assert _picots_text_matches(topic, "口服麦芽酚铁 30 mg 每日两次")
+    assert _picots_text_matches(topic, "iron-fortified food with vitamin C")
+    assert not _picots_text_matches(topic, "a supervised exercise programme")
+
+
 def test_picots_matches_bilingual_dietary_comparators() -> None:
     topic = "Usual diet, no intervention, placebo, or an alternative diet"
 
     assert _picots_text_matches(topic, "仅遵循平衡膳食模式")
     assert _picots_text_matches(topic, "1.5 L/day纯净中性水，pH 7.0")
+    assert _picots_text_matches(topic, "No treatment or placebo")
+    assert _picots_text_matches(
+        "Usual care, no intervention, or alternative nutrition intervention",
+        "No treatment or placebo",
+    )
 
 
 def test_picots_matches_common_chinese_population_terms() -> None:
@@ -790,6 +805,26 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
 
+def test_profile_scope_uses_condition_scope_for_symptom_topic_without_metric() -> None:
+    picots = {
+        "population": "Adults aged 40 and older",
+        "intervention_or_exposure": "Dietary fiber or probiotic intervention",
+        "comparator": "Usual care or no intervention",
+        "outcomes": "Stool frequency, stool consistency, or constipation symptoms",
+        "timing": "At least 4 weeks",
+    }
+    dimensions = {
+        "population": "Adults aged 50 and older with chronic constipation",
+        "ingredient_name": "Dietary fiber",
+        "outcome": "Stool frequency and constipation symptoms",
+        "timepoint": "After 8 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_CHRONIC_CONSTIPATION", dimensions) == {
+        "condition:COND_CHRONIC_CONSTIPATION": "慢性便秘"
+    }
+
+
 def test_adult_40_plus_scope_accepts_explicit_postmenopausal_population() -> None:
     assert _picots_text_matches(
         "Adults aged 40 and older", "Postmenopausal women", require_qualifiers=False
@@ -856,6 +891,95 @@ def test_profile_scope_keeps_bmd_when_result_also_reports_a_bone_ratio() -> None
         "metric:bone_density_t_score": "骨密度 T 值",
         "metric:calcium": "钙",
     }
+
+
+def test_profile_scope_recognizes_gait_and_lean_mass_aliases() -> None:
+    picots = {
+        "population": "Adults aged 60 and older",
+        "intervention_or_exposure": "Protein or nutrition intervention",
+        "outcomes": "Walking speed or muscle mass",
+        "timing": "At least 8 weeks",
+    }
+    dimensions = {
+        "population": "Adults aged 70 and older with frailty",
+        "ingredient_name": "Protein supplementation",
+        "outcome": "6 m walking speed and fat-free mass",
+        "timepoint": "After 12 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_SARCOPENIA_FRAILTY", dimensions) == {
+        "metric:walking_speed": "步速",
+        "metric:muscle_mass": "肌肉量",
+    }
+
+
+def test_profile_scope_matches_mna_risk_and_branded_nutrition_product() -> None:
+    picots = {
+        "population": "Adults aged 18 and older at nutritional risk or with malnutrition",
+        "intervention_or_exposure": "Oral nutrition supplementation or nutrition support",
+        "comparator": "Usual care, no intervention, or alternative nutrition intervention",
+        "outcomes": "BMI, albumin, prealbumin, weight, or nutritional status outcomes",
+        "timing": "At least 4 weeks",
+    }
+    dimensions = {
+        "population": "Chinese free-living adults with MNA-SF score <=11",
+        "ingredient_name": "Fresubin Powder",
+        "ingredient_form": "nutritionally complete oral nutrition supplement powder",
+        "dose": "600 kcal and 22.4 g protein daily",
+        "outcome": "Improvement in body mass index (BMI)",
+        "timepoint": "12 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_MALNUTRITION_RISK", dimensions) == {
+        "metric:bmi": "体重指数"
+    }
+
+
+def test_profile_scope_uses_paper_population_context_for_iron_claim(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    extraction_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, created_at) "
+            "VALUES ('paper', 'Iron study', '2026-08-20T00:00:00Z')"
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extractions(
+                id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json, created_at
+            ) VALUES (?, 'paper', 'model-a', 'run-a', ?, 'model-b', 'run-b', ?,
+                'checker', 'check-run', 'consistent', '{}', '2026-08-20T00:00:00Z')
+            """,
+            (
+                extraction_id,
+                json.dumps({"population": ["年龄 18–75 岁", "缺铁性贫血成人患者"]}),
+                json.dumps({"population": ["年龄 18–75 岁", "缺铁性贫血成人患者"]}),
+            ),
+        )
+    with database.connect() as connection:
+        row = _augment_profile_population(
+            connection, {"extraction_id": extraction_id, "population": "HFREF 患者"}
+        )
+    assert _profile_scopes(
+        {
+            "population": "Adults aged 18 and older with iron deficiency or iron deficiency anemia",
+            "intervention_or_exposure": (
+                "Oral iron supplementation or iron-focused nutrition intervention"
+            ),
+            "outcomes": "Hemoglobin, ferritin, MCV, and transferrin saturation",
+            "timing": "At least 4 weeks",
+        },
+        "COND_ANEMIA_PATTERN",
+        {
+            **row,
+            "ingredient_name": "oral ferrous sulphate",
+            "outcome": "hemoglobin",
+            "timepoint": "12 weeks",
+        },
+    ) == {"metric:hemoglobin": "血红蛋白"}
 
 
 def test_publishing_card_only_stales_the_same_outcome_scope(tmp_path, monkeypatch) -> None:
@@ -1372,9 +1496,7 @@ def test_ai_source_adjudication_rejects_a_statistically_contradictory_claim_once
                 paper_id,
             ),
         )
-        connection.execute(
-            "UPDATE claims SET evidence_text = ? WHERE id = ?", (evidence, claim_id)
-        )
+        connection.execute("UPDATE claims SET evidence_text = ? WHERE id = ?", (evidence, claim_id))
         connection.execute(
             "UPDATE results SET evidence_text = ? WHERE paper_id = ?", (evidence, paper_id)
         )
@@ -1559,9 +1681,12 @@ def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
     first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
     assert first["cards"][0]["status"] == "approved"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "internally_admitted"
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            == "internally_admitted"
+        )
     with database.transaction() as connection:
         connection.execute(
             "UPDATE paper_admissions SET consistency_resolution = "
@@ -1593,11 +1718,15 @@ def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
 
     result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
-    assert result["stage"] == "consistency_adjudication"
+    assert result["status"] == "completed"
+    assert result["decision"] == "internally_admitted"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "internally_admitted"
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            == "internally_admitted"
+        )
         assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "approved"
 
 

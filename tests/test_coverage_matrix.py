@@ -4,8 +4,10 @@ from fastapi.testclient import TestClient
 
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
 from genesis_evidence.review.api import create_app
+from genesis_evidence.review.service import EvidenceReviewService
 
 from .test_report_assessment import _publish_card
+from .test_review_workflow import _review_case
 
 API_KEY = "test-review-key-with-32-characters"
 HEADERS = {"Authorization": f"Bearer {API_KEY}"}
@@ -57,6 +59,54 @@ def test_coverage_matrix_reports_published_metric_and_api_auth(tmp_path) -> None
     assert row["published_card"]["status"] == "published"
     assert row["published_card"]["grade"] == "moderate"
     assert row["cards"]["published"] == 1
+
+
+def test_coverage_matrix_counts_claim_with_paper_population_context(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        topic_id = connection.execute(
+            "SELECT topic_id FROM collection_runs WHERE id IN "
+            "(SELECT run_id FROM collection_papers WHERE paper_id = ?) LIMIT 1",
+            (paper_id,),
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE evidence_topics SET condition_code = 'COND_CHRONIC_CONSTIPATION' "
+            "WHERE id = ?",
+            (topic_id,),
+        )
+    service = EvidenceReviewService(ReviewStore(database), PaperStore(database))
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "completed"
+    row = next(
+        item
+        for item in ReviewStore(database).list_coverage_matrix()
+        if item["condition_code"] == "COND_CHRONIC_CONSTIPATION"
+        and item["metric_code"] is None
+    )
+    assert row["approved_claim_count"] == 1
+
+
+def test_coverage_matrix_surfaces_approved_card_blocked_by_publish_gate(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    card_id = _publish_card(database, "COND_PREDIABETES", grade="low")
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE knowledge_cards SET status = 'approved' WHERE id = ?", (card_id,)
+        )
+
+    row = next(
+        item
+        for item in ReviewStore(database).list_coverage_matrix()
+        if item["condition_code"] == "COND_PREDIABETES" and item["metric_code"] == "fasting_glucose"
+    )
+
+    assert row["coverage_status"] == "publication_gate_blocked"
+    assert row["next_action"] == "解决证据、偏倚或原文完整性闸门后再发布"
 
 
 def test_combined_blood_pressure_topic_covers_both_metrics(tmp_path) -> None:
