@@ -1547,18 +1547,6 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         """,
         (topic_id, condition_code, topic["eligible_study_designs_json"]),
     ).fetchone()
-    missing_included_claim = connection.execute(
-        """
-        SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
-        WHERE cr.topic_id = ? AND cr.status = 'completed'
-            AND cp.full_text_decision = 'included' AND NOT EXISTS (
-                SELECT 1 FROM claims c JOIN claim_reviews review ON review.claim_id = c.id
-                WHERE c.paper_id = cp.paper_id AND review.decision = 'approved'
-                    AND review.condition_code = ?
-            ) LIMIT 1
-        """,
-        (topic_id, condition_code),
-    ).fetchone()
     included_count = connection.execute(
         """
         SELECT count(DISTINCT cp.paper_id) FROM collection_papers cp
@@ -1578,7 +1566,11 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         raise ValueError("deduplicated papers cannot have conflicting topic screening decisions")
     if not included_count:
         raise ValueError("topic has no full-text included evidence")
-    if incomplete_included_paper or missing_included_claim:
+    # A fully reviewed paper may have no patient-profile claim after its
+    # out-of-scope, mechanistic, or associational results are rejected. Those
+    # results remain auditable but must not block a profile built from other
+    # directly matching evidence. Unreviewed claims are still blocked above.
+    if incomplete_included_paper:
         raise ValueError("every full-text included paper must be extracted, admitted, and reviewed")
     return topic
 
