@@ -553,9 +553,16 @@ class ReviewStore:
                 if scope_key in _profile_scopes(picots, condition_code, dict(row))
             ]
             if any(
-                row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
+                (row["status"], row["decision"])
+                not in {("reviewed", "approved"), ("rejected", "rejected")}
+                for row in eligible
             ):
                 raise ValueError("all eligible results must be reviewed before profile creation")
+            eligible = [
+                row
+                for row in eligible
+                if (row["status"], row["decision"]) == ("reviewed", "approved")
+            ]
             if {row["id"] for row in eligible} != set(claim_ids):
                 raise ValueError("evidence profile must include every reviewed eligible result")
             interpretations = profile["interpretations"]
@@ -986,6 +993,7 @@ class ReviewStore:
             "review_guidance": _review_guidance(
                 paper=dict(paper),
                 extraction=extraction_data,
+                second_extraction=second_extraction_data,
                 consistency=consistency_data,
                 admission=admission_data,
                 collections=collection_items,
@@ -1865,9 +1873,11 @@ def _picots_text_matches(
         marker in topic_text
         for marker in (
             "dietary pattern",
+            "dietary intervention",
             "defined food",
             "nutrient intervention",
             "nutrition intervention",
+            "nutrition component",
         )
     )
     if nutrition_topic:
@@ -2409,6 +2419,7 @@ def _review_guidance(
     *,
     paper: dict[str, object],
     extraction: dict[str, object] | None,
+    second_extraction: dict[str, object] | None,
     consistency: dict[str, object] | None,
     admission: dict[str, object] | None,
     collections: list[dict[str, object]],
@@ -2509,7 +2520,11 @@ def _review_guidance(
     issues = [
         {
             **issue,
-            "priority": "must_resolve" if _critical_issue(issue, claims) else "verify",
+            "priority": (
+                "verify"
+                if _catalog_issue_is_contradicted(issue, extraction, second_extraction)
+                else ("must_resolve" if _critical_issue(issue, claims) else "verify")
+            ),
         }
         for issue in (consistency or {}).get("issues", [])
         if isinstance(issue, dict)
@@ -2642,9 +2657,42 @@ def _source_based_consistency_resolution(admission: object) -> bool:
     return bool(resolution) and not resolution.startswith("AI consistency adjudication (")
 
 
+def _catalog_issue_is_contradicted(
+    issue: dict[str, object],
+    extraction: dict[str, object] | None,
+    second_extraction: dict[str, object] | None,
+) -> bool:
+    field = str(issue.get("field") or "").casefold()
+    text = " ".join(str(issue.get(key) or "") for key in ("message", "evidence"))
+    folded = text.casefold()
+    if "condition" not in field or not any(
+        token in folded for token in ("catalog", "目录", "不在", "不存在", "未列出", "outside")
+    ):
+        return False
+
+    def condition_codes(value: dict[str, object] | None) -> set[str]:
+        return {
+            str(item.get("condition_code"))
+            for item in (value or {}).get("condition_candidates", [])
+            if isinstance(item, dict) and item.get("condition_code")
+        }
+
+    primary = condition_codes(extraction)
+    secondary = condition_codes(second_extraction)
+    mentioned = set(re.findall(r"COND_[A-Z0-9_]+", text.upper()))
+    return (
+        bool(primary)
+        and primary == secondary
+        and primary <= mentioned
+        and primary <= CONDITION_BY_CODE.keys()
+    )
+
+
 def _critical_issue(
     issue: dict[str, object], claims: list[dict[str, object]] | None = None
 ) -> bool:
+    if _statistical_contradiction(issue):
+        return True
     severity = str(issue.get("severity") or "").casefold()
     if severity == "low":
         return False
@@ -2731,6 +2779,26 @@ def _critical_issue(
         "更正",
     )
     return any(token in value for token in tokens)
+
+
+def _statistical_contradiction(issue: dict[str, object]) -> bool:
+    text = " ".join(str(issue.get(key) or "") for key in ("message", "evidence")).casefold()
+    negated_significance = any(
+        token in text for token in ("无显著", "不显著", "not significant", "no significant")
+    )
+    significant_with_null_p = (
+        any(token in text for token in ("显著", "significant"))
+        and not negated_significance
+        and bool(re.search(r"\bp\s*>\s*0?\.0?5\b", text))
+    )
+    no_difference_with_significant_p = (
+        any(
+            token in text
+            for token in ("无显著差异", "无差异", "no difference", "did not differ")
+        )
+        and bool(re.search(r"\bp\s*<\s*0?\.0?5\b", text))
+    )
+    return significant_with_null_p or no_difference_with_significant_p
 
 
 def _resolution_draft(issues: list[dict[str, object]]) -> str:

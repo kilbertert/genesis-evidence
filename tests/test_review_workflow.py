@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore, ReviewStore
 from genesis_evidence.core.store.review import (
+    _catalog_issue_is_contradicted,
     _critical_issue,
     _picots_text_matches,
     _profile_scopes,
@@ -661,6 +662,52 @@ def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap
     assert _picots_text_matches(topic, "soy protein or soy isoflavones")
     assert not _picots_text_matches(topic, "A supervised exercise programme")
     assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
+
+
+def test_picots_matches_defined_nutrition_diet_comparison() -> None:
+    assert _picots_text_matches(
+        "Dietary or lifestyle intervention with a defined nutrition component",
+        "中等蛋白、中等升糖指数饮食",
+    )
+    assert _picots_text_matches(
+        "Usual care, minimal intervention, or an alternative dietary intervention",
+        "高蛋白、低升糖指数饮食",
+    )
+    assert not _picots_text_matches(
+        "Dietary or lifestyle intervention with a defined nutrition component",
+        "A supervised exercise programme",
+    )
+
+
+def test_catalog_false_positive_is_not_a_material_consistency_blocker() -> None:
+    issue = {
+        "field": "condition_candidates",
+        "severity": "high",
+        "message": "COND_PREDIABETES is not in the condition catalog",
+        "evidence": "catalog lists COND_HYPERTENSION_RISK, not COND_PREDIABETES",
+    }
+    extraction = {"condition_candidates": [{"condition_code": "COND_PREDIABETES"}]}
+
+    assert _catalog_issue_is_contradicted(issue, extraction, extraction)
+
+
+def test_logically_contradictory_significance_is_material_at_any_severity() -> None:
+    assert _critical_issue(
+        {
+            "field": "claims[].outcome",
+            "severity": "low",
+            "message": "The groups had no differences.",
+            "evidence": "At baseline, there were no differences (p<0.05 for all).",
+        }
+    )
+    assert not _critical_issue(
+        {
+            "field": "claims[].outcome",
+            "severity": "low",
+            "message": "The groups had no significant difference.",
+            "evidence": "There was no significant difference (p>0.05).",
+        }
+    )
 
 
 def test_picots_matches_bilingual_dietary_comparators() -> None:
@@ -1551,6 +1598,10 @@ def test_medium_claim_difference_only_blocks_patient_profile_scope() -> None:
     assert _source_evidence_fragments(
         "A 与 B 的描述不同。原文 Method: 'including warm-up, resistance and relaxation'。"
     ) == ["including warm-up, resistance and relaxation"]
+    assert _source_evidence_fragments(
+        "A 与 B 的描述不同。原文 Methods 中仅说明 'this analysis was specified in the "
+        "publication synopsis, but not in the protocol'。"
+    ) == ["this analysis was specified in the publication synopsis, but not in the protocol"]
 
 
 def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
@@ -2429,6 +2480,32 @@ def test_reviewed_out_of_scope_paper_does_not_block_evidence_profile(tmp_path) -
         reviewer="reviewer-1",
         patient_body="维生素 D 状态与衰弱之间存在研究关联。",
         profile=_profile(formal_claim),
+    )
+
+    assert card_id
+
+
+def test_rejected_in_scope_result_does_not_block_evidence_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    included_paper, included_claim = _review_case(database)
+    rejected_paper, rejected_claim = _review_case(database)
+    for paper_id in (included_paper, rejected_paper):
+        _admit(service, paper_id)
+    service.review_claim(included_claim, reviewer="reviewer-1", review=_approved_review())
+    service.review_claim(
+        rejected_claim,
+        reviewer="reviewer-1",
+        review=ClaimReviewInput(decision="rejected"),
+    )
+
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, included_paper, rejected_paper),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[included_claim],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(included_claim),
     )
 
     assert card_id

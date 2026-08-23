@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.store import ObjectStore, PaperStore, ReviewStore
-from ..core.store.review import _source_based_consistency_resolution
+from ..core.store.review import _source_based_consistency_resolution, _statistical_contradiction
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 from ..literature.jats import JatsParseError, JatsParser
 
@@ -1096,6 +1096,10 @@ def _source_evidence_fragments(value: object) -> list[str]:
         if not quoted:
             quoted = re.findall(r"‘(.+?)’", tail)
         candidates.extend(quoted or [re.split(r"[。；;]", tail, maxsplit=1)[0]])
+    if not candidates and "原文" in raw:
+        tail = raw.split("原文", 1)[1]
+        quoted = re.findall(r"(?:[\"“](.+?)[\"”]|['‘](.+?)[\'’])", tail)
+        candidates.extend([double or single for double, single in quoted])
     if not candidates and re.match(
         r"^(?:evidence|source|original|full\s+text)\s*[:：]", raw, flags=re.IGNORECASE
     ):
@@ -1150,15 +1154,6 @@ def _claims_matching_fragments(
             for fragment in fragments
         )
     ]
-
-
-def _statistical_contradiction(issue: dict[str, object]) -> bool:
-    text = " ".join(str(issue.get(key) or "") for key in ("message", "evidence")).casefold()
-    return (
-        any(token in text for token in ("矛盾", "不一致", "conflict", "inconsistent"))
-        and bool(re.search(r"\bp\s*(?:>|=)\s*0?\.0?5\b", text))
-        and any(token in text for token in ("显著", "significant"))
-    )
 
 
 def _next_profile_version(topic_version: str, used_versions: set[str]) -> str:
