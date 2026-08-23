@@ -384,19 +384,33 @@ class ArkPaperAnalyzer:
                 },
                 ensure_ascii=False,
             )
-        corrected_text, corrected_run_id = self._complete(
-            _EXTRACTION_CORRECTION_PROMPT,
-            correction_source,
-            max_tokens=self._max_tokens,
-        )
-        try:
-            corrected = PaperExtraction.model_validate(_json_object(corrected_text))
-            _require_source_evidence(corrected, document)
-        except (ValueError, json.JSONDecodeError, PaperAnalysisError) as exc:
-            raise PaperAnalysisError(
-                f"provider returned an invalid paper extraction after correction: {exc}"
-            ) from exc
-        return corrected, corrected_run_id
+        last_error: Exception | None = None
+        for correction_attempt in range(2):
+            corrected_text, corrected_run_id = self._complete(
+                _EXTRACTION_CORRECTION_PROMPT,
+                correction_source,
+                max_tokens=self._max_tokens,
+            )
+            try:
+                corrected = PaperExtraction.model_validate(_json_object(corrected_text))
+                _require_source_evidence(corrected, document)
+                return corrected, corrected_run_id
+            except (ValueError, json.JSONDecodeError, PaperAnalysisError) as exc:
+                last_error = exc
+                if correction_attempt == 1:
+                    break
+                correction_source = json.dumps(
+                    {
+                        "source": json.loads(source),
+                        "invalid_output": corrected_text,
+                        "validation_error": str(exc),
+                        "correction_attempt": correction_attempt + 1,
+                    },
+                    ensure_ascii=False,
+                )
+        raise PaperAnalysisError(
+            f"provider returned an invalid paper extraction after correction: {last_error}"
+        ) from last_error
 
     def _complete(
         self, system_prompt: str, user_content: str, *, max_tokens: int | None = None
