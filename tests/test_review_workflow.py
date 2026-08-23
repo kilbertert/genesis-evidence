@@ -2399,6 +2399,41 @@ def test_unreviewed_eligible_result_blocks_evidence_profile(tmp_path) -> None:
         )
 
 
+def test_reviewed_out_of_scope_paper_does_not_block_evidence_profile(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    formal_paper, formal_claim = _review_case(database)
+    out_of_scope_paper, out_of_scope_claim = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE claims SET candidate_claim_type = 'association' WHERE id = ?",
+            (out_of_scope_claim,),
+        )
+        connection.execute(
+            "UPDATE results SET outcome = 'Other reported outcome' WHERE paper_id = ?",
+            (out_of_scope_paper,),
+        )
+    for paper_id in (formal_paper, out_of_scope_paper):
+        _admit(service, paper_id)
+    service.review_claim(formal_claim, reviewer="reviewer-1", review=_approved_review())
+    service.review_claim(
+        out_of_scope_claim,
+        reviewer="reviewer-1",
+        review=ClaimReviewInput(decision="rejected"),
+    )
+
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, formal_paper, out_of_scope_paper),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[formal_claim],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(formal_claim),
+    )
+
+    assert card_id
+
+
 def test_patient_card_body_rejects_diagnostic_wording(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)
