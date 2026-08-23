@@ -900,6 +900,25 @@ def test_creatinine_scope_excludes_clearance_and_urine_ratios() -> None:
     assert not _metric_outcome_matches("creatinine", "Urine calcium/creatinine ratio")
 
 
+def test_profile_scope_splits_compound_kidney_outcomes() -> None:
+    picots = {
+        "population": "Adults aged 40 and older or adults with kidney disease risk",
+        "intervention_or_exposure": "Dietary pattern, protein, sodium, or lifestyle exposure",
+        "outcomes": "eGFR, serum creatinine, or urine albumin-to-creatinine ratio",
+        "timing": "At least 4 weeks or longitudinal follow-up",
+    }
+    dimensions = {
+        "population": "Adults with mild CKD",
+        "ingredient_name": "Sodium bicarbonate",
+        "outcome": "Serum creatinine (sCr) and eGFR-Cr",
+        "timepoint": "After 2 years",
+    }
+    assert _profile_scopes(picots, "COND_CKD_RISK", dimensions) == {
+        "metric:creatinine": "肌酐",
+        "metric:egfr": "估算肾小球滤过率",
+    }
+
+
 def test_profile_scope_recognizes_gait_and_lean_mass_aliases() -> None:
     picots = {
         "population": "Adults aged 60 and older",
