@@ -668,6 +668,11 @@ def test_picots_matches_bilingual_dietary_comparators() -> None:
 
     assert _picots_text_matches(topic, "仅遵循平衡膳食模式")
     assert _picots_text_matches(topic, "1.5 L/day纯净中性水，pH 7.0")
+    assert _picots_text_matches(topic, "No treatment or placebo")
+    assert _picots_text_matches(
+        "Usual care, no intervention, or alternative nutrition intervention",
+        "No treatment or placebo",
+    )
 
 
 def test_picots_matches_common_chinese_population_terms() -> None:
@@ -790,6 +795,26 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
 
 
+def test_profile_scope_uses_condition_scope_for_symptom_topic_without_metric() -> None:
+    picots = {
+        "population": "Adults aged 40 and older",
+        "intervention_or_exposure": "Dietary fiber or probiotic intervention",
+        "comparator": "Usual care or no intervention",
+        "outcomes": "Stool frequency, stool consistency, or constipation symptoms",
+        "timing": "At least 4 weeks",
+    }
+    dimensions = {
+        "population": "Adults aged 50 and older with chronic constipation",
+        "ingredient_name": "Dietary fiber",
+        "outcome": "Stool frequency and constipation symptoms",
+        "timepoint": "After 8 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_CHRONIC_CONSTIPATION", dimensions) == {
+        "condition:COND_CHRONIC_CONSTIPATION": "慢性便秘"
+    }
+
+
 def test_adult_40_plus_scope_accepts_explicit_postmenopausal_population() -> None:
     assert _picots_text_matches(
         "Adults aged 40 and older", "Postmenopausal women", require_qualifiers=False
@@ -855,6 +880,48 @@ def test_profile_scope_keeps_bmd_when_result_also_reports_a_bone_ratio() -> None
     assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
         "metric:bone_density_t_score": "骨密度 T 值",
         "metric:calcium": "钙",
+    }
+
+
+def test_profile_scope_recognizes_gait_and_lean_mass_aliases() -> None:
+    picots = {
+        "population": "Adults aged 60 and older",
+        "intervention_or_exposure": "Protein or nutrition intervention",
+        "outcomes": "Walking speed or muscle mass",
+        "timing": "At least 8 weeks",
+    }
+    dimensions = {
+        "population": "Adults aged 70 and older with frailty",
+        "ingredient_name": "Protein supplementation",
+        "outcome": "6 m walking speed and fat-free mass",
+        "timepoint": "After 12 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_SARCOPENIA_FRAILTY", dimensions) == {
+        "metric:walking_speed": "步速",
+        "metric:muscle_mass": "肌肉量",
+    }
+
+
+def test_profile_scope_matches_mna_risk_and_branded_nutrition_product() -> None:
+    picots = {
+        "population": "Adults aged 18 and older at nutritional risk or with malnutrition",
+        "intervention_or_exposure": "Oral nutrition supplementation or nutrition support",
+        "comparator": "Usual care, no intervention, or alternative nutrition intervention",
+        "outcomes": "BMI, albumin, prealbumin, weight, or nutritional status outcomes",
+        "timing": "At least 4 weeks",
+    }
+    dimensions = {
+        "population": "Chinese free-living adults with MNA-SF score <=11",
+        "ingredient_name": "Fresubin Powder",
+        "ingredient_form": "nutritionally complete oral nutrition supplement powder",
+        "dose": "600 kcal and 22.4 g protein daily",
+        "outcome": "Improvement in body mass index (BMI)",
+        "timepoint": "12 weeks",
+    }
+
+    assert _profile_scopes(picots, "COND_MALNUTRITION_RISK", dimensions) == {
+        "metric:bmi": "体重指数"
     }
 
 
@@ -1372,9 +1439,7 @@ def test_ai_source_adjudication_rejects_a_statistically_contradictory_claim_once
                 paper_id,
             ),
         )
-        connection.execute(
-            "UPDATE claims SET evidence_text = ? WHERE id = ?", (evidence, claim_id)
-        )
+        connection.execute("UPDATE claims SET evidence_text = ? WHERE id = ?", (evidence, claim_id))
         connection.execute(
             "UPDATE results SET evidence_text = ? WHERE paper_id = ?", (evidence, paper_id)
         )
@@ -1559,9 +1624,12 @@ def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
     first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
     assert first["cards"][0]["status"] == "approved"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "internally_admitted"
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            == "internally_admitted"
+        )
     with database.transaction() as connection:
         connection.execute(
             "UPDATE paper_admissions SET consistency_resolution = "
@@ -1593,11 +1661,15 @@ def test_unresolved_difference_preserves_existing_admission(tmp_path) -> None:
 
     result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
-    assert result["stage"] == "consistency_adjudication"
+    assert result["status"] == "completed"
+    assert result["decision"] == "internally_admitted"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
-        ).fetchone()[0] == "internally_admitted"
+        assert (
+            connection.execute(
+                "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+            ).fetchone()[0]
+            == "internally_admitted"
+        )
         assert connection.execute("SELECT status FROM knowledge_cards").fetchone()[0] == "approved"
 
 

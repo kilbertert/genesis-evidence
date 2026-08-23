@@ -453,32 +453,35 @@ class EvidenceReviewService:
                                 "admission_status": "internally_admitted",
                             },
                         )
+                        # Existing admission and reviewed claims remain the source of record;
+                        # keep the unresolved difference auditable but continue profile synthesis.
                     else:
                         self.store.require_consistency_adjudication(paper_id, reviewer=actor)
-                    return self._automation_attention(
+                        return self._automation_attention(
+                            paper_id,
+                            actor=actor,
+                            requested_by=requester,
+                            stage="consistency_adjudication",
+                            reason=(
+                                "independent extraction has unresolved material differences; "
+                                "full-text evidence could not support an autonomous adjudication"
+                            ),
+                            trace=trace,
+                        )
+                if source_adjudication is not None:
+                    consistency_resolution = str(source_adjudication["resolution"])
+                    source_rejected_claim_ids = {
+                        str(claim_id) for claim_id in source_adjudication["rejected_claim_ids"]
+                    }
+                    automatically_adjudicated = True
+                    source_adjudicated = True
+                    self.store.record_event(
+                        "paper",
                         paper_id,
+                        "autonomous_consistency_source_adjudicated",
                         actor=actor,
-                        requested_by=requester,
-                        stage="consistency_adjudication",
-                        reason=(
-                            "independent extraction has unresolved material differences; "
-                            "full-text evidence could not support an autonomous adjudication"
-                        ),
-                        trace=trace,
+                        detail={**context, **source_adjudication},
                     )
-                consistency_resolution = str(source_adjudication["resolution"])
-                source_rejected_claim_ids = {
-                    str(claim_id) for claim_id in source_adjudication["rejected_claim_ids"]
-                }
-                automatically_adjudicated = True
-                source_adjudicated = True
-                self.store.record_event(
-                    "paper",
-                    paper_id,
-                    "autonomous_consistency_source_adjudicated",
-                    actor=actor,
-                    detail={**context, **source_adjudication},
-                )
             automatically_adjudicated = not resolution_is_source_based
             consistency_resolution = consistency_resolution or _automatic_resolution(
                 guidance["issues"]
@@ -522,10 +525,9 @@ class EvidenceReviewService:
                 reason="study design remains uncertain after independent extraction review",
                 trace=trace,
             )
-        if (
-            (item.get("admission") or {}).get("status") != "internally_admitted"
-            or source_adjudicated
-        ):
+        if (item.get("admission") or {}).get(
+            "status"
+        ) != "internally_admitted" or source_adjudicated:
             self.admit_paper(
                 paper_id,
                 reviewer=actor,
@@ -819,9 +821,7 @@ class EvidenceReviewService:
                 if not matching:
                     return None
                 rejected_claim_ids.update(
-                    str(claim["id"])
-                    for claim in matching
-                    if str(claim.get("id") or "").strip()
+                    str(claim["id"]) for claim in matching if str(claim.get("id") or "").strip()
                 )
                 decisions.append(
                     f"{issue.get('field', 'difference')}: 原文统计信息与显著性措辞冲突，"

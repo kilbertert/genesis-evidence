@@ -59,6 +59,25 @@ def test_coverage_matrix_reports_published_metric_and_api_auth(tmp_path) -> None
     assert row["cards"]["published"] == 1
 
 
+def test_coverage_matrix_surfaces_approved_card_blocked_by_publish_gate(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    card_id = _publish_card(database, "COND_PREDIABETES", grade="low")
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE knowledge_cards SET status = 'approved' WHERE id = ?", (card_id,)
+        )
+
+    row = next(
+        item
+        for item in ReviewStore(database).list_coverage_matrix()
+        if item["condition_code"] == "COND_PREDIABETES" and item["metric_code"] == "fasting_glucose"
+    )
+
+    assert row["coverage_status"] == "publication_gate_blocked"
+    assert row["next_action"] == "解决证据、偏倚或原文完整性闸门后再发布"
+
+
 def test_combined_blood_pressure_topic_covers_both_metrics(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
