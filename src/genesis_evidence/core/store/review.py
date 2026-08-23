@@ -2257,6 +2257,21 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         return False
     if metric_code == "hdl_c" and "nonhdl" in compact:
         return False
+    if metric_code == "creatinine" and any(
+        term in compact
+        for term in (
+            "clearance",
+            "ratio",
+            "uacr",
+            "urine",
+            "urinary",
+            "excretion",
+            "清除率",
+            "比值",
+            "尿",
+        )
+    ):
+        return False
     aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code, ())
     risky_abbreviations = {"alt", "ast", "alp"}
     if any(alias in compact for alias in aliases if alias not in risky_abbreviations):

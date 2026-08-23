@@ -10,6 +10,7 @@ from genesis_evidence.core.store import Database, ObjectStore, PaperStore, Revie
 from genesis_evidence.core.store.review import (
     _augment_profile_population,
     _critical_issue,
+    _metric_outcome_matches,
     _picots_text_matches,
     _profile_scopes,
 )
@@ -891,6 +892,12 @@ def test_profile_scope_keeps_bmd_when_result_also_reports_a_bone_ratio() -> None
         "metric:bone_density_t_score": "骨密度 T 值",
         "metric:calcium": "钙",
     }
+
+
+def test_creatinine_scope_excludes_clearance_and_urine_ratios() -> None:
+    assert _metric_outcome_matches("creatinine", "Serum creatinine (sCr)")
+    assert not _metric_outcome_matches("creatinine", "Creatinine clearance")
+    assert not _metric_outcome_matches("creatinine", "Urine calcium/creatinine ratio")
 
 
 def test_profile_scope_recognizes_gait_and_lean_mass_aliases() -> None:
