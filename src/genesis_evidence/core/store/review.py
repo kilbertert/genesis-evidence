@@ -1158,7 +1158,7 @@ class ReviewStore:
                         for topic in topics
                         if topic["id"] in profile_topic_ids
                         or not metric_code
-                        or _metric_outcome_matches(
+                        or _metric_outcome_matches_text(
                             metric_code, json.loads(topic["picots_json"]).get("outcomes", "")
                         )
                     ]
@@ -2295,6 +2295,15 @@ def _topic_outcome_components(value: str) -> tuple[str, ...]:
     return components or (value.strip(),)
 
 
+def _metric_outcome_matches_text(metric_code: str, value: str) -> bool:
+    """Match a metric in either a single or a compound reported outcome."""
+
+    return _metric_outcome_matches(metric_code, value) or any(
+        _metric_outcome_matches(metric_code, component)
+        for component in _topic_outcome_components(value)
+    )
+
+
 def _augment_profile_population(connection, row: dict[str, object]) -> dict[str, object]:
     """Include the paper-level population when validating a result's PICOTS scope."""
 
@@ -2355,8 +2364,8 @@ def _profile_scopes(
         f"metric:{metric_code}": METRIC_LABELS[metric_code]
         for metric_code in (condition.metrics if condition else ())
         if metric_code in _PROFILE_OUTCOME_ALIASES
-        and _metric_outcome_matches(metric_code, topic_outcome)
-        and _metric_outcome_matches(metric_code, result_outcome)
+        and _metric_outcome_matches_text(metric_code, topic_outcome)
+        and _metric_outcome_matches_text(metric_code, result_outcome)
     }
     if scopes:
         return scopes
