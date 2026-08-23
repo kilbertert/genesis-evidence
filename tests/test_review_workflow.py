@@ -851,7 +851,7 @@ def test_profile_scope_does_not_treat_concentrations_as_ratio() -> None:
     }
 
 
-def test_profile_scope_recognizes_bmd_as_bone_density() -> None:
+def test_profile_scope_separates_bmd_from_t_score() -> None:
     picots = {
         "population": "Adults aged 40 and older or postmenopausal adults",
         "intervention_or_exposure": "Calcium or vitamin D supplementation",
@@ -866,9 +866,17 @@ def test_profile_scope_recognizes_bmd_as_bone_density() -> None:
     }
 
     assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
-        "metric:bone_density_t_score": "骨密度 T 值"
+        "outcome:bone-mineral-density": "Bone mineral density"
     }
     dimensions["outcome"] = "腰椎L1-4骨密度变化百分比"
+    assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
+        "outcome:bone-mineral-density": "Bone mineral density"
+    }
+    dimensions["outcome"] = "Lumbar spine T-score change"
+    assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
+        "metric:bone_density_t_score": "骨密度 T 值"
+    }
+    dimensions["outcome"] = "脊柱和股骨颈骨密度T评分变化"
     assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
         "metric:bone_density_t_score": "骨密度 T 值"
     }
@@ -889,7 +897,7 @@ def test_profile_scope_keeps_bmd_when_result_also_reports_a_bone_ratio() -> None
     }
 
     assert _profile_scopes(picots, "COND_OSTEOPOROSIS_RISK", dimensions) == {
-        "metric:bone_density_t_score": "骨密度 T 值",
+        "outcome:bone-mineral-density": "Bone mineral density",
         "metric:calcium": "钙",
     }
 

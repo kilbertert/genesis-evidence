@@ -2216,14 +2216,13 @@ _PROFILE_OUTCOME_ALIASES = {
         "25羟维生素d",
     ),
     "bone_density_t_score": (
-        "bonemineraldensity",
-        "bmd",
         "tscore",
         "bonedensitytscore",
-        "bonemineraldensitytscore",
         "bmdtscore",
-        "骨密度",
         "骨密度t值",
+        "骨密度t评分",
+        "t评分",
+        "t值",
     ),
     "calcium": ("calcium", "serumcalcium", "bloodcalcium", "血钙", "钙"),
     "alp": ("alkalinephosphatase", "alp", "碱性磷酸酶"),
@@ -2282,6 +2281,10 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
             "比值",
             "尿",
         )
+    ):
+        return False
+    if metric_code == "bone_density_t_score" and not any(
+        token in compact for token in ("tscore", "t评分", "t值")
     ):
         return False
     aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code, ())
@@ -2379,11 +2382,15 @@ def _profile_scopes(
         and _metric_outcome_matches_text(metric_code, topic_outcome)
         and _metric_outcome_matches_text(metric_code, result_outcome)
     }
-    if scopes:
-        return scopes
     for component in _topic_outcome_components(topic_outcome):
+        if (
+            _metric_outcome_matches("bone_density_t_score", result_outcome)
+            and _compact_text(component) in {"bonemineraldensity", "bmd"}
+        ):
+            continue
         if condition and any(
-            _metric_outcome_matches(metric_code, component) for metric_code in condition.metrics
+            _metric_outcome_matches_text(metric_code, component)
+            for metric_code in condition.metrics
         ):
             continue
         if _picots_text_matches(component, result_outcome, require_qualifiers=False):
