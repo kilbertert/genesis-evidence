@@ -436,6 +436,7 @@ class ReviewStore:
             rows = connection.execute(
                 f"""
                 SELECT c.id, c.paper_id, c.result_id, c.evidence_text, c.locator,
+                    c.extraction_id,
                     c.candidate_claim_type,
                     cr.decision, cr.condition_code, cr.corrected_study_design,
                     cr.risk_of_bias_json,
@@ -452,6 +453,7 @@ class ReviewStore:
             ).fetchall()
             if len(rows) != len(claim_ids):
                 raise ValueError("one or more reviewed claims were not found")
+            rows = [_augment_profile_population(connection, dict(row)) for row in rows]
             if any(
                 row["decision"] != "approved"
                 or row["condition_code"] != condition_code
@@ -516,6 +518,7 @@ class ReviewStore:
             eligible = connection.execute(
                 """
                 SELECT c.id, c.status, cr.decision,
+                    c.extraction_id,
                     r.population, r.baseline_nutrient_status, r.ingredient_name,
                     r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint
                 FROM claims c
@@ -547,11 +550,12 @@ class ReviewStore:
                 """,
                 (condition_code, topic_id),
             ).fetchall()
-            eligible = [
-                row
-                for row in eligible
-                if scope_key in _profile_scopes(picots, condition_code, dict(row))
-            ]
+            scoped_eligible = []
+            for row in eligible:
+                item = _augment_profile_population(connection, dict(row))
+                if scope_key in _profile_scopes(picots, condition_code, item):
+                    scoped_eligible.append(item)
+            eligible = scoped_eligible
             if any(
                 row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
             ):
@@ -1024,6 +1028,7 @@ class ReviewStore:
                 rows = connection.execute(
                     """
                     SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
+                        c.extraction_id,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
                         r.study_id, r.population, r.baseline_nutrient_status, r.ingredient_name,
                         r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,
@@ -1057,7 +1062,7 @@ class ReviewStore:
                 ).fetchall()
                 groups: dict[str, dict[str, object]] = {}
                 for row in rows:
-                    item = dict(row)
+                    item = _augment_profile_population(connection, dict(row))
                     item["risk_of_bias"] = json.loads(item.pop("risk_of_bias_json"))
                     for scope_key, scope_label in _profile_scopes(
                         base["picots"], str(topic["condition_code"]), item
@@ -1195,7 +1200,8 @@ class ReviewStore:
                     claim_rows = (
                         connection.execute(
                             f"""
-                            SELECT DISTINCT cr.claim_id, r.population, r.ingredient_name,
+                            SELECT DISTINCT cr.claim_id, c.extraction_id, r.population,
+                                r.ingredient_name, r.ingredient_form, r.dose,
                                 r.outcome, r.timepoint, topic.picots_json
                             FROM claim_reviews cr
                             JOIN claims c ON c.id = cr.claim_id
@@ -1230,7 +1236,7 @@ class ReviewStore:
                             in _profile_scopes(
                                 json.loads(row["picots_json"]),
                                 str(condition["code"]),
-                                dict(row),
+                                _augment_profile_population(connection, dict(row)),
                             )
                         }
                     )
@@ -1905,6 +1911,9 @@ def _picots_text_matches(
             "diet",
             "dietary",
             "food",
+            "ferric",
+            "ferrous",
+            "iron",
             "nutrient",
             "protein",
             "vitamin",
@@ -1982,6 +1991,10 @@ def _normalize_picots_text(value: str) -> str:
         "ckd": "chronic kidney disease",
         "患者": "patients",
         "病人": "patients",
+        "缺铁性贫血": "iron deficiency anemia",
+        "缺铁": "iron deficiency",
+        "贫血": "anemia",
+        "ida": "iron deficiency anemia",
         "大麦嫩叶": "barley green",
         "大麦": "barley",
         "电解碱性水": "electrolyzed alkaline water",
@@ -1991,6 +2004,8 @@ def _normalize_picots_text(value: str) -> str:
         "蛋白质": "protein",
         "营养素": "nutrient",
         "食物": "food",
+        "口服": "oral",
+        "铁": "iron",
         "饮用": "drink",
         "服用": "consume",
         "摄入": "intake",
@@ -2263,6 +2278,32 @@ def _topic_outcome_components(value: str) -> tuple[str, ...]:
         if item.strip(" .")
     )
     return components or (value.strip(),)
+
+
+def _augment_profile_population(connection, row: dict[str, object]) -> dict[str, object]:
+    """Include the paper-level population when validating a result's PICOTS scope."""
+
+    extraction_id = str(row.get("extraction_id") or "").strip()
+    if not extraction_id:
+        return row
+    stored = connection.execute(
+        "SELECT extraction_json FROM paper_extractions WHERE id = ?", (extraction_id,)
+    ).fetchone()
+    if stored is None:
+        return row
+    try:
+        payload = json.loads(stored["extraction_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return row
+    population = payload.get("population") if isinstance(payload, dict) else None
+    if not isinstance(population, list):
+        return row
+    extracted = " ".join(str(value).strip() for value in population if str(value).strip())
+    if extracted:
+        row["population"] = " ".join(
+            value for value in (str(row.get("population") or "").strip(), extracted) if value
+        )
+    return row
 
 
 def _generic_scope_key(value: str) -> str:

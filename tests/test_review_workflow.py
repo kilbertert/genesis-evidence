@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore, ReviewStore
 from genesis_evidence.core.store.review import (
+    _augment_profile_population,
     _critical_issue,
     _picots_text_matches,
     _profile_scopes,
@@ -663,6 +664,15 @@ def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap
     assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
 
 
+def test_picots_matches_explicit_oral_iron_nutrition_intervention() -> None:
+    topic = "Oral iron supplementation or iron-focused nutrition intervention"
+
+    assert _picots_text_matches(topic, "oral ferric maltol 30 mg twice daily")
+    assert _picots_text_matches(topic, "口服麦芽酚铁 30 mg 每日两次")
+    assert _picots_text_matches(topic, "iron-fortified food with vitamin C")
+    assert not _picots_text_matches(topic, "a supervised exercise programme")
+
+
 def test_picots_matches_bilingual_dietary_comparators() -> None:
     topic = "Usual diet, no intervention, placebo, or an alternative diet"
 
@@ -923,6 +933,53 @@ def test_profile_scope_matches_mna_risk_and_branded_nutrition_product() -> None:
     assert _profile_scopes(picots, "COND_MALNUTRITION_RISK", dimensions) == {
         "metric:bmi": "体重指数"
     }
+
+
+def test_profile_scope_uses_paper_population_context_for_iron_claim(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    extraction_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, created_at) "
+            "VALUES ('paper', 'Iron study', '2026-08-20T00:00:00Z')"
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extractions(
+                id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json, created_at
+            ) VALUES (?, 'paper', 'model-a', 'run-a', ?, 'model-b', 'run-b', ?,
+                'checker', 'check-run', 'consistent', '{}', '2026-08-20T00:00:00Z')
+            """,
+            (
+                extraction_id,
+                json.dumps({"population": ["年龄 18–75 岁", "缺铁性贫血成人患者"]}),
+                json.dumps({"population": ["年龄 18–75 岁", "缺铁性贫血成人患者"]}),
+            ),
+        )
+    with database.connect() as connection:
+        row = _augment_profile_population(
+            connection, {"extraction_id": extraction_id, "population": "HFREF 患者"}
+        )
+    assert _profile_scopes(
+        {
+            "population": "Adults aged 18 and older with iron deficiency or iron deficiency anemia",
+            "intervention_or_exposure": (
+                "Oral iron supplementation or iron-focused nutrition intervention"
+            ),
+            "outcomes": "Hemoglobin, ferritin, MCV, and transferrin saturation",
+            "timing": "At least 4 weeks",
+        },
+        "COND_ANEMIA_PATTERN",
+        {
+            **row,
+            "ingredient_name": "oral ferrous sulphate",
+            "outcome": "hemoglobin",
+            "timepoint": "12 weeks",
+        },
+    ) == {"metric:hemoglobin": "血红蛋白"}
 
 
 def test_publishing_card_only_stales_the_same_outcome_scope(tmp_path, monkeypatch) -> None:
