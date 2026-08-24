@@ -6,6 +6,7 @@ import pytest
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore
 from genesis_evidence.literature.ai_extraction import (
+    CheckedPaperExtraction,
     ConsistencyReport,
     PaperClaimCandidate,
     PaperExtraction,
@@ -299,6 +300,64 @@ def test_collection_queues_full_text_then_worker_persists_candidate_claims(tmp_p
         job = connection.execute("SELECT * FROM paper_extraction_jobs").fetchone()
         assert job["status"] == "completed"
         assert job["check_run_id"] == "check-3"
+
+
+def test_ai_extraction_persists_one_result_per_claim(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/paper")
+    extraction, _ = FakeAnalyzer().extract(_record(), {})
+    base_claim = extraction.claims[0]
+    extraction = extraction.model_copy(
+        update={
+            "claims": [
+                base_claim.model_copy(
+                    update={
+                        "text": "Protein increased serum albumin.",
+                        "outcome": "Serum albumin",
+                        "effect_estimate": "Serum albumin increased",
+                    }
+                ),
+                base_claim.model_copy(
+                    update={
+                        "text": "Protein increased serum prealbumin.",
+                        "outcome": "Serum prealbumin",
+                        "effect_estimate": "Serum prealbumin increased",
+                    }
+                ),
+            ]
+        }
+    )
+
+    assert store.save_ai_extraction(
+        paper_id,
+        CheckedPaperExtraction(
+            model="model-a",
+            extraction_run_id="run-a",
+            extraction=extraction,
+            second_model="model-b",
+            second_run_id="run-b",
+            second_extraction=extraction,
+            check_model="checker",
+            check_run_id="run-check",
+            consistency=ConsistencyReport(verdict="consistent", issues=[]),
+        ),
+    ) == 2
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT c.candidate_text, c.result_id, r.outcome
+            FROM claims c JOIN results r ON r.id = c.result_id
+            ORDER BY c.candidate_text
+            """
+        ).fetchall()
+    assert len({row["result_id"] for row in rows}) == 2
+    assert {row["candidate_text"]: row["outcome"] for row in rows} == {
+        "Protein increased serum albumin.": "Serum albumin",
+        "Protein increased serum prealbumin.": "Serum prealbumin",
+    }
 
 
 def test_worker_keeps_completed_extraction_when_automatic_review_fails(tmp_path) -> None:
