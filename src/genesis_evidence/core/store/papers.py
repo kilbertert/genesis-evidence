@@ -1539,17 +1539,14 @@ class PaperStore:
                 )
             inserted = 0
             for claim in checked.extraction.claims:
-                result_id = str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        f"{extraction_id}\n{claim.locator}\n{claim.evidence}\nresult",
-                    )
-                )
                 claim_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         f"{extraction_id}\n{claim.locator}\n{claim.evidence}\n{claim.text}",
                     )
+                )
+                result_id = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"{extraction_id}\nresult\n{claim_id}")
                 )
                 connection.execute(
                     """

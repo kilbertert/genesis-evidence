@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -248,4 +249,256 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             )
         )
         """
+    )
+    _migrate_legacy_shared_results(connection)
+
+
+def _migrate_legacy_shared_results(connection: sqlite3.Connection) -> None:
+    """Split Results written before Result identity included the Claim identity."""
+
+    groups = connection.execute(
+        """
+        SELECT result_id
+        FROM claims
+        WHERE result_id IS NOT NULL
+        GROUP BY result_id
+        HAVING count(*) > 1
+        ORDER BY result_id
+        """
+    ).fetchall()
+    for group in groups:
+        old_result_id = str(group["result_id"])
+        claims = connection.execute(
+            """
+            SELECT
+                c.*,
+                pe.extraction_json,
+                r.study_id AS legacy_study_id,
+                r.paper_id AS legacy_paper_id,
+                r.extraction_id AS legacy_extraction_id,
+                r.status AS legacy_status,
+                r.created_at AS legacy_created_at
+            FROM claims c
+            JOIN paper_extractions pe ON pe.id = c.extraction_id
+            JOIN results r ON r.id = c.result_id
+            WHERE c.result_id = ?
+            ORDER BY c.id
+            """,
+            (old_result_id,),
+        ).fetchall()
+        try:
+            result_rows = [
+                _legacy_result_row(claim, old_result_id) for claim in claims
+            ]
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            _record_migration_event_once(
+                connection,
+                entity_id=old_result_id,
+                action="legacy_result_identity_split_skipped",
+                detail={"reason": str(exc)},
+            )
+            continue
+
+        new_ids = [row["id"] for row in result_rows]
+        if len(set(new_ids)) != len(new_ids):
+            _record_migration_event_once(
+                connection,
+                entity_id=old_result_id,
+                action="legacy_result_identity_split_skipped",
+                detail={"reason": "claim identities are not unique"},
+            )
+            continue
+        if connection.execute(
+            f"SELECT 1 FROM results WHERE id IN ({','.join('?' for _ in new_ids)}) LIMIT 1",
+            new_ids,
+        ).fetchone():
+            _record_migration_event_once(
+                connection,
+                entity_id=old_result_id,
+                action="legacy_result_identity_split_skipped",
+                detail={"reason": "target Result identity already exists"},
+            )
+            continue
+
+        profile_refs = connection.execute(
+            """
+            SELECT profile_id, interpretation
+            FROM evidence_profile_results
+            WHERE result_id = ?
+            """,
+            (old_result_id,),
+        ).fetchall()
+        profile_targets: dict[tuple[str, str], str] = {}
+        for profile_ref in profile_refs:
+            profile_id = str(profile_ref["profile_id"])
+            selected_claim_ids = {
+                row["claim_id"]
+                for row in connection.execute(
+                    """
+                    SELECT cc.claim_id
+                    FROM card_claims cc
+                    JOIN knowledge_cards kc ON kc.id = cc.card_id
+                    WHERE kc.evidence_profile_id = ?
+                      AND cc.claim_id IN ({})
+                    """.format(",".join("?" for _ in claims)),
+                    [profile_id, *(claim["id"] for claim in claims)],
+                ).fetchall()
+            }
+            for row in result_rows:
+                if not selected_claim_ids or row["claim_id"] in selected_claim_ids:
+                    profile_targets[(profile_id, row["id"])] = str(
+                        profile_ref["interpretation"]
+                    )
+
+        stale_cards = connection.execute(
+            """
+            UPDATE knowledge_cards SET status = 'stale'
+            WHERE status IN ('draft', 'in_review', 'approved', 'published')
+              AND id IN (
+                  SELECT card_id FROM card_claims
+                  WHERE claim_id IN ({})
+              )
+            """.format(",".join("?" for _ in claims)),
+            [claim["id"] for claim in claims],
+        ).rowcount
+
+        for row in result_rows:
+            connection.execute(
+                """
+                INSERT INTO results(
+                    id, study_id, paper_id, extraction_id, population,
+                    baseline_nutrient_status, ingredient_name, ingredient_form,
+                    dose, comparator, outcome, timepoint, effect_estimate,
+                    statistical_details, evidence_text, locator, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["study_id"],
+                    row["paper_id"],
+                    row["extraction_id"],
+                    row["population"],
+                    row["baseline_nutrient_status"],
+                    row["ingredient_name"],
+                    row["ingredient_form"],
+                    row["dose"],
+                    row["comparator"],
+                    row["outcome"],
+                    row["timepoint"],
+                    row["effect_estimate"],
+                    row["statistical_details"],
+                    row["evidence_text"],
+                    row["locator"],
+                    row["status"],
+                    row["created_at"],
+                ),
+            )
+        connection.execute(
+            "DELETE FROM evidence_profile_results WHERE result_id = ?", (old_result_id,)
+        )
+        connection.executemany(
+            """
+            INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (profile_id, result_id, interpretation)
+                for (profile_id, result_id), interpretation in profile_targets.items()
+            ],
+        )
+        for row in result_rows:
+            connection.execute(
+                "UPDATE claims SET result_id = ? WHERE id = ?",
+                (row["id"], row["claim_id"]),
+            )
+        connection.execute("DELETE FROM results WHERE id = ?", (old_result_id,))
+        _record_migration_event_once(
+            connection,
+            entity_id=old_result_id,
+            action="legacy_result_identity_split",
+            detail={
+                "claim_ids": [row["claim_id"] for row in result_rows],
+                "new_result_ids": new_ids,
+                "profile_result_count": len(profile_targets),
+                "stale_cards": stale_cards,
+            },
+        )
+
+
+def _legacy_result_row(claim: sqlite3.Row, old_result_id: str) -> dict[str, str]:
+    payload = json.loads(str(claim["extraction_json"]))
+    candidates = payload.get("claims")
+    if not isinstance(candidates, list):
+        raise ValueError(f"Result {old_result_id} extraction has no claims")
+    matches = [
+        item
+        for item in candidates
+        if isinstance(item, dict)
+        and item.get("text") == claim["candidate_text"]
+        and item.get("evidence") == claim["evidence_text"]
+        and item.get("locator") == claim["locator"]
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Result {old_result_id} claim {claim['id']} has {len(matches)} source matches"
+        )
+    source = matches[0]
+    fields = (
+        "population",
+        "baseline_nutrient_status",
+        "ingredient_name",
+        "ingredient_form",
+        "dose",
+        "comparator",
+        "outcome",
+        "timepoint",
+        "effect_estimate",
+        "statistical_details",
+    )
+    values = {field: source.get(field) for field in fields}
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        raise ValueError(f"Result {old_result_id} claim {claim['id']} has incomplete source fields")
+    claim_id = str(claim["id"])
+    result_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{claim['extraction_id']}\nresult\n{claim_id}"))
+    return {
+        "id": result_id,
+        "claim_id": claim_id,
+        "study_id": _required_legacy_text(claim, "legacy_study_id", old_result_id),
+        "paper_id": _required_legacy_text(claim, "legacy_paper_id", old_result_id),
+        "extraction_id": _required_legacy_text(claim, "legacy_extraction_id", old_result_id),
+        **{field: str(values[field]) for field in fields},
+        "evidence_text": str(claim["evidence_text"]),
+        "locator": str(claim["locator"]),
+        "status": _required_legacy_text(claim, "legacy_status", old_result_id),
+        "created_at": _required_legacy_text(claim, "legacy_created_at", old_result_id),
+    }
+
+
+def _required_legacy_text(
+    claim: sqlite3.Row, field: str, old_result_id: str
+) -> str:
+    value = claim[field]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Result {old_result_id} has no {field}")
+    return value
+
+
+def _record_migration_event_once(
+    connection: sqlite3.Connection,
+    *,
+    entity_id: str,
+    action: str,
+    detail: dict[str, object],
+) -> None:
+    if connection.execute(
+        "SELECT 1 FROM audit_events WHERE entity_type = 'result' AND entity_id = ? AND action = ?",
+        (entity_id, action),
+    ).fetchone():
+        return
+    connection.execute(
+        """
+        INSERT INTO audit_events(entity_type, entity_id, action, actor, detail_json, created_at)
+        VALUES ('result', ?, ?, 'system:migration', ?, datetime('now'))
+        """,
+        (entity_id, action, json.dumps(detail, ensure_ascii=False, sort_keys=True)),
     )
