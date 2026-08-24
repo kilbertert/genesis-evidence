@@ -296,10 +296,17 @@ class EvidenceReviewService:
             (collection.get("screening_suggestion") or {}).get("stage")
             for collection in item["collections"]
         )
+        has_new_included_screening = any(
+            collection.get("full_text_decision") == "included"
+            and str(collection.get("full_text_reviewer") or "").startswith("ai:")
+            and str(collection.get("full_text_reviewed_at") or "")
+            > str(admission.get("reviewed_at") or "")
+            for collection in item["collections"]
+        )
         reopened_screening_rejection = (
             admission.get("status") == "rejected"
             and str(admission.get("reviewer") or "").startswith("ai:")
-            and has_screening_reassessment
+            and (has_screening_reassessment or has_new_included_screening)
         )
         if admission.get("status") == "rejected" and not str(
             admission.get("reviewer") or ""

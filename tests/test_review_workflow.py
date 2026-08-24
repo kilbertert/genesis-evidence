@@ -422,6 +422,41 @@ def test_ai_reopens_its_own_screening_rejection_after_picots_update(tmp_path) ->
     assert tuple(admission) == ("internally_admitted", "ai:checker")
 
 
+def test_ai_reopens_when_a_new_topic_adds_an_included_record(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included', "
+            "full_text_decision = 'excluded', primary_exclusion_reason = 'wrong_population', "
+            "title_abstract_reviewer = 'ai:old-model', full_text_reviewer = 'ai:old-model' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute(
+            "UPDATE paper_admissions SET status = 'rejected', reviewer = 'ai:old-model' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+    new_topic_id = _complete_topic(database, paper_id)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_reviewer = 'ai:new-topic', "
+            "full_text_reviewer = 'ai:new-topic' WHERE paper_id = ? AND run_id IN ("
+            "SELECT id FROM collection_runs WHERE topic_id = ?)",
+            (paper_id, new_topic_id),
+        )
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["decision"] == "internally_admitted"
+    with database.connect() as connection:
+        admission = connection.execute(
+            "SELECT status, reviewer FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+    assert tuple(admission) == ("internally_admitted", "ai:checker")
+
+
 def test_ai_review_guidance_drives_screening_and_downgrades_material_differences(tmp_path) -> None:
     database, _ = _service(tmp_path)
     paper_id, claim_id = _review_case(database, consistency="needs_review")
