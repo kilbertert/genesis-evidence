@@ -665,6 +665,31 @@ def test_picots_matches_defined_nutrition_exposures_without_literal_word_overlap
     assert not _picots_text_matches(topic, "An underwater exercise and fatigue programme")
 
 
+def test_profile_scope_matches_defined_nutrition_component_concentrate() -> None:
+    picots = {
+        "population": "Adults aged 18 and older with prediabetes",
+        "intervention_or_exposure": (
+            "Dietary or lifestyle intervention with a defined nutrition component"
+        ),
+        "comparator": "Usual care, minimal intervention, or an alternative dietary intervention",
+        "outcomes": "Fasting glucose and HbA1c",
+        "timing": "At least 12 weeks",
+    }
+    dimensions = {
+        "population": "52 名确诊糖尿病前期成人",
+        "ingredient_name": "特定角豆液体浓缩物",
+        "ingredient_form": "含角豆荚中天然存在的肌醇，标准化肌醇含量",
+        "dose": "每日 6.66 g，连续 90 天",
+        "comparator": "安慰剂",
+        "outcome": "血清 HbA1c 变化",
+        "timepoint": "90 天",
+    }
+
+    assert _profile_scopes(picots, "COND_PREDIABETES", dimensions) == {
+        "metric:hba1c": "糖化血红蛋白"
+    }
+
+
 def test_picots_matches_explicit_oral_iron_nutrition_intervention() -> None:
     topic = "Oral iron supplementation or iron-focused nutrition intervention"
 
