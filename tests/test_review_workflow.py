@@ -856,14 +856,35 @@ def test_profile_scope_uses_canonical_metric_and_ignores_ratio_outcomes() -> Non
     }
     dimensions["outcome"] = "Change in TC/HDL-C ratio and non-HDL-C"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
-
     picots["outcomes"] += ", non-HDL cholesterol"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {
         "metric:non_hdl_c": "非高密度脂蛋白胆固醇"
     }
-
     dimensions["outcome"] = "Total body fat (%)"
     assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {}
+
+
+def test_profile_scope_normalizes_chinese_oil_intervention_terms() -> None:
+    picots = {
+        "population": "Adults aged 18 and older",
+        "intervention_or_exposure": "Dietary oils and solid fats",
+        "comparator": "Alternative dietary oil or solid fat",
+        "outcomes": "LDL cholesterol, HDL cholesterol, triglycerides, or total cholesterol",
+        "timing": "At least 3 weeks",
+    }
+    dimensions = {
+        "population": "健康成人，完成研究的41人",
+        "ingredient_name": "中链甘油三酯油和黄油",
+        "ingredient_form": "黄油加MCT油，加入咖啡",
+        "dose": "持续12周",
+        "comparator": "咖啡加奶精",
+        "outcome": "甘油三酯",
+        "timepoint": "12周",
+    }
+
+    assert _profile_scopes(picots, "COND_DYSLIPIDEMIA", dimensions) == {
+        "metric:triglycerides": "甘油三酯"
+    }
 
 
 def test_profile_scope_uses_condition_scope_for_symptom_topic_without_metric() -> None:
