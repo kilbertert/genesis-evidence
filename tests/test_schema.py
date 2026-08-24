@@ -208,3 +208,169 @@ def test_legacy_claim_grade_is_archived_and_published_card_is_staled(tmp_path) -
     assert card["status"] == "stale"
     assert len(events) == 1
     assert json.loads(events[0]["detail_json"])["grade"] == "moderate"
+
+
+def test_initialization_splits_legacy_shared_results_and_stales_cards(tmp_path) -> None:
+    path = tmp_path / "legacy-shared-result.sqlite3"
+    database = Database(path)
+    database.initialize()
+    extraction = {
+        "claims": [
+            {
+                "text": "Nutrition increased serum albumin.",
+                "evidence": "Albumin and prealbumin increased after nutrition support.",
+                "locator": "Results",
+                "population": "Adults receiving dialysis",
+                "baseline_nutrient_status": "Protein-energy wasting",
+                "ingredient_name": "Oral nutrition supplement",
+                "ingredient_form": "Powder",
+                "dose": "Daily",
+                "comparator": "Usual care",
+                "outcome": "Serum albumin",
+                "timepoint": "3 months",
+                "effect_estimate": "Increased",
+                "statistical_details": "p < 0.001",
+            },
+            {
+                "text": "Nutrition increased serum prealbumin.",
+                "evidence": "Albumin and prealbumin increased after nutrition support.",
+                "locator": "Results",
+                "population": "Adults receiving dialysis",
+                "baseline_nutrient_status": "Protein-energy wasting",
+                "ingredient_name": "Oral nutrition supplement",
+                "ingredient_form": "Powder",
+                "dose": "Daily",
+                "comparator": "Usual care",
+                "outcome": "Serum prealbumin",
+                "timepoint": "3 months",
+                "effect_estimate": "Increased",
+                "statistical_details": "p < 0.001",
+            },
+        ]
+    }
+    with database.transaction() as connection:
+        connection.executescript(
+            """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES (
+                'topic', 'malnutrition', '1', 'COND_MALNUTRITION_RISK', 'locked',
+                'Does nutrition support improve biomarkers?', '{}', '[]', '[]', '[]', '[]',
+                '2026-08-01', 'reviewer', '2026-08-01T00:00:00Z',
+                'reviewer', '2026-08-01T00:00:00Z'
+            );
+            INSERT INTO papers(id, title, publication_status, integrity_status, created_at)
+            VALUES ('paper', 'Nutrition trial', 'formal', 'clear', '2026-08-01T00:00:00Z');
+            INSERT INTO studies(id, study_design, created_at)
+            VALUES ('study', 'randomized_controlled_trial', '2026-08-01T00:00:00Z');
+            INSERT INTO study_publications(study_id, paper_id) VALUES ('study', 'paper');
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO paper_extractions(
+                id, paper_id, model, extraction_run_id, extraction_json,
+                second_model, second_run_id, second_extraction_json,
+                check_model, check_run_id, consistency_status, consistency_json, created_at
+            ) VALUES (
+                'extraction', 'paper', 'model-a', 'run-a', ?, 'model-b', 'run-b', ?,
+                'checker', 'run-check', 'consistent', '{}', '2026-08-01T00:00:00Z'
+            )
+            """,
+            (json.dumps(extraction), json.dumps(extraction)),
+        )
+        connection.executescript(
+            """
+            INSERT INTO results(
+                id, study_id, paper_id, extraction_id, population,
+                baseline_nutrient_status, ingredient_name, ingredient_form,
+                dose, comparator, outcome, timepoint, effect_estimate,
+                statistical_details, evidence_text, locator, status, created_at
+            ) VALUES (
+                'shared-result', 'study', 'paper', 'extraction', 'Adults receiving dialysis',
+                'Protein-energy wasting', 'Oral nutrition supplement', 'Powder', 'Daily',
+                'Usual care', 'Serum albumin', '3 months', 'Increased', 'p < 0.001',
+                'Albumin and prealbumin increased after nutrition support.', 'Results',
+                'candidate', '2026-08-01T00:00:00Z'
+            );
+            INSERT INTO claims(
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_claim_type, candidate_study_design,
+                status, created_at
+            ) VALUES
+                ('claim-albumin', 'paper', 'extraction', 'shared-result',
+                    'Nutrition increased serum albumin.',
+                    'Albumin and prealbumin increased after nutrition support.', 'Results',
+                    'intervention_effect', 'randomized_controlled_trial', 'reviewed',
+                    '2026-08-01T00:00:00Z'),
+                ('claim-prealbumin', 'paper', 'extraction', 'shared-result',
+                    'Nutrition increased serum prealbumin.',
+                    'Albumin and prealbumin increased after nutrition support.', 'Results',
+                    'intervention_effect', 'randomized_controlled_trial', 'reviewed',
+                    '2026-08-01T00:00:00Z');
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, scope_key, version, ingredient_name,
+                ingredient_form, population, baseline_nutrient_status, dose, comparator,
+                outcome, timepoint, estimate_target, evidence_body_complete, certainty,
+                certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (
+                'profile', 'topic', 'COND_MALNUTRITION_RISK', 'metric:albumin', '1.0.0',
+                'Oral nutrition supplement', 'Powder', 'Adults receiving dialysis',
+                'Protein-energy wasting', 'Daily', 'Usual care', 'Serum albumin', '3 months',
+                'Change from baseline', 1, 'low', 'Single trial', '2026-08-01', 'reviewer',
+                '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+            );
+            INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
+            VALUES ('profile', 'shared-result', 'supports');
+            INSERT INTO knowledge_cards(
+                id, condition_code, version, status, grade, evidence_profile_id, reviewer,
+                reviewed_at, published_at, patient_visible_body, created_at
+            ) VALUES (
+                'card', 'COND_MALNUTRITION_RISK', '1.0.0', 'published', 'low', 'profile',
+                'reviewer', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z',
+                'Reviewed context.', '2026-08-01T00:00:00Z'
+            );
+            INSERT INTO card_claims(card_id, claim_id, evidence_text, locator) VALUES
+                ('card', 'claim-albumin',
+                    'Albumin and prealbumin increased after nutrition support.', 'Results');
+            """
+        )
+
+    database.initialize()
+    database.initialize()
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT c.id, c.result_id, r.study_id, r.outcome, r.status, r.created_at
+            FROM claims c JOIN results r ON r.id = c.result_id ORDER BY c.id
+            """
+        ).fetchall()
+        profile_results = connection.execute(
+            "SELECT count(*) FROM evidence_profile_results WHERE profile_id = 'profile'"
+        ).fetchone()[0]
+        card_status = connection.execute(
+            "SELECT status FROM knowledge_cards WHERE id = 'card'"
+        ).fetchone()[0]
+        old_result = connection.execute(
+            "SELECT count(*) FROM results WHERE id = 'shared-result'"
+        ).fetchone()[0]
+        events = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'legacy_result_identity_split'"
+        ).fetchone()[0]
+
+    assert len({row["result_id"] for row in rows}) == 2
+    assert {row["id"]: row["outcome"] for row in rows} == {
+        "claim-albumin": "Serum albumin",
+        "claim-prealbumin": "Serum prealbumin",
+    }
+    assert {row["study_id"] for row in rows} == {"study"}
+    assert {row["status"] for row in rows} == {"candidate"}
+    assert {row["created_at"] for row in rows} == {"2026-08-01T00:00:00Z"}
+    assert profile_results == 1
+    assert card_status == "stale"
+    assert old_result == 0
+    assert events == 1
