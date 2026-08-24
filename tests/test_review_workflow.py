@@ -1347,6 +1347,49 @@ def test_profile_eligibility_uses_only_each_papers_latest_extraction(tmp_path) -
     assert card_id
 
 
+def test_profile_eligibility_ignores_a_finally_rejected_matching_result(tmp_path) -> None:
+    database, service = _service(tmp_path)
+    paper_id, approved_claim_id = _review_case(database)
+    rejected_claim_id = str(uuid.uuid4())
+    _admit(service, paper_id)
+    service.review_claim(
+        approved_claim_id, reviewer="reviewer-1", review=_approved_review()
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO claims(
+                id, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_claim_type,
+                candidate_study_design, created_at
+            ) SELECT ?, paper_id, extraction_id, result_id, candidate_text,
+                evidence_text, locator, candidate_claim_type,
+                candidate_study_design, '2026-08-12T00:00:00Z'
+            FROM claims WHERE id = ?
+            """,
+            (rejected_claim_id, approved_claim_id),
+        )
+    service.review_claim(
+        rejected_claim_id,
+        reviewer="source-ai:checker",
+        review=ClaimReviewInput(decision="rejected"),
+    )
+    with database.connect() as connection:
+        topic_id = connection.execute("SELECT id FROM evidence_topics").fetchone()[0]
+
+    card_id = service.create_card_draft(
+        topic_id=topic_id,
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version="1.0.0",
+        claim_ids=[approved_claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
+        profile=_profile(approved_claim_id),
+    )
+
+    assert card_id
+
+
 def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None:
     database, service = _service(tmp_path)
     paper_id, claim_id = _review_case(database)

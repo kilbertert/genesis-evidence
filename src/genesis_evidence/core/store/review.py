@@ -557,9 +557,12 @@ class ReviewStore:
                     scoped_eligible.append(item)
             eligible = scoped_eligible
             if any(
-                row["status"] != "reviewed" or row["decision"] != "approved" for row in eligible
+                (row["status"], row["decision"])
+                not in {("reviewed", "approved"), ("rejected", "rejected")}
+                for row in eligible
             ):
                 raise ValueError("all eligible results must be reviewed before profile creation")
+            eligible = [row for row in eligible if row["decision"] == "approved"]
             if {row["id"] for row in eligible} != set(claim_ids):
                 raise ValueError("evidence profile must include every reviewed eligible result")
             interpretations = profile["interpretations"]
