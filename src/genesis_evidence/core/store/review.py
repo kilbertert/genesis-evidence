@@ -1904,6 +1904,7 @@ def _picots_text_matches(
             "defined food",
             "nutrient intervention",
             "nutrition intervention",
+            "nutrition component",
         )
     )
     if nutrition_topic:
@@ -2003,6 +2004,7 @@ def _normalize_picots_text(value: str) -> str:
         "异黄酮": "isoflavone",
         "蛋白质": "protein",
         "营养素": "nutrient",
+        "肌醇": "inositol supplement",
         "食物": "food",
         "口服": "oral",
         "铁": "iron",
