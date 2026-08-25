@@ -217,3 +217,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AFK runner (package.json) dependencies
+node_modules/
