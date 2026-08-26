@@ -1,11 +1,12 @@
 name: Agent Review
 
 on:
-  # pull_request_target rather than pull_request: the standard pull_request
-  # trigger depends on a generated merge commit, which GitHub fails to
-  # produce when the PR is out-of-date or conflicting. pull_request_target
-  # runs in the base context and does not need the merge commit, so the
-  # labeled event fires reliably.
+  # pull_request_target normally fires the labeled event reliably, but on
+  # this setup label-adds from API tokens were not dispatching it. Keep both
+  # triggers; pull_request adds the labeled event, pull_request_target covers
+  # the out-of-date/merge-commit cases.
+  pull_request:
+    types: [labeled]
   pull_request_target:
     types: [labeled]
 
