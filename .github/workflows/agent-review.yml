@@ -1,10 +1,18 @@
 name: Agent Review
 
 on:
-  # pull_request_target normally fires the labeled event reliably, but on
-  # this setup label-adds from API tokens were not dispatching it. Keep both
-  # triggers; pull_request adds the labeled event, pull_request_target covers
-  # the out-of-date/merge-commit cases.
+  # Label-adds from API tokens were not dispatching the labeled event on this
+  # setup, so workflow_dispatch is the reliable trigger (used by the implement
+  # chain's Request-review step and for manual runs). pull_request/_target
+  # labeled remain for UI-driven label adds.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+      branch:
+        description: Branch to review
+        required: true
   pull_request:
     types: [labeled]
   pull_request_target:
@@ -23,8 +31,8 @@ jobs:
       pull-requests: write
 
     env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+      BRANCH: ${{ inputs.branch || github.event.pull_request.head.ref }}
       BRANCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
