@@ -118,7 +118,11 @@ def recommend(
             except ValueError as exc:
                 raise ValueError(f"{label}: {exc}") from exc
         evidence_links = tuple(
-            dict.fromkeys(str(link) for link in product.get("evidence_links", ()))
+            dict.fromkeys(
+                link_text
+                for link in product.get("evidence_links", ())
+                if (link_text := str(link).strip())
+            )
         )
         if not evidence_links:
             raise ValueError("recommendation requires evidence_links")

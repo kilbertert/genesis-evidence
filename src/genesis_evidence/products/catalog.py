@@ -219,7 +219,8 @@ class ProductCatalogStore:
             raise ValueError("condition_codes must contain known conditions")
         for field in ("reason", "safety_message", "disclaimer"):
             validate_patient_copy(str(recommendation.get(field) or ""))
-        if not recommendation.get("evidence_links"):
+        evidence_links = recommendation.get("evidence_links") or ()
+        if not evidence_links or any(not str(link).strip() for link in evidence_links):
             raise ValueError("recommendation requires evidence_links")
         now = _now()
         with self.database.transaction() as connection:

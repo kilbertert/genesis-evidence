@@ -157,3 +157,12 @@ def test_recommend_rejects_forbidden_patient_copy() -> None:
             [_observation()],
             products=(_product(reason="可治愈高血脂"),),
         )
+
+
+def test_recommend_rejects_empty_evidence_links() -> None:
+    with pytest.raises(ValueError, match="evidence_links"):
+        recommend(
+            "COND_DYSLIPIDEMIA",
+            [_observation()],
+            products=(_product(evidence_links=[" "]),),
+        )
