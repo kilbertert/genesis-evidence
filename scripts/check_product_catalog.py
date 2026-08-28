@@ -28,7 +28,7 @@ FORBIDDEN_RUNTIME_LEGACY_TOKENS = (
 
 def check_database(database: Database) -> dict[str, int | str]:
     summary = database_checks(database)
-    legacy_guard(database)
+    summary["legacy_guard"] = legacy_guard()
     return summary
 
 
@@ -51,9 +51,8 @@ def database_checks(database: Database) -> dict[str, int | str]:
     return summary
 
 
-def legacy_guard(database: Database) -> str:
+def legacy_guard() -> str:
     """Prevent runtime reads of the old genesis-health catalog by the active package."""
-    del database
     root = Path(__file__).parents[1] / "src" / "genesis_evidence"
     violations: list[str] = []
     for path in root.rglob("*"):
@@ -72,9 +71,7 @@ def legacy_guard(database: Database) -> str:
 
 def _summary(database: Database) -> dict[str, int | str]:
     store = ProductCatalogStore(database)
-    summary = store.summary()
-    summary["legacy_guard"] = "ok"
-    return summary
+    return store.summary()
 
 
 def build_fixture_database(directory: Path, target_path: Path) -> Database:

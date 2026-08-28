@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from genesis_evidence.core.store import Database
 from genesis_evidence.products.catalog import (
     LegacyProductCandidate,
     ProductCatalogStore,
     ProductSourceRecord,
+    _product_key,
 )
 
 SEED_NAMES = (
@@ -160,12 +163,64 @@ def test_seed_pool_mappings_carry_prd_audit_notes(tmp_path: Path) -> None:
     assert all(row["audit_note"].strip() for row in rows)
 
 
+def test_migration_rolls_back_when_seed_product_is_missing(tmp_path: Path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    candidates = _legacy_candidates()[1:]
+
+    with pytest.raises(ValueError, match="matched 0 candidates"):
+        ProductCatalogStore(database).migrate_from_legacy_rows(
+            candidates,
+            _legacy_sources(candidates),
+        )
+
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM product_candidates").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT count(*) FROM product_candidate_sources").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT count(*) FROM product_recommendations").fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT count(*) FROM product_review_audits").fetchone()[0]
+            == 0
+        )
+
+
+def test_publish_approved_seed_pool_is_idempotent(tmp_path: Path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    candidates = _legacy_candidates()
+    store = ProductCatalogStore(database)
+    store.migrate_from_legacy_rows(candidates, _legacy_sources(candidates))
+
+    first = _catalog_state(database)
+    summary = store.publish_approved_seed_pool()
+    second = _catalog_state(database)
+
+    assert summary.published_recommendation_count == 4
+    assert second == first
+
+
+def test_seed_product_matching_normalizes_fullwidth_and_spacing() -> None:
+    assert _product_key("郅臻堂植物甾醇咀嚼片") == "郅臻堂植物甾醇"
+    assert _product_key(" 天然维生素D3片 ") == "天然维生素D3"
+    assert _product_key("天然维生素Ｄ３片") == "天然维生素D3"
+    assert _product_key("复合骨营养餐") == "复合骨"
+
+
 def _catalog_state(database: Database) -> dict[str, object]:
     with database.connect() as connection:
         products = [
             dict(row)
             for row in connection.execute(
-                "SELECT id, canonical_key, name_zh, status FROM product_candidates ORDER BY id"
+                """
+                SELECT id, canonical_key, name_zh, status, created_at, updated_at
+                FROM product_candidates ORDER BY id
+                """
             ).fetchall()
         ]
         recommendations = [
@@ -173,7 +228,7 @@ def _catalog_state(database: Database) -> dict[str, object]:
             for row in connection.execute(
                 """
                 SELECT id, product_id, condition_codes_json, status, reviewer,
-                       audit_note, decision_ref
+                       reviewed_at, audit_note, decision_ref, created_at
                 FROM product_recommendations ORDER BY id
                 """
             ).fetchall()
@@ -182,7 +237,8 @@ def _catalog_state(database: Database) -> dict[str, object]:
             dict(row)
             for row in connection.execute(
                 """
-                SELECT id, product_id, condition_code, action, actor, note, decision_ref
+                SELECT id, product_id, condition_code, action, actor, note,
+                       decision_ref, created_at
                 FROM product_review_audits ORDER BY id
                 """
             ).fetchall()
