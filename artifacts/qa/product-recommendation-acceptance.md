@@ -50,6 +50,16 @@
 - Negative real report: `59` metrics parsed with `0` processing warnings; no high/low abnormal flags, `0` findings, `0` unmatched items, and no product recommendation. Normal or insufficiently actionable rows were retained as explicit skipped outcomes.
 - The first positive confirmation intentionally omitted the reference excerpt and returned `missing_source_evidence`; the service rejected it before matching. A second upload with the complete excerpt passed without weakening the evidence gate.
 
+## Real Five-Image Acceptance
+
+- Case: `QA-E2E-003`; input was the five real JPEG report images in the local `体检报告/` directory. The zero-byte PDF beside them was intentionally excluded.
+- Upload completed at `2026-08-28T21:12:27+08:00`; extraction completed at `2026-08-28T21:14:17+08:00`; assessment completed at `2026-08-28T21:17:56+08:00`.
+- Five files produced `64` metrics with `0` processing warnings. The confirmation covered all `64` metrics with subject consistency `same`.
+- Three abnormal observations were retained with source evidence: total cholesterol `5.5 mmol/L` (reference `<5.2`), LDL-C `3.63 mmol/L` (reference `<2.60`), and Non-HDL `4.00 mmol/L` (reference `<3.40`).
+- The assessed result contained one condition, `COND_DYSLIPIDEMIA` (血脂异常), and returned the published product `郅臻堂®植物甾醇咀嚼片` with `product_status=available` and `unmatched=[]`. The remaining `61` normal or non-actionable observations were explicit `skipped` outcomes.
+- Automated API acceptance: `PASS`. Browser-level human acceptance remains intentionally pending after deployment; the temporary report and account are retained until that review completes.
+- No raw images, names, account credentials, access tokens, provider run IDs, or unredacted response logs are retained in this artifact.
+
 ## Notes
 
 - Full-repository HealthFlow Ruff currently reports pre-existing findings outside the changed files; this PR did not modify those paths.
