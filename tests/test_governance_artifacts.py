@@ -20,6 +20,7 @@ QA_CASE_IDS = {
     "QA-EMPTY-005",
     "QA-E2E-001",
     "QA-E2E-002",
+    "QA-E2E-003",
 }
 
 QA_SCALAR_FIELDS = (
