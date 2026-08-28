@@ -56,9 +56,10 @@ Rules:
 
 ## Rules
 
-- Profiles are server-global (`claude`, `claude-ark`, `psydo`,
-  `aliyun-deepseek`); pick via the `AFK_PROFILE` repo variable. No repo-side
-  credentials.
+- Profiles are server-global (`claude`, `claude-ark`, `agentrouter`, `psydo`,
+  `aliyun-deepseek`); pick via the `AFK_PROFILE` repo variable. `agentrouter`
+  uses server-managed Claude settings and supports `AFK_AGENTROUTER_SETTINGS`
+  as an operator override. No repo-side credentials.
 - The planner loop's merge phase pushes `main` + closes issues from the
   container (degrading to a PR on branch-protected repos). Single-issue
   `pnpm afk` never touches GitHub.
