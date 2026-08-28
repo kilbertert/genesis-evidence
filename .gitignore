@@ -39,6 +39,7 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
+mutants/
 .tox/
 .nox/
 .coverage
@@ -224,3 +225,7 @@ node_modules/
 # pnpm lockfiles (repo uses npm)
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# Personal archive (not project artifacts; user keeps these locally)
+体检报告/
+前端ui/

@@ -6,7 +6,6 @@ import base64
 import json
 import math
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,6 +13,8 @@ from typing import Literal, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from ..core.metrics import evidence_contains_value  # re-exported for legacy callers
 
 DEFAULT_REPORT_MODEL = "gpt-5.6-sol"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -474,14 +475,6 @@ def _validation_issues(item: ModelObservation) -> tuple[str, ...]:
     elif any(not evidence_contains_value(item.evidence, bound) for bound in bounds):
         issues.append("指标参考范围缺少原文佐证")
     return tuple(issues)
-
-
-def evidence_contains_value(evidence: str, value: float) -> bool:
-    normalized = unicodedata.normalize("NFKC", evidence)
-    for match in re.finditer(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])", normalized):
-        if math.isclose(float(match.group()), value, rel_tol=1e-9, abs_tol=1e-12):
-            return True
-    return False
 
 
 def _normalize_name(value: str) -> str:
