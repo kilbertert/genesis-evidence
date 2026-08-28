@@ -59,8 +59,7 @@ jobs:
           if [ -d .git ]; then
             git remote remove origin 2>/dev/null || true
             git remote add origin "https://github.com/${GH_REPO}.git"
-            # Stale-runner safety: discard local tracked changes + untracked
-            # leftovers so the checkout is idempotent across runs.
+            # Stale-runner safety: discard local tracked + untracked leftovers.
             git reset --hard HEAD 2>/dev/null || true
             git clean -fd 2>/dev/null || true
             git fetch --depth 1 origin main
@@ -79,7 +78,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run architecture-review
+      - name: Run architecture-review.ts
         env:
           AFK_PROFILE: ${{ vars.AFK_PROFILE || 'psydo' }}
           OUTPUT_DIR: ${{ runner.temp }}
