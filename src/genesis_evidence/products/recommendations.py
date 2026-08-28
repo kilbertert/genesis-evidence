@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 
@@ -171,8 +172,11 @@ def load_published_products(
     products: list[dict[str, object]] = []
     for row in rows:
         metadata = json.loads(row["recommendation_json"] or "{}")
-        if not metadata and str(row["name_zh"]) in SEED_RECOMMENDATION_COPY:
-            metadata = seed_recommendation_metadata(str(row["name_zh"]))
+        if not metadata:
+            try:
+                metadata = seed_recommendation_metadata(str(row["name_zh"]))
+            except ValueError:
+                continue
         if not metadata.get("nutrient"):
             continue
         products.append(
@@ -200,7 +204,15 @@ def load_published_products(
 def seed_recommendation_metadata(product_name: str) -> dict[str, object]:
     """Return deterministic, patient-safe metadata for an approved seed product."""
 
-    seed = SEED_RECOMMENDATION_COPY.get(product_name)
+    normalized_name = unicodedata.normalize("NFKC", product_name).replace(" ", "").strip()
+    seed = next(
+        (
+            copy
+            for seed_name, copy in SEED_RECOMMENDATION_COPY.items()
+            if normalized_name.startswith(seed_name)
+        ),
+        None,
+    )
     if seed is None:
         raise ValueError(f"no patient-safe metadata for seed product {product_name!r}")
     return {

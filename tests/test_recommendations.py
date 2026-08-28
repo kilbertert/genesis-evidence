@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from genesis_evidence.products.recommendations import recommend
+from genesis_evidence.core.store import Database
+from genesis_evidence.products.recommendations import load_published_products, recommend
 
 
 def _observation(**overrides) -> dict[str, object]:
@@ -166,3 +167,33 @@ def test_recommend_rejects_empty_evidence_links() -> None:
             [_observation()],
             products=(_product(evidence_links=[" "]),),
         )
+
+
+def test_old_published_seed_rows_receive_recommendation_metadata_after_upgrade(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO product_candidates(
+                id, canonical_key, name_zh, status, created_at, updated_at
+            ) VALUES ('seed-d3', 'seed-d3', '天然维生素Ｄ３片', 'blocked', 'now', 'now')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO product_recommendations(
+                id, product_id, condition_codes_json, status, reviewer,
+                reviewed_at, audit_note, decision_ref, created_at
+            ) VALUES (
+                'seed-recommendation:seed-d3', 'seed-d3',
+                '["COND_VITAMIN_D_DEFICIENCY"]', 'published', 'seed-reviewer',
+                'now', 'approved seed', 'PRD #103', 'now'
+            )
+            """
+        )
+
+    with database.connect() as connection:
+        products = load_published_products(connection)
+
+    assert products[0]["nutrient"] == "维生素 D3"
