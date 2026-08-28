@@ -1,9 +1,9 @@
 # Product Recommendation Acceptance Result
 
 - Parent requirement: `#103`
-- Tested Genesis commit: `49d7639c6da343f913f44d1c38560b7e93129861`
-- Tested HealthFlow commit: `b44f3652fc9f0c2b8e0bfa4d073d0d46ea2d9f57`
-- Build identity: `local-uv-49d7639-healthflow-b44f365`
+- Tested Genesis commit: `8ffbd124da8a572074dc92d49e04dbfeef0e0448`
+- Tested HealthFlow commit: `64fa5506d2c2ed8a54ce60173b5e2dc0e7930a68`
+- Build identity: `local-uv-8ffbd12-healthflow-64fa550`
 - Executed at: `2026-08-28T20:02:50+08:00`
 - Environment: Linux x86_64, Python 3.13.13, uv 0.11.14, Node 24.15.0, isolated SQLite and loopback services
 
