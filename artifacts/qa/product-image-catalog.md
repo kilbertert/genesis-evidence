@@ -25,3 +25,12 @@ This artifact records the image binding delivered with the recommendation contra
 | 超级维BC片 | `COND_CKD_RISK` | `/products/super-bc.png` | Product brochure, p. 22 |
 
 Images are cropped from supplier-provided materials marked for internal review. The whole-bone PDF contains no package photograph, so its source-backed cover visual is used and is not presented as a package label.
+
+## Verification
+
+- Tested commit: `0a43dad0d7b88cdbf8f0f1ba402cd179a323f63a`
+- Executed at: `2026-08-29T02:30:10+08:00`
+- Environment: Linux x86_64, Python 3.13.13, Ruff 0.16.2, mutmut 3.7.0
+- Result: PASS. All 10 published products resolve to distinct same-origin image URLs, including normalized product names with spaces. The remaining 33 candidates stay blocked.
+- Deterministic checks: `PYTHONPATH=src uv run pytest` passed (`313 passed`); `uv run ruff check .` passed; focused catalog and recommendation tests passed (`17 passed`).
+- Risk checks: changed product modules average complexity A (3.88); the four targeted image URL and metadata-key mutants were all killed. The full configured baseline reported 1,753 mutants, including pre-existing survivors outside this change.
