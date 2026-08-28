@@ -3,22 +3,30 @@
 from __future__ import annotations
 
 import json
-import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from ..conditions import CONDITION_BY_CODE, CONDITIONS
 from ..contracts import EvidenceMatchObservation, card_capabilities
-from ..metrics import METRIC_LABELS, evidence_contains_value
+from ..matching import (
+    ASSESSMENT_SORTING_VERSION,
+    CONDITIONS_BY_METRIC,
+    CardAdapter,
+    CardScopeResolver,
+    EvidenceMatcher,
+    MatchObservation,
+    MatchResult,
+    _is_v3_unmatched,
+    append_unique,
+    evidence_strength_summary,
+    finding_evidence_rank,
+    patient_reply_v3,
+    project_observation,
+    validate_observation,
+)
+from ..metrics import METRIC_LABELS
 from .database import Database
 
-METRIC_CODES = frozenset(metric for condition in CONDITIONS for metric in condition.metrics)
-CONDITIONS_BY_METRIC = {
-    metric: tuple(condition for condition in CONDITIONS if metric in condition.metrics)
-    for metric in METRIC_CODES
-}
-EVIDENCE_RANK = {"high": 0, "moderate": 1, "low": 2, "very_low": 3}
-ASSESSMENT_SORTING_VERSION = "published-card-reference-range-v1"
+__all__ = ["EvidenceStore"]
 
 
 class EvidenceStore:
@@ -37,94 +45,76 @@ class EvidenceStore:
     ) -> dict[str, object]:
         with self.database.transaction() as connection:
             cards = _published_cards(connection)
-            findings_by_condition: dict[str, dict[str, object]] = {}
-            unmatched: list[dict[str, object]] = []
-            skipped: list[dict[str, object]] = []
-            abnormal_count = 0
-            for observation in observations:
-                _validate_observation(observation)
-                if observation.reference_low is None and observation.reference_high is None:
-                    skipped.append(
-                        {
-                            "observation_id": observation.observation_id,
-                            "reason": "missing_reference_range",
-                        }
-                    )
-                    continue
-                if not _is_abnormal(observation):
-                    skipped.append(
-                        {
-                            "observation_id": observation.observation_id,
-                            "reason": "within_reference_range",
-                        }
-                    )
-                    continue
-                abnormal_count += 1
-                missing: list[str] = []
-                source = _source_observation(observation)
-                for condition in CONDITIONS_BY_METRIC[observation.metric_code]:
-                    card = cards.get((condition.code, f"metric:{observation.metric_code}"))
-                    if card is None:
-                        missing.append(condition.code)
-                        continue
-                    scope_key = str(card["scope_key"])
-                    finding = findings_by_condition.setdefault(
-                        condition.code,
-                        {
-                            "condition_code": condition.code,
-                            "condition_name": condition.name,
-                            "source_observation_ids": [],
-                            "urgency": "routine",
-                            "abnormality_severity": 1,
-                            "evidence_strength": card["grade"],
-                            "needs_recheck": True,
-                            "department": condition.department,
-                            "recheck_direction": condition.recheck_direction,
-                            "epidemiology_background": "",
-                            "source_observations": [],
-                            "_evidence_items": {},
-                            "content_layer": card["content_layer"],
-                            "action_status": card["action_status"],
-                            "action_message": card["action_message"],
-                            "product_status": card["product_status"],
-                        },
-                    )
-                    _append_unique(finding["source_observation_ids"], observation.observation_id)
-                    _append_unique(finding["source_observations"], source)
-                    evidence_items = finding["_evidence_items"]
-                    evidence_item = evidence_items.setdefault(
-                        scope_key,
-                        {
-                            "metric_code": observation.metric_code,
-                            "metric_label": METRIC_LABELS[observation.metric_code],
-                            "card": card,
-                            "evidence_strength": card["grade"],
-                            "source_observation_ids": [],
-                            "source_observations": [],
-                        },
-                    )
-                    _append_unique(
-                        evidence_item["source_observation_ids"], observation.observation_id
-                    )
-                    _append_unique(evidence_item["source_observations"], source)
-                if missing:
-                    unmatched.append(
-                        {
-                            "observation_id": observation.observation_id,
-                            "metric_code": observation.metric_code,
-                            "metric_label": METRIC_LABELS[observation.metric_code],
-                            "condition_codes": missing,
-                            "condition_names": [CONDITION_BY_CODE[code].name for code in missing],
-                            "reason": "no_published_knowledge_card",
-                        }
-                    )
+
+            adapter = CardAdapter(
+                condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
+                lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key)),
+            )
+            resolver = CardScopeResolver(strict=False)
+            entries = [project_observation(observation) for observation in observations]
+
+            def _produce_finding(
+                findings_by_condition: dict[str, dict[str, object]],
+                condition,
+                card: dict[str, object],
+                entry: MatchObservation,
+                scope_key: str,
+            ) -> None:
+                inp = entry.input
+                source = entry.source
+                finding = findings_by_condition.setdefault(
+                    condition.code,
+                    {
+                        "condition_code": condition.code,
+                        "condition_name": condition.name,
+                        "source_observation_ids": [],
+                        "urgency": "routine",
+                        "abnormality_severity": 1,
+                        "evidence_strength": card["grade"],
+                        "needs_recheck": True,
+                        "department": condition.department,
+                        "recheck_direction": condition.recheck_direction,
+                        "epidemiology_background": "",
+                        "source_observations": [],
+                        "_evidence_items": {},
+                        "content_layer": card["content_layer"],
+                        "action_status": card["action_status"],
+                        "action_message": card["action_message"],
+                        "product_status": card["product_status"],
+                    },
+                )
+                append_unique(finding["source_observation_ids"], inp.observation_id)
+                append_unique(finding["source_observations"], source)
+                evidence_items = finding["_evidence_items"]
+                evidence_item = evidence_items.setdefault(
+                    scope_key,
+                    {
+                        "metric_code": inp.metric_code,
+                        "metric_label": METRIC_LABELS[inp.metric_code],
+                        "card": card,
+                        "evidence_strength": card["grade"],
+                        "source_observation_ids": [],
+                        "source_observations": [],
+                    },
+                )
+                append_unique(evidence_item["source_observation_ids"], inp.observation_id)
+                append_unique(evidence_item["source_observations"], source)
+
+            result: MatchResult = EvidenceMatcher.match_published_cards(
+                entries,
+                adapter=adapter,
+                resolver=resolver,
+                produce_finding=_produce_finding,
+                collect_unmatched=_is_v3_unmatched,
+                validate=validate_observation,
+            )
 
             findings = sorted(
-                findings_by_condition.values(),
+                result.findings.values(),
                 key=lambda item: (
                     {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
                     -int(item["abnormality_severity"]),
-                    _finding_evidence_rank(item),
+                    finding_evidence_rank(item),
                     item["department"],
                     item["condition_code"],
                 ),
@@ -136,7 +126,7 @@ class EvidenceStore:
                     key=lambda evidence_item: evidence_item["metric_code"],
                 )
                 item["evidence_items"] = evidence_items
-                item["evidence_strength"] = _evidence_strength_summary(
+                item["evidence_strength"] = evidence_strength_summary(
                     evidence_item["evidence_strength"] for evidence_item in evidence_items
                 )
                 item["sorting"] = {
@@ -148,16 +138,16 @@ class EvidenceStore:
                     "epidemiology_background": item["epidemiology_background"],
                 }
                 result_findings.append(item)
-            result = {
+            payload = {
                 "schema_version": "3",
                 "sorting_version": ASSESSMENT_SORTING_VERSION,
                 "correlation_id": correlation_id,
                 "findings": result_findings,
-                "unmatched": unmatched,
-                "skipped": skipped,
+                "unmatched": result.unmatched,
+                "skipped": result.skipped,
                 "message": "" if result_findings else "暂无已审核内容",
             }
-            result["patient_reply"] = _patient_reply(result_findings, unmatched)
+            payload["patient_reply"] = patient_reply_v3(result_findings, result.unmatched)
             connection.execute(
                 """
                 INSERT INTO audit_events(
@@ -171,18 +161,12 @@ class EvidenceStore:
                     json.dumps(
                         {
                             "observation_count": len(observations),
-                            "abnormal_count": abnormal_count,
+                            "abnormal_count": result.abnormal_count,
                             "finding_count": len(result_findings),
-                            "unmatched_count": len(unmatched),
-                            "skipped_count": len(skipped),
-                            "metric_codes": sorted({item.metric_code for item in observations}),
-                            "card_ids": sorted(
-                                {
-                                    evidence_item["card"]["id"]
-                                    for finding in result_findings
-                                    for evidence_item in finding["evidence_items"]
-                                }
-                            ),
+                            "unmatched_count": len(result.unmatched),
+                            "skipped_count": len(result.skipped),
+                            "metric_codes": result.metric_codes,
+                            "card_ids": result.card_ids,
                         },
                         ensure_ascii=False,
                     ),
@@ -190,8 +174,8 @@ class EvidenceStore:
                 ),
             )
         if schema_version == "2":
-            return _legacy_v2_response(result)
-        return result
+            return _legacy_v2_response(payload)
+        return payload
 
 
 def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
@@ -340,116 +324,4 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
             "unmatched_count": len(unmatched),
             "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
         },
-    }
-
-
-def _validate_observation(observation: EvidenceMatchObservation) -> None:
-    if observation.metric_code not in METRIC_CODES:
-        raise ValueError(f"unknown metric_code: {observation.metric_code}")
-    if not math.isfinite(observation.value) or not evidence_contains_value(
-        observation.evidence_text, observation.value
-    ):
-        raise ValueError("confirmed value lacks source evidence")
-    bounds = tuple(
-        bound
-        for bound in (observation.reference_low, observation.reference_high)
-        if bound is not None
-    )
-    if any(not math.isfinite(bound) for bound in bounds) or (
-        len(bounds) == 2 and bounds[0] > bounds[1]
-    ):
-        raise ValueError("confirmed reference range is invalid")
-    if any(not evidence_contains_value(observation.evidence_text, bound) for bound in bounds):
-        raise ValueError("confirmed reference range lacks source evidence")
-
-
-def _is_abnormal(observation: EvidenceMatchObservation) -> bool:
-    return (
-        observation.reference_low is not None and observation.value < observation.reference_low
-    ) or (observation.reference_high is not None and observation.value > observation.reference_high)
-
-
-def _source_observation(observation: EvidenceMatchObservation) -> dict[str, object]:
-    source: dict[str, object] = {
-        "observation_id": observation.observation_id,
-        "metric_code": observation.metric_code,
-        "value": observation.value,
-        "unit": observation.unit,
-        "reference_low": observation.reference_low,
-        "reference_high": observation.reference_high,
-        "evidence_text": observation.evidence_text,
-        "source_file_index": observation.source_file_index,
-        "source_page": observation.source_page,
-        "source_id": observation.source_id,
-        "bbox_normalized": observation.bbox_normalized,
-    }
-    if observation.source_url:
-        source["source_url"] = observation.source_url
-    if observation.bbox is not None:
-        source["bbox"] = observation.bbox
-    return source
-
-
-def _append_unique(items: list[object], value: object) -> None:
-    if value not in items:
-        items.append(value)
-
-
-def _evidence_strength_summary(grades: Iterable[str]) -> str:
-    unique = set(grades)
-    return next(iter(unique)) if len(unique) == 1 else "mixed"
-
-
-def _finding_evidence_rank(finding: dict[str, object]) -> int:
-    items = finding.get("_evidence_items", {}).values()
-    return max(EVIDENCE_RANK[item["evidence_strength"]] for item in items)
-
-
-def _patient_reply(
-    findings: list[dict[str, object]], unmatched: list[dict[str, object]]
-) -> dict[str, object]:
-    visible_findings = []
-    for finding in findings:
-        visible = {
-            "condition_code": finding["condition_code"],
-            "condition_name": finding["condition_name"],
-            "urgency": finding["urgency"],
-            "abnormality_severity": finding["abnormality_severity"],
-            "evidence_strength": finding["evidence_strength"],
-            "needs_recheck": finding["needs_recheck"],
-            "department": finding["department"],
-            "recheck_direction": finding["recheck_direction"],
-            "source_observation_ids": finding["source_observation_ids"],
-            "source_observations": finding["source_observations"],
-            "content_layer": finding["content_layer"],
-            "action_status": finding["action_status"],
-            "action_message": finding["action_message"],
-            "product_status": finding["product_status"],
-            "evidence_items": finding["evidence_items"],
-        }
-        visible_findings.append(visible)
-    if visible_findings:
-        metric_count = len(
-            {
-                observation_id
-                for finding in visible_findings
-                for observation_id in finding["source_observation_ids"]
-            }
-        )
-        summary = (
-            f"根据已确认的报告指标，发现 {len(visible_findings)} 个可能相关健康问题，"
-            f"涉及 {metric_count} 个异常指标。"
-        )
-        if unmatched:
-            summary += f"另有 {len(unmatched)} 条指标与健康问题关联暂无已审核知识卡。"
-    elif unmatched:
-        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
-    else:
-        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
-    return {
-        "title": "体检报告解读与健康风险提示",
-        "summary": summary,
-        "findings": visible_findings,
-        "unmatched_count": len(unmatched),
-        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
