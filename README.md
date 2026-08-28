@@ -28,6 +28,22 @@ uv run pytest
 uv run python scripts/check_scope.py
 uv run python scripts/check_schema.py
 uv run python scripts/check_patient_copy.py
+uv run python scripts/check_product_catalog.py
+```
+
+## Product catalog
+
+The product catalog is a candidate layer separate from published recommendations.
+Backfill the legacy candidate pool once from the old literature database:
+
+```bash
+uv run python scripts/migrate_product_catalog.py --source-db ../genesis-health/var/literature/literature.db
+```
+
+Then verify the deterministic backfill contract:
+
+```bash
+uv run python scripts/check_product_catalog.py
 ```
 
 ## Local services

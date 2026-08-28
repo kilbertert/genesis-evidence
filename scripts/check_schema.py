@@ -1,4 +1,4 @@
-"""Keep the stage-one schema within its explicit table budget."""
+"""Keep the productized schema within its explicit table budget."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from genesis_evidence.core.store import Database
 
-MAX_TABLES = 26
+MAX_TABLES = 30
 
 
 def main() -> None:
