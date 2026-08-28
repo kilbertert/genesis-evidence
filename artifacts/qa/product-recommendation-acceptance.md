@@ -53,6 +53,8 @@
 ## Real Five-Image Acceptance
 
 - Case: `QA-E2E-003`; input was the five real JPEG report images in the local `体检报告/` directory. The zero-byte PDF beside them was intentionally excluded.
+- Acceptance run identity: Genesis Evidence `cb0b35e98f51b68278cb0dab895c7697905ed242`; HealthFlow `d529affef56ccd3a266f76722b1f6d8f73df28a8`; build `local-systemd-real-five-image-2026-08-28`.
+- Deployment identity after acceptance: Genesis Evidence `4eee069f8a2ce27aa438ff5610d6e36fc76e5fb2`; HealthFlow `a11e30d319e17fa89219f2114348e4ccd17a9e63`.
 - Upload completed at `2026-08-28T21:12:27+08:00`; extraction completed at `2026-08-28T21:14:17+08:00`; assessment completed at `2026-08-28T21:17:56+08:00`.
 - Five files produced `64` metrics with `0` processing warnings. The confirmation covered all `64` metrics with subject consistency `same`.
 - Three abnormal observations were retained with source evidence: total cholesterol `5.5 mmol/L` (reference `<5.2`), LDL-C `3.63 mmol/L` (reference `<2.60`), and Non-HDL `4.00 mmol/L` (reference `<3.40`).
