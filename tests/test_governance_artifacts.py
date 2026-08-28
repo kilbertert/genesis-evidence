@@ -19,6 +19,7 @@ QA_CASE_IDS = {
     "QA-FORBID-004",
     "QA-EMPTY-005",
     "QA-E2E-001",
+    "QA-E2E-002",
 }
 
 QA_SCALAR_FIELDS = (

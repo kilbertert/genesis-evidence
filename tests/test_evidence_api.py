@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from genesis_evidence.core.contracts import EvidenceMatchResponse
@@ -129,6 +131,59 @@ def _publish_scoped_card(
 
 def _publish_prediabetes_card(database: Database) -> None:
     _publish_scoped_card(database)
+
+
+def _publish_product_recommendation(
+    database: Database,
+    *,
+    condition_code: str,
+    product_id: str = "product-phytosterol",
+    product_name: str = "植物甾醇类产品",
+    nutrient: str = "植物甾醇",
+    priority: int = 0,
+) -> None:
+    metadata = {
+        "nutrient": nutrient,
+        "reason": "该产品方向可作为对应健康风险的膳食补充方向考虑。",
+        "safety_message": "请在专业人士指导下结合个人情况使用。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_links": ["source:document-catalog-1#page-1"],
+        "evidence_strength": "moderate",
+        "priority": priority,
+    }
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO product_candidates(
+                id, canonical_key, name_zh, status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'blocked', ?, ?)
+            """,
+            (
+                product_id,
+                f"canonical-{product_id}",
+                product_name,
+                "2026-08-11T00:00:00Z",
+                "2026-08-11T00:00:00Z",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO product_recommendations(
+                id, product_id, condition_codes_json, recommendation_json,
+                status, reviewer, reviewed_at, audit_note, decision_ref, created_at
+            ) VALUES (?, ?, ?, ?, 'published', 'reviewer', ?, ?, ?, ?)
+            """,
+            (
+                f"recommendation:{product_id}",
+                product_id,
+                json.dumps([condition_code]),
+                json.dumps(metadata, ensure_ascii=False),
+                "2026-08-11T00:00:00Z",
+                "已批准安全产品。",
+                "PRD #103",
+                "2026-08-11T00:00:00Z",
+            ),
+        )
 
 
 def _observation(**overrides):
@@ -548,6 +603,59 @@ def test_partial_condition_coverage_keeps_unmatched_metric_condition_link(tmp_pa
     ]
 
 
+def test_published_products_are_attached_to_matching_findings(tmp_path) -> None:
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+        scope_key="metric:ldl_c",
+        card_id="card-ldl-product",
+        profile_id="profile-ldl-product",
+        topic_id="topic-ldl-product",
+        claim_id="claim-ldl-product",
+        paper_id="paper-ldl-product",
+    )
+    _publish_product_recommendation(
+        database,
+        condition_code="COND_DYSLIPIDEMIA",
+    )
+
+    response = client.post(
+        "/api/evidence/matches",
+        json={
+            "schema_version": "3",
+            "observations": [
+                _observation(
+                    observation_id="metric-ldl",
+                    metric_code="ldl_c",
+                    value=4.2,
+                    reference_low=0,
+                    reference_high=3.4,
+                    evidence_text="低密度脂蛋白胆固醇 4.2 mmol/L 0-3.4 H",
+                ),
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    finding = response.json()["findings"][0]
+    assert finding["condition_code"] == "COND_DYSLIPIDEMIA"
+    assert finding["product_status"] == "available"
+    assert [item["product_name"] for item in finding["recommendations"]] == [
+        "植物甾醇类产品"
+    ]
+    recommendation = finding["recommendations"][0]
+    assert recommendation["nutrient"] == "植物甾醇"
+    assert recommendation["reason"]
+    assert recommendation["safety_message"]
+    assert recommendation["disclaimer"]
+    assert recommendation["evidence_links"]
+    patient_finding = response.json()["patient_reply"]["findings"][0]
+    assert patient_finding["product_status"] == "available"
+    assert patient_finding["recommendation_message"] == "以下为可考虑的健康管理建议"
+    assert "供应商宣称" not in response.text
+
+
 def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
     database, client = _client(tmp_path)
     _publish_scoped_card(database, grade="low")
@@ -565,7 +673,9 @@ def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> Non
     assert finding["product_status"] == "not_implemented"
     assert finding["evidence_items"][0]["card"]["content_layer"] == "context_only"
     assert finding["evidence_items"][0]["card"]["action_status"] == "not_available"
-    assert response.json()["patient_reply"]["findings"][0]["product_status"] == ("not_implemented")
+    patient_finding = response.json()["patient_reply"]["findings"][0]
+    assert patient_finding["product_status"] == "not_implemented"
+    assert patient_finding["recommendation_message"] == "暂无推荐"
 
 
 def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) -> None:

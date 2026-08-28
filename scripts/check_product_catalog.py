@@ -115,10 +115,10 @@ def build_fixture_database(directory: Path, target_path: Path) -> Database:
             """
         )
         seed_names = (
-            "郅臻堂植物甾醇咀嚼片",
+            "郅臻堂®植物甾醇咀嚼片",
             "天然维生素D3片",
             "复合柠檬酸钙",
-            "复合骨营养餐",
+            "复合全骨营养餐",
         )
         candidate_rows = []
         for index in range(43):

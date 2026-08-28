@@ -6,6 +6,11 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from ...products.recommendations import (
+    load_published_products,
+    recommend,
+    recommendation_message,
+)
 from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
@@ -45,6 +50,7 @@ class EvidenceStore:
     ) -> dict[str, object]:
         with self.database.transaction() as connection:
             cards = _published_cards(connection)
+            published_products = load_published_products(connection)
 
             adapter = CardAdapter(
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
@@ -137,6 +143,20 @@ class EvidenceStore:
                     "department": item["department"],
                     "epidemiology_background": item["epidemiology_background"],
                 }
+                recommendations = recommend(
+                    str(item["condition_code"]),
+                    item["source_observations"],  # type: ignore[arg-type]
+                    products=published_products,
+                    urgency=str(item["urgency"]),
+                    abnormality_severity=int(item["abnormality_severity"]),
+                )
+                item["recommendations"] = [
+                    recommendation.as_dict() for recommendation in recommendations
+                ]
+                item["recommendation_message"] = recommendation_message(recommendations)
+                item["product_status"] = (
+                    "available" if recommendations else "not_implemented"
+                )
                 result_findings.append(item)
             payload = {
                 "schema_version": "3",
@@ -147,7 +167,15 @@ class EvidenceStore:
                 "skipped": result.skipped,
                 "message": "" if result_findings else "暂无已审核内容",
             }
-            payload["patient_reply"] = patient_reply_v3(result_findings, result.unmatched)
+            patient_reply = patient_reply_v3(result_findings, result.unmatched)
+            for patient_finding, finding in zip(
+                patient_reply["findings"], result_findings, strict=True
+            ):
+                patient_finding["recommendations"] = finding["recommendations"]
+                patient_finding["recommendation_message"] = finding[
+                    "recommendation_message"
+                ]
+            payload["patient_reply"] = patient_reply
             connection.execute(
                 """
                 INSERT INTO audit_events(
@@ -167,6 +195,10 @@ class EvidenceStore:
                             "skipped_count": len(result.skipped),
                             "metric_codes": result.metric_codes,
                             "card_ids": result.card_ids,
+                            "recommendation_count": sum(
+                                len(finding["recommendations"])
+                                for finding in result_findings
+                            ),
                         },
                         ensure_ascii=False,
                     ),
@@ -266,7 +298,9 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                     "content_layer": item["card"]["content_layer"],
                     "action_status": item["card"]["action_status"],
                     "action_message": item["card"]["action_message"],
-                    "product_status": item["card"]["product_status"],
+                    "product_status": finding["product_status"],
+                    "recommendations": finding["recommendations"],
+                    "recommendation_message": finding["recommendation_message"],
                 }
             )
 
@@ -299,6 +333,8 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                 "action_status": finding["action_status"],
                 "action_message": finding["action_message"],
                 "product_status": finding["product_status"],
+                "recommendations": finding["recommendations"],
+                "recommendation_message": finding["recommendation_message"],
             }
         )
     return {

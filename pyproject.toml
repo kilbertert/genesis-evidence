@@ -40,12 +40,22 @@ testpaths = ["tests"]
 
 [tool.mutmut]
 source_paths = ["src/genesis_evidence"]
-only_mutate = ["src/genesis_evidence/core/matching.py"]
+only_mutate = [
+  "src/genesis_evidence/core/matching.py",
+  "src/genesis_evidence/products/catalog.py",
+  "src/genesis_evidence/products/mapping_drafts.py",
+  "src/genesis_evidence/products/recommendations.py",
+]
 use_git_change_detection = false
 pytest_add_cli_args_test_selection = [
   "tests/test_matching.py",
   "tests/test_report_assessment.py",
   "tests/test_evidence_api.py",
+  "tests/test_product_catalog.py",
+  "tests/test_product_mapping_drafts.py",
+  "tests/test_product_recommendation_e2e.py",
+  "tests/test_product_review_api.py",
+  "tests/test_recommendations.py",
 ]
 
 [tool.ruff]

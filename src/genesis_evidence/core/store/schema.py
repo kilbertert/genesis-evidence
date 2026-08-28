@@ -489,6 +489,7 @@ CREATE TABLE IF NOT EXISTS product_recommendations (
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
     condition_codes_json TEXT NOT NULL,
+    recommendation_json TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'published'
         CHECK (status IN ('blocked', 'in_review', 'published', 'withdrawn')),
     reviewer TEXT NOT NULL,
@@ -509,5 +510,25 @@ CREATE TABLE IF NOT EXISTS product_review_audits (
     note TEXT NOT NULL,
     decision_ref TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS product_mapping_drafts (
+    id TEXT PRIMARY KEY,
+    condition_code TEXT NOT NULL REFERENCES conditions(code),
+    functional_direction TEXT NOT NULL,
+    functional_category TEXT NOT NULL,
+    product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
+    recommendation_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_review'
+        CHECK (status IN ('in_review', 'published', 'rejected', 'needs_more_info')),
+    source_ref TEXT NOT NULL,
+    draft_method TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    reviewer TEXT NOT NULL DEFAULT '',
+    reviewed_at TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (condition_code, product_id, functional_category)
 );
 """

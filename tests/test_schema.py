@@ -11,7 +11,7 @@ def test_schema_has_expected_tables_and_stays_under_budget(tmp_path) -> None:
     database.initialize()
 
     tables = set(database.table_names())
-    assert len(tables) == 30
+    assert len(tables) == 31
     assert {
         "conditions",
         "evidence_topics",
@@ -37,6 +37,7 @@ def test_schema_has_expected_tables_and_stays_under_budget(tmp_path) -> None:
         "product_candidate_sources",
         "product_recommendations",
         "product_review_audits",
+        "product_mapping_drafts",
     } <= tables
 
 

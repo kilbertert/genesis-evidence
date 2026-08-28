@@ -115,6 +115,58 @@ def _publish_card(database: Database, condition_code: str, *, grade: str, versio
     return card_id
 
 
+def _publish_product_recommendation(
+    database: Database,
+    *,
+    condition_code: str,
+    product_id: str = "product-assessment",
+    product_name: str = "营养管理产品",
+    nutrient: str = "营养支持",
+) -> None:
+    metadata = {
+        "nutrient": nutrient,
+        "reason": "该产品方向可作为对应健康风险的膳食补充方向考虑。",
+        "safety_message": "请在专业人士指导下结合个人情况使用。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_links": ["source:document-catalog-1#page-1"],
+        "evidence_strength": "moderate",
+        "priority": 0,
+    }
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO product_candidates(
+                id, canonical_key, name_zh, status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'blocked', ?, ?)
+            """,
+            (
+                product_id,
+                f"canonical-{product_id}",
+                product_name,
+                "2026-08-11T00:00:00Z",
+                "2026-08-11T00:00:00Z",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO product_recommendations(
+                id, product_id, condition_codes_json, recommendation_json,
+                status, reviewer, reviewed_at, audit_note, decision_ref, created_at
+            ) VALUES (?, ?, ?, ?, 'published', 'reviewer', ?, ?, ?, ?)
+            """,
+            (
+                f"recommendation:{product_id}",
+                product_id,
+                json.dumps([condition_code]),
+                json.dumps(metadata, ensure_ascii=False),
+                "2026-08-11T00:00:00Z",
+                "已批准安全产品。",
+                "PRD #103",
+                "2026-08-11T00:00:00Z",
+            ),
+        )
+
+
 def test_only_confirmed_abnormal_observations_match_published_cards(tmp_path) -> None:
     database, store, handle = _store(tmp_path)
     observation_id = _confirm(store, handle, value=6.8)
@@ -135,6 +187,28 @@ def test_only_confirmed_abnormal_observations_match_published_cards(tmp_path) ->
     assert finding["department"] == "内分泌科"
     assert finding["recheck_direction"]
     assert finding["patient_visible_body"] == "这是经过审核的营养健康知识。"
+
+
+def test_report_assessment_attaches_published_product_recommendations(tmp_path) -> None:
+    database, store, handle = _store(tmp_path)
+    _confirm(store, handle, value=6.8)
+    _publish_card(database, "COND_PREDIABETES", grade="moderate")
+    _publish_product_recommendation(database, condition_code="COND_PREDIABETES")
+
+    result = store.assess(handle.report_id, handle.access_token)
+
+    finding = result["findings"][0]
+    assert finding["condition_code"] == "COND_PREDIABETES"
+    assert finding["product_status"] == "available"
+    assert [item["product_name"] for item in finding["recommendations"]] == [
+        "营养管理产品"
+    ]
+    recommendation = finding["recommendations"][0]
+    assert recommendation["nutrient"] == "营养支持"
+    assert recommendation["reason"]
+    assert recommendation["safety_message"]
+    assert recommendation["disclaimer"]
+    assert recommendation["evidence_links"]
 
 
 def test_external_match_uses_matcher_result_and_preserves_audit_metrics(tmp_path) -> None:

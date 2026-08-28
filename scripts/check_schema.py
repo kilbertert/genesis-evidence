@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from genesis_evidence.core.store import Database
 
-MAX_TABLES = 30
+MAX_TABLES = 31
 
 
 def main() -> None:
