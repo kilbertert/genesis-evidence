@@ -11,7 +11,12 @@ HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 REVIEWER = "nutrition-reviewer-1"
 
 
-def _client(tmp_path, *, supplier_claim: str = "供应商原始宣称") -> tuple[Database, TestClient]:
+def _client(
+    tmp_path,
+    *,
+    supplier_claim: str = "供应商原始宣称",
+    risk_flags: list[str] | None = None,
+) -> tuple[Database, TestClient]:
     path = tmp_path / "evidence.sqlite3"
     database = Database(path)
     database.initialize()
@@ -22,7 +27,15 @@ def _client(tmp_path, *, supplier_claim: str = "供应商原始宣称") -> tuple
                 id, canonical_key, name_zh, content_json, status, created_at, updated_at
             ) VALUES ('product-1', 'product-1', '待审营养产品', ?, 'blocked', 'now', 'now')
             """,
-            (json.dumps({"supplier_claims": [supplier_claim]}, ensure_ascii=False),),
+            (
+                json.dumps(
+                    {
+                        "supplier_claims": [supplier_claim],
+                        "risk_flags": risk_flags or [],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
         )
     return database, TestClient(
         create_app(database_path=path, api_key=API_KEY, reviewer_id=REVIEWER)
@@ -86,6 +99,18 @@ def test_reviewer_publishes_and_withdraws_product_with_audit(tmp_path) -> None:
     ]
     assert audits[-1]["note"] == "产品下架"
 
+    client.post(
+        "/api/review/products/product-1/transition",
+        headers=HEADERS,
+        json={"target": "in_review", "note": "重新复审", "decision_ref": "review-3"},
+    )
+    republished = client.post(
+        "/api/review/products/product-1/transition",
+        headers=HEADERS,
+        json={"target": "published", "note": "重新发布", "decision_ref": "review-4"},
+    )
+    assert republished.json()["version"] == 2
+
 
 def test_high_risk_product_stays_in_review_when_publish_is_requested(tmp_path) -> None:
     database, client = _client(tmp_path)
@@ -131,3 +156,20 @@ def test_supplier_claims_automatically_mark_high_risk_products(tmp_path) -> None
     ] is True
     with database.connect() as connection:
         assert load_published_products(connection) == ()
+
+
+def test_risk_flags_automatically_mark_high_risk_products(tmp_path) -> None:
+    _, client = _client(tmp_path, risk_flags=["供应商材料包含降血脂宣称"])
+    client.put(
+        "/api/review/products/product-1/recommendation",
+        headers=HEADERS,
+        json=_draft(),
+    )
+
+    response = client.post(
+        "/api/review/products/product-1/transition",
+        headers=HEADERS,
+        json={"target": "published", "note": "尝试批准", "decision_ref": "risk-flag"},
+    )
+
+    assert response.json()["status"] == "in_review"

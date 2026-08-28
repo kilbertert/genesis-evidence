@@ -167,3 +167,66 @@ def test_reviewer_accepts_rejects_or_requests_more_mapping_information(tmp_path)
     assert rerun_status["COND_CHRONIC_CONSTIPATION"] == "published"
     assert rerun_status["COND_CKD_RISK"] == "rejected"
     assert rerun_status["COND_PREDIABETES"] == "needs_more_info"
+
+
+def test_publishing_multiple_drafts_for_one_product_preserves_all_conditions(tmp_path) -> None:
+    database = _database(tmp_path)
+    workbook = tmp_path / "分类.xlsx"
+    _workbook(workbook)
+    create_mapping_drafts(database, workbook, actor="ai:offline-mapper", source_ref="fixture")
+    client = TestClient(
+        create_app(database_path=database.path, api_key=API_KEY, reviewer_id=REVIEWER)
+    )
+    drafts = client.get("/api/review/product-mappings", headers=HEADERS).json()
+    by_condition = {item["condition_code"]: item for item in drafts}
+
+    for condition_code in ("COND_SARCOPENIA_FRAILTY", "COND_MALNUTRITION_RISK"):
+        response = client.post(
+            f"/api/review/product-mappings/{by_condition[condition_code]['id']}/transition",
+            headers=HEADERS,
+            json={
+                "target": "published",
+                "note": "批准映射",
+                "decision_ref": f"mapping-{condition_code}",
+            },
+        )
+        assert response.json()["status"] == "published"
+
+    with database.connect() as connection:
+        product = next(
+            item
+            for item in load_published_products(connection)
+            if item["product_id"] == "product-10"
+        )
+    assert product["condition_codes"] == [
+        "COND_MALNUTRITION_RISK",
+        "COND_SARCOPENIA_FRAILTY",
+    ]
+
+
+def test_high_risk_mapping_cannot_be_published(tmp_path) -> None:
+    database = _database(tmp_path)
+    workbook = tmp_path / "分类.xlsx"
+    _workbook(workbook)
+    create_mapping_drafts(database, workbook, actor="ai:offline-mapper", source_ref="fixture")
+    client = TestClient(
+        create_app(database_path=database.path, api_key=API_KEY, reviewer_id=REVIEWER)
+    )
+    draft = next(
+        item
+        for item in client.get("/api/review/product-mappings", headers=HEADERS).json()
+        if item["condition_code"] == "COND_PREDIABETES"
+    )
+
+    response = client.post(
+        f"/api/review/product-mappings/{draft['id']}/transition",
+        headers=HEADERS,
+        json={"target": "published", "note": "尝试批准", "decision_ref": "mapping-risk"},
+    )
+
+    assert response.json()["status"] == "needs_more_info"
+    with database.connect() as connection:
+        assert all(
+            "COND_PREDIABETES" not in item["condition_codes"]
+            for item in load_published_products(connection)
+        )

@@ -81,6 +81,42 @@ def test_recommend_returns_ordered_published_and_safe_products() -> None:
     assert recommendations[0].evidence_links
 
 
+def test_recommend_applies_defaults_and_sorts_equal_priority_by_evidence() -> None:
+    recommendations = recommend(
+        "COND_DYSLIPIDEMIA",
+        [_observation()],
+        products=(
+            _product(
+                recommendation_id=None,
+                product_id="high-evidence",
+                product_name="高证据产品",
+                evidence_strength="high",
+                priority=None,
+            ),
+            _product(
+                product_id="low-evidence",
+                product_name="低证据产品",
+                evidence_strength="low",
+                priority=None,
+            ),
+            _product(
+                product_id="mixed-evidence",
+                product_name="混合证据产品",
+                evidence_strength="mixed",
+                priority=None,
+            ),
+        ),
+    )
+
+    assert [item.product_id for item in recommendations] == [
+        "high-evidence",
+        "low-evidence",
+        "mixed-evidence",
+    ]
+    assert recommendations[0].recommendation_id == "high-evidence"
+    assert recommendations[0].priority == 0
+
+
 def test_recommend_excludes_unpublished_withdrawn_and_high_risk_products() -> None:
     products = (
         _product(product_id="published-safe"),
