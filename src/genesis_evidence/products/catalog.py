@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import unicodedata
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
+from ..core.patient_copy import validate_patient_copy
 from ..core.store.database import Database
 from .recommendations import seed_recommendation_metadata
 
@@ -25,6 +28,24 @@ SEED_REVIEWER = "system:seed-pool"
 SEED_DECISION_REF = "PRD #103 初选最小产品池"
 SEED_REVIEWED_AT = "2026-08-28T00:00:00Z"
 _SEED_AUDIT_NOTE = "已批准最小产品池，将其发布为可推荐种子。"
+_HIGH_RISK_MARKETING_TERMS = (
+    "溶血栓",
+    "降血糖",
+    "降血压",
+    "降血脂",
+    "治愈",
+    "根治",
+    "排毒",
+    "抗癌",
+    "逆龄",
+    "逆糖",
+)
+_ALLOWED_RECOMMENDATION_TRANSITIONS = {
+    "blocked": {"in_review"},
+    "in_review": {"blocked", "in_review", "published"},
+    "published": {"withdrawn"},
+    "withdrawn": {"in_review"},
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +106,7 @@ class LegacyCatalogMigrationSummary:
 
 
 SEED_PRODUCT_MAPPINGS = (
-    SeedProductMapping("郅臻堂植物甾醇", ("COND_DYSLIPIDEMIA",)),
+    SeedProductMapping("郅臻堂®植物甾醇", ("COND_DYSLIPIDEMIA",)),
     SeedProductMapping(
         "天然维生素D3",
         ("COND_VITAMIN_D_DEFICIENCY", "COND_OSTEOPOROSIS_RISK"),
@@ -95,7 +116,7 @@ SEED_PRODUCT_MAPPINGS = (
         ("COND_VITAMIN_D_DEFICIENCY", "COND_OSTEOPOROSIS_RISK"),
     ),
     SeedProductMapping(
-        "复合骨营养餐",
+        "复合全骨营养餐",
         ("COND_SARCOPENIA_FRAILTY", "COND_MALNUTRITION_RISK"),
     ),
 )
@@ -153,6 +174,332 @@ class ProductCatalogStore:
                     "SELECT count(*) FROM product_review_audits WHERE action = 'published'"
                 ).fetchone()[0],
             }
+
+    def list_review_products(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT pc.id, pc.name_zh, pc.status AS candidate_status,
+                    pr.condition_codes_json, pr.recommendation_json, pr.status
+                FROM product_candidates pc
+                LEFT JOIN product_recommendations pr ON pr.product_id = pc.id
+                ORDER BY pc.name_zh, pc.id
+                """
+            ).fetchall()
+        products = []
+        for row in rows:
+            metadata = json.loads(row["recommendation_json"] or "{}")
+            status = row["status"] or row["candidate_status"]
+            products.append(
+                {
+                    "id": row["id"],
+                    "name": row["name_zh"],
+                    "status": status,
+                    "condition_codes": json.loads(row["condition_codes_json"] or "[]"),
+                    "high_risk_marketing_claim": bool(
+                        metadata.get("high_risk_marketing_claim")
+                    ),
+                    "version": int(metadata.get("version", 1 if status == "published" else 0)),
+                    "recommendation": metadata,
+                }
+            )
+        return products
+
+    def submit_recommendation(
+        self,
+        product_id: str,
+        *,
+        condition_codes: list[str],
+        recommendation: dict[str, object],
+        actor: str,
+        note: str,
+        decision_ref: str,
+    ) -> dict[str, object]:
+        if not condition_codes:
+            raise ValueError("condition_codes must contain known conditions")
+        for field in ("reason", "safety_message", "disclaimer"):
+            validate_patient_copy(str(recommendation.get(field) or ""))
+        if not recommendation.get("evidence_links"):
+            raise ValueError("recommendation requires evidence_links")
+        now = _now()
+        with self.database.transaction() as connection:
+            product = connection.execute(
+                "SELECT id, content_json FROM product_candidates WHERE id = ?", (product_id,)
+            ).fetchone()
+            if product is None:
+                raise ValueError("product not found")
+            known_conditions = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT code FROM conditions WHERE code IN "
+                    f"({','.join('?' for _ in condition_codes)})",
+                    tuple(condition_codes),
+                ).fetchall()
+            }
+            if known_conditions != set(condition_codes):
+                raise ValueError("condition_codes must contain known conditions")
+            existing = connection.execute(
+                """
+                SELECT status, recommendation_json
+                FROM product_recommendations WHERE product_id = ?
+                """,
+                (product_id,),
+            ).fetchone()
+            if existing is not None and existing["status"] == "published":
+                raise ValueError("withdraw a published recommendation before replacing it")
+            previous = json.loads(existing["recommendation_json"] or "{}") if existing else {}
+            metadata = {
+                **recommendation,
+                "high_risk_marketing_claim": bool(
+                    recommendation.get("high_risk_marketing_claim")
+                    or _has_high_risk_marketing_claim(product["content_json"])
+                ),
+                "version": int(previous.get("version", 0)),
+            }
+            connection.execute(
+                """
+                INSERT INTO product_recommendations(
+                    id, product_id, condition_codes_json, recommendation_json,
+                    status, reviewer, reviewed_at, audit_note, decision_ref, created_at
+                ) VALUES (?, ?, ?, ?, 'in_review', ?, ?, ?, ?, ?)
+                ON CONFLICT(product_id) DO UPDATE SET
+                    condition_codes_json = excluded.condition_codes_json,
+                    recommendation_json = excluded.recommendation_json,
+                    status = 'in_review', reviewer = excluded.reviewer,
+                    reviewed_at = excluded.reviewed_at, audit_note = excluded.audit_note,
+                    decision_ref = excluded.decision_ref
+                """,
+                (
+                    f"recommendation:{product_id}",
+                    product_id,
+                    json.dumps(list(dict.fromkeys(condition_codes)), ensure_ascii=False),
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    actor,
+                    now,
+                    note,
+                    decision_ref,
+                    now,
+                ),
+            )
+            connection.execute(
+                "UPDATE product_candidates SET status = 'in_review', updated_at = ? WHERE id = ?",
+                (now, product_id),
+            )
+            self._audit(connection, product_id, "in_review", actor, note, decision_ref, now)
+        return {"id": product_id, "status": "in_review", "version": metadata["version"]}
+
+    def transition_recommendation(
+        self,
+        product_id: str,
+        *,
+        target: str,
+        actor: str,
+        note: str,
+        decision_ref: str,
+    ) -> dict[str, object]:
+        if target not in {"blocked", "in_review", "published", "withdrawn"}:
+            raise ValueError("unsupported product transition")
+        now = _now()
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT status, recommendation_json
+                FROM product_recommendations WHERE product_id = ?
+                """,
+                (product_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("product recommendation not found")
+            if target not in _ALLOWED_RECOMMENDATION_TRANSITIONS[row["status"]]:
+                raise ValueError(f"invalid product transition: {row['status']} -> {target}")
+            metadata = json.loads(row["recommendation_json"] or "{}")
+            actual_target = target
+            if target == "published" and metadata.get("high_risk_marketing_claim"):
+                actual_target = "in_review"
+                note = f"{note}；风险标产品保留在需复审池。"
+            version = int(metadata.get("version", 1 if row["status"] == "published" else 0))
+            if actual_target == "published" and row["status"] != "published":
+                version += 1
+            metadata["version"] = version
+            connection.execute(
+                """
+                UPDATE product_recommendations
+                SET status = ?, recommendation_json = ?, reviewer = ?, reviewed_at = ?,
+                    audit_note = ?, decision_ref = ?
+                WHERE product_id = ?
+                """,
+                (
+                    actual_target,
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    actor,
+                    now,
+                    note,
+                    decision_ref,
+                    product_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE product_candidates SET status = ?, updated_at = ? WHERE id = ?",
+                (actual_target, now, product_id),
+            )
+            self._audit(
+                connection, product_id, actual_target, actor, note, decision_ref, now
+            )
+        return {"id": product_id, "status": actual_target, "version": version}
+
+    def list_mapping_drafts(self) -> list[dict[str, object]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.*, pc.name_zh
+                FROM product_mapping_drafts d
+                JOIN product_candidates pc ON pc.id = d.product_id
+                ORDER BY d.condition_code, d.id
+                """
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "condition_code": row["condition_code"],
+                "functional_direction": row["functional_direction"],
+                "functional_category": row["functional_category"],
+                "product_id": row["product_id"],
+                "product_name": row["name_zh"],
+                "status": row["status"],
+                "source_ref": row["source_ref"],
+                "draft_method": row["draft_method"],
+                "recommendation": json.loads(row["recommendation_json"] or "{}"),
+            }
+            for row in rows
+        ]
+
+    def transition_mapping_draft(
+        self,
+        draft_id: str,
+        *,
+        target: str,
+        actor: str,
+        note: str,
+        decision_ref: str,
+    ) -> dict[str, object]:
+        if target not in {"published", "rejected", "needs_more_info"}:
+            raise ValueError("unsupported mapping transition")
+        now = _now()
+        version = 0
+        with self.database.transaction() as connection:
+            draft = connection.execute(
+                "SELECT * FROM product_mapping_drafts WHERE id = ?", (draft_id,)
+            ).fetchone()
+            if draft is None:
+                raise ValueError("product mapping draft not found")
+            if draft["status"] not in {"in_review", "needs_more_info"}:
+                raise ValueError(f"mapping draft is already {draft['status']}")
+            metadata = json.loads(draft["recommendation_json"] or "{}")
+            actual_target = target
+            if target == "published" and metadata.get("high_risk_marketing_claim"):
+                actual_target = "needs_more_info"
+                note = f"{note}；风险标产品保留在需复审池。"
+            if actual_target == "published":
+                existing = connection.execute(
+                    """
+                    SELECT condition_codes_json, recommendation_json, status
+                    FROM product_recommendations WHERE product_id = ?
+                    """,
+                    (draft["product_id"],),
+                ).fetchone()
+                condition_codes = set()
+                if existing is not None and existing["status"] == "published":
+                    condition_codes.update(json.loads(existing["condition_codes_json"] or "[]"))
+                condition_codes.add(str(draft["condition_code"]))
+                if existing is not None and existing["status"] == "published":
+                    metadata = json.loads(existing["recommendation_json"] or "{}")
+                version = int(metadata.get("version", 0)) + 1
+                metadata["version"] = version
+                connection.execute(
+                    """
+                    INSERT INTO product_recommendations(
+                        id, product_id, condition_codes_json, recommendation_json,
+                        status, reviewer, reviewed_at, audit_note, decision_ref, created_at
+                    ) VALUES (?, ?, ?, ?, 'published', ?, ?, ?, ?, ?)
+                    ON CONFLICT(product_id) DO UPDATE SET
+                        condition_codes_json = excluded.condition_codes_json,
+                        recommendation_json = excluded.recommendation_json,
+                        status = 'published', reviewer = excluded.reviewer,
+                        reviewed_at = excluded.reviewed_at, audit_note = excluded.audit_note,
+                        decision_ref = excluded.decision_ref
+                    """,
+                    (
+                        f"recommendation:{draft['product_id']}",
+                        draft["product_id"],
+                        json.dumps(sorted(condition_codes), ensure_ascii=False),
+                        json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                        actor,
+                        now,
+                        note,
+                        decision_ref,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE product_candidates
+                    SET status = 'published', updated_at = ? WHERE id = ?
+                    """,
+                    (now, draft["product_id"]),
+                )
+            connection.execute(
+                """
+                UPDATE product_mapping_drafts
+                SET status = ?, reviewer = ?, reviewed_at = ?, note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (actual_target, actor, now, note, now, draft_id),
+            )
+            audit_action = {
+                "published": "published",
+                "rejected": "blocked",
+                "needs_more_info": "in_review",
+            }[actual_target]
+            self._audit(
+                connection,
+                str(draft["product_id"]),
+                audit_action,
+                actor,
+                note,
+                decision_ref,
+                now,
+                condition_code=str(draft["condition_code"]),
+            )
+        return {"id": draft_id, "status": actual_target, "version": version}
+
+    @staticmethod
+    def _audit(
+        connection: sqlite3.Connection,
+        product_id: str,
+        action: str,
+        actor: str,
+        note: str,
+        decision_ref: str,
+        created_at: str,
+        condition_code: str | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO product_review_audits(
+                id, product_id, condition_code, action, actor, note, decision_ref, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                product_id,
+                condition_code,
+                action,
+                actor,
+                note,
+                decision_ref,
+                created_at,
+            ),
+        )
 
     def _upsert_blocked_candidates(
         self, connection: sqlite3.Connection, candidates: list[LegacyProductCandidate]
@@ -351,3 +698,23 @@ def _product_key(name: str) -> str:
 def _seed_audit_note(product_name: str, condition_codes: tuple[str, ...]) -> str:
     conditions = "、".join(condition_codes)
     return f"{_SEED_AUDIT_NOTE}产品：{product_name}；健康风险映射：{conditions}。"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _has_high_risk_marketing_claim(content_json: str) -> bool:
+    try:
+        content = json.loads(content_json or "{}")
+    except json.JSONDecodeError:
+        content = content_json
+    if isinstance(content, dict):
+        content = {
+            "supplier_claims": content.get("supplier_claims", []),
+            "risk_flags": content.get("risk_flags", []),
+        }
+    text = unicodedata.normalize(
+        "NFKC", json.dumps(content, ensure_ascii=False) if not isinstance(content, str) else content
+    )
+    return any(term in text for term in _HIGH_RISK_MARKETING_TERMS)

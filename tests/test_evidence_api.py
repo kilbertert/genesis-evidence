@@ -650,7 +650,10 @@ def test_published_products_are_attached_to_matching_findings(tmp_path) -> None:
     assert recommendation["safety_message"]
     assert recommendation["disclaimer"]
     assert recommendation["evidence_links"]
-    assert response.json()["patient_reply"]["findings"][0]["product_status"] == "available"
+    patient_finding = response.json()["patient_reply"]["findings"][0]
+    assert patient_finding["product_status"] == "available"
+    assert patient_finding["recommendation_message"] == "以下为可考虑的健康管理建议"
+    assert "供应商宣称" not in response.text
 
 
 def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> None:
@@ -670,7 +673,9 @@ def test_low_card_is_context_only_and_has_no_product_capability(tmp_path) -> Non
     assert finding["product_status"] == "not_implemented"
     assert finding["evidence_items"][0]["card"]["content_layer"] == "context_only"
     assert finding["evidence_items"][0]["card"]["action_status"] == "not_available"
-    assert response.json()["patient_reply"]["findings"][0]["product_status"] == ("not_implemented")
+    patient_finding = response.json()["patient_reply"]["findings"][0]
+    assert patient_finding["product_status"] == "not_implemented"
+    assert patient_finding["recommendation_message"] == "暂无推荐"
 
 
 def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) -> None:

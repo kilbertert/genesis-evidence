@@ -14,10 +14,10 @@ The PRD requires a small, controllable published set to drive the full lifecycle
 
 Publish exactly four products as the initial safe recommendation pool, while the remaining 39 migrated candidates stay `blocked`:
 
-- 郅臻堂植物甾醇 → `COND_DYSLIPIDEMIA`
+- 郅臻堂®植物甾醇 → `COND_DYSLIPIDEMIA`
 - 天然维生素D3 → `COND_VITAMIN_D_DEFICIENCY`, `COND_OSTEOPOROSIS_RISK`
 - 复合柠檬酸钙 → `COND_VITAMIN_D_DEFICIENCY`, `COND_OSTEOPOROSIS_RISK`
-- 复合骨营养餐 → `COND_SARCOPENIA_FRAILTY`, `COND_MALNUTRITION_RISK`
+- 复合全骨营养餐（PRD 简称「复合骨营养餐」）→ `COND_SARCOPENIA_FRAILTY`, `COND_MALNUTRITION_RISK`
 
 越橘益视宝 is excluded from the seed pool because its eye-health direction is outside the 12-condition catalog.
 

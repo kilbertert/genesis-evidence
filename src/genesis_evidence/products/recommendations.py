@@ -16,8 +16,10 @@ from ..core.patient_copy import validate_patient_copy
 
 EVIDENCE_STRENGTH_RANK = {"high": 0, "moderate": 1, "low": 2, "very_low": 3}
 SUPPRESSED_URGENCIES = frozenset({"urgent", "emergency"})
+RECOMMENDATION_AVAILABLE_MESSAGE = "以下为可考虑的健康管理建议"
+NO_RECOMMENDATION_MESSAGE = "暂无推荐"
 SEED_RECOMMENDATION_COPY = {
-    "郅臻堂植物甾醇": {
+    "郅臻堂®植物甾醇": {
         "nutrient": "植物甾醇",
         "reason": "该产品方向可作为血脂相关营养管理的一种膳食补充方向考虑。",
         "safety_message": "请在专业人士指导下结合个人情况使用。",
@@ -41,7 +43,7 @@ SEED_RECOMMENDATION_COPY = {
         "evidence_strength": "moderate",
         "priority": 0,
     },
-    "复合骨营养餐": {
+    "复合全骨营养餐": {
         "nutrient": "复合骨营养",
         "reason": "该产品方向可作为肌肉与营养状态管理的膳食支持参考。",
         "safety_message": "请在专业人士指导下结合个人情况使用。",
@@ -202,6 +204,10 @@ def seed_recommendation_metadata(product_name: str) -> dict[str, object]:
         "high_risk_marketing_claim": False,
         "evidence_links": ["source:document-catalog-1#page-1"],
     }
+
+
+def recommendation_message(recommendations: Sequence[object]) -> str:
+    return RECOMMENDATION_AVAILABLE_MESSAGE if recommendations else NO_RECOMMENDATION_MESSAGE
 
 
 def _required_text(value: object, field: str) -> str:

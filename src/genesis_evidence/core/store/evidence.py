@@ -7,7 +7,11 @@ import math
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from ...products.recommendations import load_published_products, recommend
+from ...products.recommendations import (
+    load_published_products,
+    recommend,
+    recommendation_message,
+)
 from ..conditions import CONDITION_BY_CODE, CONDITIONS
 from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..metrics import METRIC_LABELS, evidence_contains_value
@@ -159,6 +163,7 @@ class EvidenceStore:
                 item["recommendations"] = [
                     recommendation.as_dict() for recommendation in recommendations
                 ]
+                item["recommendation_message"] = recommendation_message(recommendations)
                 item["product_status"] = (
                     "available" if recommendations else "not_implemented"
                 )
@@ -303,6 +308,7 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                     "action_message": item["card"]["action_message"],
                     "product_status": finding["product_status"],
                     "recommendations": finding["recommendations"],
+                    "recommendation_message": finding["recommendation_message"],
                 }
             )
 
@@ -336,6 +342,7 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                 "action_message": finding["action_message"],
                 "product_status": finding["product_status"],
                 "recommendations": finding["recommendations"],
+                "recommendation_message": finding["recommendation_message"],
             }
         )
     return {
@@ -447,6 +454,7 @@ def _patient_reply(
             "action_message": finding["action_message"],
             "product_status": finding["product_status"],
             "recommendations": finding["recommendations"],
+            "recommendation_message": finding["recommendation_message"],
             "evidence_items": finding["evidence_items"],
         }
         visible_findings.append(visible)

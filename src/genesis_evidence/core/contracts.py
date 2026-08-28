@@ -246,6 +246,7 @@ class EvidenceFindingV2(BaseModel):
     action_message: str = ""
     product_status: ProductStatus
     recommendations: list[ProductRecommendation] = Field(default_factory=list)
+    recommendation_message: str = Field(min_length=1)
 
 
 class EvidenceUnmatchedV2(BaseModel):
@@ -281,6 +282,7 @@ class PatientReplyFindingV2(BaseModel):
     action_message: str = ""
     product_status: ProductStatus
     recommendations: list[ProductRecommendation] = Field(default_factory=list)
+    recommendation_message: str = Field(min_length=1)
 
 
 class PatientReplyV2(BaseModel):
@@ -360,6 +362,7 @@ class EvidenceFinding(BaseModel):
     action_message: str = ""
     product_status: ProductStatus
     recommendations: list[ProductRecommendation] = Field(default_factory=list)
+    recommendation_message: str = Field(min_length=1)
 
 
 class EvidenceUnmatched(BaseModel):
@@ -412,6 +415,7 @@ class PatientReplyFinding(BaseModel):
     action_message: str = ""
     product_status: ProductStatus
     recommendations: list[ProductRecommendation] = Field(default_factory=list)
+    recommendation_message: str = Field(min_length=1)
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
 
     @model_validator(mode="after")

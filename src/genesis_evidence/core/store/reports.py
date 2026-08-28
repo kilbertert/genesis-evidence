@@ -16,7 +16,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ...products.recommendations import load_published_products, recommend
+from ...products.recommendations import (
+    load_published_products,
+    recommend,
+    recommendation_message,
+)
 from ...reports.extraction import (
     PendingReportExtraction,
     ReportExtractionError,
@@ -572,6 +576,7 @@ class ReportStore:
             item["recommendations"] = [
                 recommendation.as_dict() for recommendation in recommendations
             ]
+            item["recommendation_message"] = recommendation_message(recommendations)
             item["product_status"] = (
                 "available" if recommendations else "not_implemented"
             )

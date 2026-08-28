@@ -12,10 +12,10 @@ from genesis_evidence.products.catalog import (
 )
 
 SEED_NAMES = (
-    "郅臻堂植物甾醇咀嚼片",
+    "郅臻堂®植物甾醇咀嚼片",
     "天然维生素D3片",
     "复合柠檬酸钙",
-    "复合骨营养餐",
+    "复合全骨营养餐",
 )
 
 
@@ -206,10 +206,10 @@ def test_publish_approved_seed_pool_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_seed_product_matching_normalizes_fullwidth_and_spacing() -> None:
-    assert _product_key("郅臻堂植物甾醇咀嚼片") == "郅臻堂植物甾醇"
+    assert _product_key("郅臻堂®植物甾醇咀嚼片") == "郅臻堂®植物甾醇"
     assert _product_key(" 天然维生素D3片 ") == "天然维生素D3"
     assert _product_key("天然维生素Ｄ３片") == "天然维生素D3"
-    assert _product_key("复合骨营养餐") == "复合骨"
+    assert _product_key("复合全骨营养餐") == "复合全骨"
 
 
 def _catalog_state(database: Database) -> dict[str, object]:

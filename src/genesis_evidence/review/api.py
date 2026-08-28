@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -12,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.store import Database, ObjectStore, PaperStore, ReviewStore
+from ..products.catalog import ProductCatalogStore
 from .service import (
     AUTONOMOUS_REVIEW_POLICY_VERSION,
     ClaimReviewInput,
@@ -80,6 +82,38 @@ class CardTransitionRequest(BaseModel):
     target: str
 
 
+class ProductRecommendationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    condition_codes: list[str] = Field(min_length=1, max_length=12)
+    nutrient: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+    safety_message: str = Field(min_length=1, max_length=2000)
+    disclaimer: str = Field(min_length=1, max_length=2000)
+    evidence_links: list[str] = Field(min_length=1, max_length=20)
+    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    priority: int = Field(default=0, ge=0)
+    high_risk_marketing_claim: bool = False
+    note: str = Field(min_length=1, max_length=2000)
+    decision_ref: str = Field(min_length=1, max_length=500)
+
+
+class ProductTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: Literal["blocked", "in_review", "published", "withdrawn"]
+    note: str = Field(min_length=1, max_length=2000)
+    decision_ref: str = Field(min_length=1, max_length=500)
+
+
+class ProductMappingTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: Literal["published", "rejected", "needs_more_info"]
+    note: str = Field(min_length=1, max_length=2000)
+    decision_ref: str = Field(min_length=1, max_length=500)
+
+
 def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> FastAPI:
     normalized_key = api_key.strip()
     normalized_reviewer = reviewer_id.strip()
@@ -90,6 +124,7 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     database = Database(database_path)
     database.initialize()
     store = ReviewStore(database)
+    product_store = ProductCatalogStore(database)
     papers_store = PaperStore(database)
     service = EvidenceReviewService(
         store,
@@ -325,6 +360,61 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     @app.get("/api/review/coverage-matrix", dependencies=[Depends(principal)])
     def coverage_matrix() -> list[dict[str, object]]:
         return store.list_coverage_matrix()
+
+    @app.get("/api/review/products", dependencies=[Depends(principal)])
+    def products() -> list[dict[str, object]]:
+        return product_store.list_review_products()
+
+    @app.put("/api/review/products/{product_id}/recommendation")
+    def submit_product_recommendation(
+        product_id: str,
+        request: ProductRecommendationRequest,
+        reviewer: str = Depends(principal),
+    ) -> dict[str, object]:
+        values = request.model_dump()
+        note = values.pop("note")
+        decision_ref = values.pop("decision_ref")
+        condition_codes = values.pop("condition_codes")
+        return product_store.submit_recommendation(
+            product_id,
+            condition_codes=condition_codes,
+            recommendation=values,
+            actor=reviewer,
+            note=note,
+            decision_ref=decision_ref,
+        )
+
+    @app.post("/api/review/products/{product_id}/transition")
+    def transition_product_recommendation(
+        product_id: str,
+        request: ProductTransitionRequest,
+        reviewer: str = Depends(principal),
+    ) -> dict[str, object]:
+        return product_store.transition_recommendation(
+            product_id,
+            target=request.target,
+            actor=reviewer,
+            note=request.note,
+            decision_ref=request.decision_ref,
+        )
+
+    @app.get("/api/review/product-mappings", dependencies=[Depends(principal)])
+    def product_mappings() -> list[dict[str, object]]:
+        return product_store.list_mapping_drafts()
+
+    @app.post("/api/review/product-mappings/{draft_id}/transition")
+    def transition_product_mapping(
+        draft_id: str,
+        request: ProductMappingTransitionRequest,
+        reviewer: str = Depends(principal),
+    ) -> dict[str, object]:
+        return product_store.transition_mapping_draft(
+            draft_id,
+            target=request.target,
+            actor=reviewer,
+            note=request.note,
+            decision_ref=request.decision_ref,
+        )
 
     @app.post("/api/review/cards")
     def create_card(
