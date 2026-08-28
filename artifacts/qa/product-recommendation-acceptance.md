@@ -38,7 +38,7 @@
 - Full Genesis suite: `312 passed`; Ruff, scope, schema, patient-copy, and product-catalog guards passed.
 - Product risk suite: `25 passed`; focused module coverage `93%` (`catalog.py` 95%, `mapping_drafts.py` 87%, `recommendations.py` 93%).
 - Complexity: product and matching modules average grade `A (3.95)`; branch-heavy recommendation and transition methods remain directly covered.
-- Mutation scope is configured for matcher, catalog, mapping drafts, and recommendation engine. Baseline: `1704` mutants, `1202` killed, `502` survived, no timeouts or suspicious results.
+- Mutation scope is configured for matcher, catalog, mapping drafts, and recommendation engine. Baseline: `1704` mutants, `1238` killed, `466` survived, no timeouts or suspicious results.
 - Targeted safety triage killed recommendation ID/default/sorting, repeated publication version, risk-flag, and high-risk mapping mutations. Remaining reviewed examples are equivalent under SQLite case-insensitive row keys or persisted version invariants; the global survivors remain a documented residual test gap rather than a pass claim.
 - HealthFlow: `143 passed`, `1 skipped`; changed Python files pass Ruff; frontend build and recommendation rendering passed at 375px, 414px, and desktop viewports.
 
