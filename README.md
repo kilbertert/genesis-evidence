@@ -25,6 +25,9 @@
 uv sync --extra dev
 uv run ruff check .
 uv run pytest
+uv run radon cc -s -a -n C src/genesis_evidence/core/matching.py
+uv run mutmut run
+uv run mutmut results
 uv run python scripts/check_scope.py
 uv run python scripts/check_schema.py
 uv run python scripts/check_patient_copy.py
