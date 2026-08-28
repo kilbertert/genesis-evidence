@@ -659,6 +659,7 @@ class ReportStore:
                 ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall()
+            published_products = load_published_products(connection)
             cards: dict[tuple[str, str], dict[str, object]] = {}
             for row in card_rows:
                 scope_key = str(row["scope_key"] or "").strip()
@@ -757,7 +758,22 @@ class ReportStore:
             result_findings = []
             for item in findings:
                 card = item.pop("card")
-                result_findings.append({**item, "card": card})
+                finding = {**item, "card": card}
+                recommendations = recommend(
+                    str(finding["condition_code"]),
+                    finding["source_observations"],  # type: ignore[arg-type]
+                    products=published_products,
+                    urgency=str(finding["urgency"]),
+                    abnormality_severity=int(finding["abnormality_severity"]),
+                )
+                finding["recommendations"] = [
+                    recommendation.as_dict() for recommendation in recommendations
+                ]
+                finding["recommendation_message"] = recommendation_message(recommendations)
+                finding["product_status"] = (
+                    "available" if recommendations else "not_implemented"
+                )
+                result_findings.append(finding)
             result_payload = {
                 "schema_version": "2",
                 "sorting_version": ASSESSMENT_SORTING_VERSION,
@@ -798,6 +814,9 @@ class ReportStore:
                     "metric_codes": result.metric_codes,
                     "card_ids": sorted(
                         {item["card"]["id"] for item in result_findings}  # type: ignore[index]
+                    ),
+                    "recommendation_count": sum(
+                        len(finding["recommendations"]) for finding in result_findings
                     ),
                 },
                 actor=actor,

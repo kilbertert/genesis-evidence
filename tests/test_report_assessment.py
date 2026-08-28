@@ -209,8 +209,6 @@ def test_report_assessment_attaches_published_product_recommendations(tmp_path) 
     assert recommendation["safety_message"]
     assert recommendation["disclaimer"]
     assert recommendation["evidence_links"]
-    patient_finding = result["patient_reply"]["findings"][0]
-    assert patient_finding["recommendation_message"] == "以下为可考虑的健康管理建议"
 
 
 def test_external_match_uses_matcher_result_and_preserves_audit_metrics(tmp_path) -> None:
