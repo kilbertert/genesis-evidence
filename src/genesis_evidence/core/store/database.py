@@ -135,6 +135,7 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
             "scope_key TEXT NOT NULL DEFAULT ''",
         ),
         "knowledge_cards": ("evidence_profile_id TEXT REFERENCES evidence_profiles(id)",),
+        "product_recommendations": ("recommendation_json TEXT NOT NULL DEFAULT '{}'",),
     }
     for table, columns in additions.items():
         existing = {

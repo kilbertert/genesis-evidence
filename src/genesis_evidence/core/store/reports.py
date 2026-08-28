@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ...products.recommendations import load_published_products, recommend
 from ...reports.extraction import (
     PendingReportExtraction,
     ReportExtractionError,
@@ -551,6 +552,8 @@ class ReportStore:
                 """,
                 (assessment["id"],),
             ).fetchall()
+            published_products = load_published_products(connection)
+            subject_age = report["inferred_age"]
         visible = []
         for row in findings:
             item = dict(row)
@@ -558,6 +561,20 @@ class ReportStore:
             item["sorting"] = json.loads(item.pop("sorting_json"))
             item["needs_recheck"] = bool(item["needs_recheck"])
             item.update(card_capabilities(str(item["grade"])))
+            recommendations = recommend(
+                str(item["condition_code"]),
+                item["source_observation_ids"],
+                products=published_products,
+                urgency=str(item["urgency"]),
+                abnormality_severity=int(item["abnormality_severity"]),
+                subject_age=subject_age,
+            )
+            item["recommendations"] = [
+                recommendation.as_dict() for recommendation in recommendations
+            ]
+            item["product_status"] = (
+                "available" if recommendations else "not_implemented"
+            )
             visible.append(item)
         return {
             "report_id": report_id,

@@ -489,6 +489,7 @@ CREATE TABLE IF NOT EXISTS product_recommendations (
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
     condition_codes_json TEXT NOT NULL,
+    recommendation_json TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'published'
         CHECK (status IN ('blocked', 'in_review', 'published', 'withdrawn')),
     reviewer TEXT NOT NULL,

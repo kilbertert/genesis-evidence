@@ -7,6 +7,7 @@ import math
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
+from ...products.recommendations import load_published_products, recommend
 from ..conditions import CONDITION_BY_CODE, CONDITIONS
 from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..metrics import METRIC_LABELS, evidence_contains_value
@@ -37,6 +38,7 @@ class EvidenceStore:
     ) -> dict[str, object]:
         with self.database.transaction() as connection:
             cards = _published_cards(connection)
+            published_products = load_published_products(connection)
             findings_by_condition: dict[str, dict[str, object]] = {}
             unmatched: list[dict[str, object]] = []
             skipped: list[dict[str, object]] = []
@@ -147,6 +149,19 @@ class EvidenceStore:
                     "department": item["department"],
                     "epidemiology_background": item["epidemiology_background"],
                 }
+                recommendations = recommend(
+                    str(item["condition_code"]),
+                    item["source_observations"],  # type: ignore[arg-type]
+                    products=published_products,
+                    urgency=str(item["urgency"]),
+                    abnormality_severity=int(item["abnormality_severity"]),
+                )
+                item["recommendations"] = [
+                    recommendation.as_dict() for recommendation in recommendations
+                ]
+                item["product_status"] = (
+                    "available" if recommendations else "not_implemented"
+                )
                 result_findings.append(item)
             result = {
                 "schema_version": "3",
@@ -175,6 +190,10 @@ class EvidenceStore:
                             "finding_count": len(result_findings),
                             "unmatched_count": len(unmatched),
                             "skipped_count": len(skipped),
+                            "recommendation_count": sum(
+                                len(finding["recommendations"])
+                                for finding in result_findings
+                            ),
                             "metric_codes": sorted({item.metric_code for item in observations}),
                             "card_ids": sorted(
                                 {
@@ -282,7 +301,8 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                     "content_layer": item["card"]["content_layer"],
                     "action_status": item["card"]["action_status"],
                     "action_message": item["card"]["action_message"],
-                    "product_status": item["card"]["product_status"],
+                    "product_status": finding["product_status"],
+                    "recommendations": finding["recommendations"],
                 }
             )
 
@@ -315,6 +335,7 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
                 "action_status": finding["action_status"],
                 "action_message": finding["action_message"],
                 "product_status": finding["product_status"],
+                "recommendations": finding["recommendations"],
             }
         )
     return {
@@ -425,6 +446,7 @@ def _patient_reply(
             "action_status": finding["action_status"],
             "action_message": finding["action_message"],
             "product_status": finding["product_status"],
+            "recommendations": finding["recommendations"],
             "evidence_items": finding["evidence_items"],
         }
         visible_findings.append(visible)

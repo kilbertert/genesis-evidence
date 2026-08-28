@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..core.store.database import Database
+from .recommendations import seed_recommendation_metadata
 
 _COMMON_PRODUCT_SUFFIXES = (
     "咀嚼片",
@@ -261,14 +262,20 @@ class ProductCatalogStore:
                 list(mapping.condition_codes), ensure_ascii=False, sort_keys=True
             )
             audit_note = _seed_audit_note(mapping.product_name, mapping.condition_codes)
+            recommendation_json = json.dumps(
+                seed_recommendation_metadata(mapping.product_name),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             connection.execute(
                 """
                 INSERT INTO product_recommendations(
-                    id, product_id, condition_codes_json, status, reviewer,
-                    reviewed_at, audit_note, decision_ref, created_at
-                ) VALUES (?, ?, ?, 'published', ?, ?, ?, ?, ?)
+                    id, product_id, condition_codes_json, recommendation_json,
+                    status, reviewer, reviewed_at, audit_note, decision_ref, created_at
+                ) VALUES (?, ?, ?, ?, 'published', ?, ?, ?, ?, ?)
                 ON CONFLICT(product_id) DO UPDATE SET
                     condition_codes_json = excluded.condition_codes_json,
+                    recommendation_json = excluded.recommendation_json,
                     status = 'published',
                     reviewer = excluded.reviewer,
                     reviewed_at = excluded.reviewed_at,
@@ -280,6 +287,7 @@ class ProductCatalogStore:
                     recommendation_id,
                     product_id,
                     condition_codes_json,
+                    recommendation_json,
                     SEED_REVIEWER,
                     SEED_REVIEWED_AT,
                     audit_note,
