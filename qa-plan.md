@@ -119,5 +119,5 @@
 ## 执行记录
 
 - 结果工件：`artifacts/qa/product-recommendation-acceptance.md`
-- 测试提交：`49d7639c6da343f913f44d1c38560b7e93129861`
+- 测试提交：Genesis `8ffbd124da8a572074dc92d49e04dbfeef0e0448`；HealthFlow `64fa5506d2c2ed8a54ce60173b5e2dc0e7930a68`
 - 结论：`QA-PUB-001` 至 `QA-E2E-002` 全部通过；环境、时间戳、命令结果与残余风险见结果工件。
