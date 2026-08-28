@@ -62,8 +62,17 @@
 - Automated API acceptance: `PASS`. Browser-level human acceptance remains intentionally pending after deployment; the temporary report and account are retained until that review completes.
 - No raw images, names, account credentials, access tokens, provider run IDs, or unredacted response logs are retained in this artifact.
 
+### Repeat Run During Final Deployment
+
+- A fresh run used the same five JPEG inputs and a new isolated account/report `#26`; the zero-byte PDF remained excluded.
+- Upload completed at `2026-08-28T21:47:11+08:00`; transient provider `502` on one file was retried by the durable worker, extraction completed at `2026-08-28T21:51:18+08:00`, and assessment completed at `2026-08-28T21:51:19+08:00`.
+- Five files produced `69` metrics with `0` processing warnings after retry. Three abnormal observations were retained with source evidence: Total Chol `5.5 mmol/L` (`< 5.2`), LDL-C `3.63 mmol/L` (`< 2.60`), and Non-HDL `4.00 mmol/L` (`< 3.40`).
+- Assessment returned one `COND_DYSLIPIDEMIA` (血脂异常) finding, the published `郅臻堂®植物甾醇咀嚼片`, `product_status=available`, `unmatched=[]`, and `66` explicit skipped normal/non-actionable observations.
+- Playwright browser acceptance over `https://genesis-evidence.ranlei.work/#/report/26` passed at desktop `1440x1100` and mobile `375x900`: authenticated account, `已完成`, `共 69 项`, `异常指标 3 项`, disease finding, product card, source evidence, and compliant disclaimer were all visible. Screenshots were retained only under the local temporary QA directory.
+- The temporary report and account remain in the private production SQLite store for the operator's manual review and must be removed after acceptance; no credentials or raw response logs are retained in this artifact.
+
 ## Notes
 
-- Full-repository HealthFlow Ruff currently reports pre-existing findings outside the changed files; this PR did not modify those paths.
+- HealthFlow commit `a11e30d319e17fa89219f2114348e4ccd17a9e63` passes full-repository `ruff check .`; `ruff format --check .` still reports 50 pre-existing files and remains separate formatter debt.
 - One non-blocking Starlette warning reports deprecated `TestClient` integration in Genesis.
 - Raw reports, access tokens, isolated databases, and unredacted logs are not retained in this artifact.
