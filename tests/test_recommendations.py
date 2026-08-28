@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from genesis_evidence.core.store import Database
-from genesis_evidence.products.recommendations import load_published_products, recommend
+from genesis_evidence.products.recommendations import (
+    load_published_products,
+    product_image_url,
+    recommend,
+    seed_recommendation_metadata,
+)
 
 
 def _observation(**overrides) -> dict[str, object]:
@@ -79,6 +84,27 @@ def test_recommend_returns_ordered_published_and_safe_products() -> None:
     assert recommendations[0].safety_message
     assert recommendations[0].disclaimer
     assert recommendations[0].evidence_links
+    assert recommendations[0].image_url is None
+
+
+def test_published_pdf_product_names_resolve_to_same_origin_images() -> None:
+    bindings = (
+        ("复合全骨营养餐", "/products/whole-bone-nutrition-meal.png"),
+        ("复合柠檬酸钙胶囊", "/products/calcium-citrate.png"),
+        ("复合槲皮素胶囊", "/products/quercetin.png"),
+        ("天然维生素D3片", "/products/vitamin-d3.png"),
+        ("奶蓟硫辛酸胶囊", "/products/milk-thistle-alpha-lipoic.png"),
+        ("娇韵思®超高浓缩果蔬纤维粉", "/products/joyees-fruit-vegetable-fiber.png"),
+        ("护心素胶囊", "/products/cardiotonic-element.png"),
+        ("活性叶酸胶囊", "/products/active-folate.png"),
+        ("超级维BC片", "/products/super-bc.png"),
+        ("郅臻堂®植物甾醇咀嚼片", "/products/zhizhen-plant-sterol.png"),
+    )
+
+    for name, expected_url in bindings:
+        assert product_image_url(name) == expected_url
+        assert seed_recommendation_metadata(name)["image_url"] == expected_url
+    assert product_image_url("郅臻堂 ® 植物甾醇咀嚼片") == bindings[-1][1]
 
 
 def test_recommend_applies_defaults_and_sorts_equal_priority_by_evidence() -> None:
@@ -233,3 +259,4 @@ def test_old_published_seed_rows_receive_recommendation_metadata_after_upgrade(t
         products = load_published_products(connection)
 
     assert products[0]["nutrient"] == "维生素 D3"
+    assert products[0]["image_url"] == "/products/vitamin-d3.png"
