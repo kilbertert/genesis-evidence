@@ -42,6 +42,14 @@
 - Targeted safety triage killed recommendation ID/default/sorting, repeated publication version, risk-flag, and high-risk mapping mutations. Remaining reviewed examples are equivalent under SQLite case-insensitive row keys or persisted version invariants; the global survivors remain a documented residual test gap rather than a pass claim.
 - HealthFlow: `143 passed`, `1 skipped`; changed Python files pass Ruff; frontend build and recommendation rendering passed at 375px, 414px, and desktop viewports.
 
+## Canonical Production Verification
+
+- Executed: `2026-08-28T20:24:58+08:00` to `2026-08-28T20:29:57+08:00` on the canonical user services (`genesis-evidence-review`, `genesis-evidence-portal`, and `health-flow`), using Genesis code `8ffbd124da8a572074dc92d49e04dbfeef0e0448` and HealthFlow code `64fa5506d2c2ed8a54ce60173b5e2dc0e7930a68`.
+- Production catalog state after migration: `576` source records, `34` blocked candidates, `10` published recommendations, `2` mapping drafts retained as `needs_more_info`, and `0` products without sources. SQLite integrity check: `ok`.
+- Positive controlled report: one real-model parsed LDL-C metric (`4.20 mmol/L`, reference `<= 3.40 mmol/L`); confirmation with the complete source excerpt produced `assessed`, `COND_DYSLIPIDEMIA`, `product_status=available`, the published plant-sterol recommendation, `unmatched=[]`, and `skipped=[]`.
+- Negative real report: `59` metrics parsed with `0` processing warnings; no high/low abnormal flags, `0` findings, `0` unmatched items, and no product recommendation. Normal or insufficiently actionable rows were retained as explicit skipped outcomes.
+- The first positive confirmation intentionally omitted the reference excerpt and returned `missing_source_evidence`; the service rejected it before matching. A second upload with the complete excerpt passed without weakening the evidence gate.
+
 ## Notes
 
 - Full-repository HealthFlow Ruff currently reports pre-existing findings outside the changed files; this PR did not modify those paths.
