@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
 
+from genesis_evidence.core.contracts import EvidenceMatchObservation
 from genesis_evidence.core.store import Database, ObjectStore
 from genesis_evidence.core.store.reports import ConfirmationInput, ReportHandle, ReportStore
 from genesis_evidence.reports.extraction import (
@@ -133,6 +135,52 @@ def test_only_confirmed_abnormal_observations_match_published_cards(tmp_path) ->
     assert finding["department"] == "内分泌科"
     assert finding["recheck_direction"]
     assert finding["patient_visible_body"] == "这是经过审核的营养健康知识。"
+
+
+def test_external_match_uses_matcher_result_and_preserves_audit_metrics(tmp_path) -> None:
+    database, store, _ = _store(tmp_path)
+    card_id = _publish_card(database, "COND_PREDIABETES", grade="moderate")
+    observations = (
+        EvidenceMatchObservation(
+            observation_id="glucose-high",
+            confirmation_status="confirmed",
+            metric_code="fasting_glucose",
+            value=6.8,
+            unit="mmol/L",
+            reference_low=3.9,
+            reference_high=6.1,
+            evidence_text="空腹血糖 6.8 mmol/L 3.9-6.1 H",
+            source_file_index=1,
+            source_page=1,
+        ),
+        EvidenceMatchObservation(
+            observation_id="uric-normal",
+            confirmation_status="confirmed",
+            metric_code="uric_acid",
+            value=300,
+            unit="umol/L",
+            reference_low=200,
+            reference_high=420,
+            evidence_text="尿酸 300 umol/L 200-420 N",
+            source_file_index=1,
+            source_page=1,
+        ),
+    )
+
+    result = store.match_published_cards(observations, correlation_id="match-1")
+
+    assert result["findings"][0]["card"]["id"] == card_id
+    assert result["skipped"] == [
+        {"observation_id": "uric-normal", "reason": "within_reference_range"}
+    ]
+    with database.connect() as connection:
+        detail = json.loads(
+            connection.execute(
+                "SELECT detail_json FROM audit_events WHERE entity_id = 'match-1'"
+            ).fetchone()["detail_json"]
+        )
+    assert detail["metric_codes"] == ["fasting_glucose", "uric_acid"]
+    assert detail["card_ids"] == [card_id]
 
 
 def test_low_card_is_visible_as_context_only_in_report_assessment(tmp_path) -> None:
