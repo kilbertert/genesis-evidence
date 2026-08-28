@@ -26,3 +26,4 @@ jobs:
       - run: uv run python scripts/check_scope.py
       - run: uv run python scripts/check_schema.py
       - run: uv run python scripts/check_patient_copy.py
+      - run: uv run python scripts/check_product_catalog.py

@@ -6,12 +6,12 @@ import pytest
 from genesis_evidence.core.store import Database
 
 
-def test_schema_has_only_two_line_tables_and_stays_under_budget(tmp_path) -> None:
+def test_schema_has_expected_tables_and_stays_under_budget(tmp_path) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
 
     tables = set(database.table_names())
-    assert len(tables) == 26
+    assert len(tables) == 30
     assert {
         "conditions",
         "evidence_topics",
@@ -33,6 +33,10 @@ def test_schema_has_only_two_line_tables_and_stays_under_budget(tmp_path) -> Non
         "observation_confirmations",
         "assessments",
         "assessment_findings",
+        "product_candidates",
+        "product_candidate_sources",
+        "product_recommendations",
+        "product_review_audits",
     } <= tables
 
 

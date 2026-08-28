@@ -442,4 +442,72 @@ CREATE TABLE IF NOT EXISTS audit_events (
     detail_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- Product catalog: imported candidates stay in a blocked candidate layer, while
+-- the approved disease->product mappings form the published recommendation pool.
+CREATE TABLE IF NOT EXISTS product_candidates (
+    id TEXT PRIMARY KEY,
+    canonical_key TEXT NOT NULL UNIQUE,
+    name_zh TEXT NOT NULL,
+    name_en TEXT NOT NULL DEFAULT '',
+    brand TEXT NOT NULL DEFAULT '',
+    product_type TEXT NOT NULL DEFAULT '',
+    supplier_name TEXT NOT NULL DEFAULT '',
+    manufacturer TEXT NOT NULL DEFAULT '',
+    origin_market TEXT NOT NULL DEFAULT '',
+    regulatory_status TEXT NOT NULL DEFAULT '',
+    registration_number TEXT NOT NULL DEFAULT '',
+    review_status TEXT NOT NULL DEFAULT '',
+    matching_status TEXT NOT NULL DEFAULT '',
+    completeness_status TEXT NOT NULL DEFAULT '',
+    content_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'blocked'
+        CHECK (status IN ('blocked', 'in_review', 'published', 'withdrawn')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS product_candidate_sources (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
+    document_id TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK (page_number >= 1),
+    evidence_type TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    quote TEXT NOT NULL,
+    normalized_json TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK (confidence >= 0),
+    locator_json TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS product_candidate_sources_product_idx
+ON product_candidate_sources(product_id);
+
+CREATE TABLE IF NOT EXISTS product_recommendations (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
+    condition_codes_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'published'
+        CHECK (status IN ('blocked', 'in_review', 'published', 'withdrawn')),
+    reviewer TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    audit_note TEXT NOT NULL,
+    decision_ref TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (product_id),
+    CHECK (status <> 'published' OR trim(audit_note) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS product_review_audits (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL REFERENCES product_candidates(id) ON DELETE CASCADE,
+    condition_code TEXT REFERENCES conditions(code),
+    action TEXT NOT NULL CHECK (action IN ('blocked', 'in_review', 'published', 'withdrawn')),
+    actor TEXT NOT NULL,
+    note TEXT NOT NULL,
+    decision_ref TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
