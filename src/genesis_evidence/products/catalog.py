@@ -119,6 +119,12 @@ SEED_PRODUCT_MAPPINGS = (
         "复合全骨营养餐",
         ("COND_SARCOPENIA_FRAILTY", "COND_MALNUTRITION_RISK"),
     ),
+    SeedProductMapping("复合槲皮素", ("COND_HYPERURICEMIA_RISK",)),
+    SeedProductMapping("奶蓟硫辛酸", ("COND_MASLD_RISK",)),
+    SeedProductMapping("娇韵思®超高浓缩果蔬纤维粉", ("COND_CHRONIC_CONSTIPATION",)),
+    SeedProductMapping("护心素", ("COND_HYPERTENSION_RISK",)),
+    SeedProductMapping("活性叶酸", ("COND_ANEMIA_PATTERN",)),
+    SeedProductMapping("超级维BC", ("COND_CKD_RISK",)),
 )
 
 

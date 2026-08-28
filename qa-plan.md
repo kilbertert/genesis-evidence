@@ -27,13 +27,14 @@
 
 - **ID**: `QA-PUB-001`
 - **环境**: `uv run pytest` + 临时 SQLite；启用 T2 推荐引擎，产品表已由 T1 种子化。
-- **前置**: 4 款批准种子池已发布；目标 condition 有已发布无风险标产品；fixtures 为用户年龄 >=40、finding 非紧急且 severity 小于 3。
+- **前置**: 10 款批准种子池已发布；目标 condition 有已发布无风险标产品；fixtures 为用户年龄 >=40、finding 非紧急且 severity 小于 3。
 - **数据**: `condition_code=COND_DYSLIPIDEMIA`；已发布产品 `郅臻堂植物甾醇咀嚼片`；一条已确认异常观测（如 `ldl_c` 高于参考上限）。
 - **动作**:
   1. 分别通过 `ReportStore.assess()` 与 `EvidenceStore.match_published_cards()` 处理已确认观测。
   2. 读取 finding 的 `recommendations[]` 与 `product_status`。
   3. 检查每条推荐的必填字段与排序键。
 - **可观察结果**: `recommendations[]` 非空并排序；每条推荐含产品名、对应营养素、推荐理由、安全提醒、免责声明、证据回链；`product_status=available`。
+- **图片门禁**: 10 个已发布 PDF 产品逐项映射到唯一 `/products/` 图片 URL；其余 33 个候选仍为 blocked，不进入患者推荐。
 - **清理**: 删除临时 SQLite 文件与测试对象目录。
 
 ### QA-EXCL-002 未发布或带风险标产品不出现
@@ -92,10 +93,10 @@
 - **ID**: `QA-E2E-001`
 - **环境**: 本地 `uv run genesis-evidence-api`、`uv run genesis-evidence-review`、临时 SQLite/Object Store；注入 `GENESIS_EVIDENCE_API_KEY`、`GENESIS_EVIDENCE_REVIEW_API_KEY` 与 `GENESIS_EVIDENCE_REVIEWER_ID`；记录提交哈希、构建 ID、服务 URL 与执行时间戳。
 - **前置**: T1 一次性迁移已就位；T2 双入口接线完成；T3 患者侧推荐块渲染完成；T4 轻量产品审核位可用。
-- **数据**: 迁移后 43 个 `blocked` 候选 + 4 个 `published` 种子；一条目标为 `COND_DYSLIPIDEMIA` 的已确认异常观测（`observation_id`、`confirmation_status=confirmed`、`metric_code`、`value`、`unit`、`reference_low/high`、`evidence_text`、`source_file_index`、`source_page`、来源均完整）。
+- **数据**: 迁移后 43 个 `blocked` 候选 + 10 个 `published` 种子；一条目标为 `COND_DYSLIPIDEMIA` 的已确认异常观测（`observation_id`、`confirmation_status=confirmed`、`metric_code`、`value`、`unit`、`reference_low/high`、`evidence_text`、`source_file_index`、`source_page`、来源均完整）。
 - **动作**:
   1. 启动 Evidence API（`GENESIS_EVIDENCE_API_KEY` 满足至少 24 字符）与 Review API（`GENESIS_EVIDENCE_REVIEW_API_KEY` 满足至少 24 字符并提供 `GENESIS_EVIDENCE_REVIEWER_ID`），等待 `/health` 正常。
-  2. 运行确定性迁移/回填，确认 `blocked=43`、`published=4`，无旧仓运行期路径读取。
+  2. 运行确定性迁移/回填，确认 `blocked=43`、`published=10`，无旧仓运行期路径读取。
   3. 通过轻量产品审核位确认最小种子池发布状态与审计注记。
   4. `POST /api/evidence/matches`，发送 `schema_version=3` 的已确认异常观测。
   5. 断言返回 finding 的 `recommendations[]` 只含已发布无风险标产品，并含产品名、营养素、理由、安全提醒、免责与证据回链。

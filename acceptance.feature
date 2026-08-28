@@ -16,6 +16,7 @@ Feature: 已确认健康风险 → 可审核可发布的营养产品推荐
     When 系统生成该 finding 的 `recommendations`
     Then 推荐列表非空且按证据强度与异常严重度排序
     And 每条推荐包含产品名、对应营养素、推荐理由、安全提醒、免责声明与证据回链
+    And 每条已发布 PDF 产品推荐包含同源产品图片 URL
     And 该 finding 的 `product_status` 为 `available`
 
   Scenario: 未发布或带风险标的产品不出现

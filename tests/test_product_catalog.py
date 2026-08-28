@@ -16,6 +16,12 @@ SEED_NAMES = (
     "天然维生素D3片",
     "复合柠檬酸钙",
     "复合全骨营养餐",
+    "复合槲皮素胶囊",
+    "奶蓟硫辛酸胶囊",
+    "娇韵思®超高浓缩果蔬纤维粉",
+    "护心素胶囊",
+    "活性叶酸胶囊",
+    "超级维BC片",
 )
 
 
@@ -87,7 +93,7 @@ def test_product_catalog_schema_initializes_expected_tables(tmp_path: Path) -> N
     } <= set(database.table_names())
 
 
-def test_migration_keeps_43_blocked_and_publishes_four_seed_recommendations(
+def test_migration_keeps_43_blocked_and_publishes_ten_seed_recommendations(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "evidence.sqlite3")
@@ -115,11 +121,11 @@ def test_migration_keeps_43_blocked_and_publishes_four_seed_recommendations(
         ).fetchone()[0]
 
     assert blocked == 43
-    assert published == 4
+    assert published == 10
     assert source_count == 43
     assert orphan_count == 0
     assert store.summary()["blocked_products"] == 43
-    assert store.summary()["published_recommendations"] == 4
+    assert store.summary()["published_recommendations"] == 10
 
 
 def test_migration_is_idempotent(tmp_path: Path) -> None:
@@ -136,8 +142,8 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
 
     assert second == first
     assert first["product_rows"] == 43
-    assert first["recommendation_rows"] == 4
-    assert first["audit_rows"] == 4
+    assert first["recommendation_rows"] == 10
+    assert first["audit_rows"] == 10
 
 
 def test_seed_pool_mappings_carry_prd_audit_notes(tmp_path: Path) -> None:
@@ -153,12 +159,18 @@ def test_seed_pool_mappings_carry_prd_audit_notes(tmp_path: Path) -> None:
             """
         ).fetchall()
 
-    assert [json.loads(row["condition_codes_json"]) for row in rows] == [
+    assert sorted(json.loads(row["condition_codes_json"]) for row in rows) == sorted([
         ["COND_DYSLIPIDEMIA"],
         ["COND_VITAMIN_D_DEFICIENCY", "COND_OSTEOPOROSIS_RISK"],
         ["COND_VITAMIN_D_DEFICIENCY", "COND_OSTEOPOROSIS_RISK"],
         ["COND_SARCOPENIA_FRAILTY", "COND_MALNUTRITION_RISK"],
-    ]
+        ["COND_HYPERURICEMIA_RISK"],
+        ["COND_MASLD_RISK"],
+        ["COND_CHRONIC_CONSTIPATION"],
+        ["COND_HYPERTENSION_RISK"],
+        ["COND_ANEMIA_PATTERN"],
+        ["COND_CKD_RISK"],
+    ])
     assert all("PRD #103" in row["decision_ref"] for row in rows)
     assert all(row["audit_note"].strip() for row in rows)
 
@@ -201,7 +213,7 @@ def test_publish_approved_seed_pool_is_idempotent(tmp_path: Path) -> None:
     summary = store.publish_approved_seed_pool()
     second = _catalog_state(database)
 
-    assert summary.published_recommendation_count == 4
+    assert summary.published_recommendation_count == 10
     assert second == first
 
 

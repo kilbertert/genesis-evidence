@@ -52,6 +52,75 @@ SEED_RECOMMENDATION_COPY = {
         "evidence_strength": "moderate",
         "priority": 0,
     },
+    "复合槲皮素": {
+        "nutrient": "尿酸管理",
+        "reason": "尿酸管理可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#尿酸管理"],
+    },
+    "奶蓟硫辛酸": {
+        "nutrient": "脂肪肝",
+        "reason": "脂肪肝可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#脂肪肝"],
+    },
+    "娇韵思®超高浓缩果蔬纤维粉": {
+        "nutrient": "促进排便",
+        "reason": "促进排便可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#促进排便"],
+    },
+    "护心素": {
+        "nutrient": "血压管理",
+        "reason": "血压管理可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#血压管理"],
+    },
+    "活性叶酸": {
+        "nutrient": "多维多矿",
+        "reason": "多维多矿可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#多维多矿"],
+    },
+    "超级维BC": {
+        "nutrient": "多维多矿",
+        "reason": "多维多矿可作为该健康风险相关的膳食补充方向考虑。",
+        "safety_message": "请结合个人情况咨询专业人士。",
+        "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
+        "evidence_strength": "low",
+        "priority": 10,
+        "evidence_links": ["classification:2026-膳食补充剂-大健康人群功能分类.xlsx#多维多矿"],
+    },
+}
+
+# Same-origin paths are served by the Health-Flow frontend. The prefixes match
+# the normalized product names emitted by the supplier PDF catalog.
+PRODUCT_IMAGE_URLS = {
+    "郅臻堂®植物甾醇": "/products/zhizhen-plant-sterol.png",
+    "复合全骨营养餐": "/products/whole-bone-nutrition-meal.png",
+    "复合柠檬酸钙": "/products/calcium-citrate.png",
+    "复合槲皮素": "/products/quercetin.png",
+    "天然维生素D3": "/products/vitamin-d3.png",
+    "奶蓟硫辛酸": "/products/milk-thistle-alpha-lipoic.png",
+    "娇韵思®超高浓缩果蔬纤维粉": "/products/joyees-fruit-vegetable-fiber.png",
+    "护心素": "/products/cardiotonic-element.png",
+    "活性叶酸": "/products/active-folate.png",
+    "超级维BC": "/products/super-bc.png",
 }
 
 
@@ -66,6 +135,7 @@ class Recommendation:
     reason: str
     safety_message: str
     disclaimer: str
+    image_url: str | None
     evidence_links: tuple[str, ...]
     evidence_strength: str
     priority: int
@@ -109,6 +179,9 @@ def recommend(
             product.get("safety_message"), "safety_message"
         )
         disclaimer = _required_text(product.get("disclaimer"), "disclaimer")
+        image_url = product.get("image_url")
+        if image_url is not None:
+            image_url = _required_text(image_url, "image_url")
         for label, value in (
             ("reason", reason),
             ("safety_message", safety_message),
@@ -138,6 +211,7 @@ def recommend(
                 reason=reason,
                 safety_message=safety_message,
                 disclaimer=disclaimer,
+                image_url=image_url,
                 evidence_links=evidence_links,
                 evidence_strength=evidence_strength,
                 priority=priority,
@@ -193,6 +267,7 @@ def load_published_products(
                 "reason": metadata.get("reason"),
                 "safety_message": metadata.get("safety_message"),
                 "disclaimer": metadata.get("disclaimer"),
+                "image_url": metadata.get("image_url") or product_image_url(row["name_zh"]),
                 "evidence_links": metadata.get("evidence_links", ()),
                 "evidence_strength": metadata.get("evidence_strength", "moderate"),
                 "priority": metadata.get("priority", 0),
@@ -218,8 +293,23 @@ def seed_recommendation_metadata(product_name: str) -> dict[str, object]:
     return {
         **seed,
         "high_risk_marketing_claim": False,
-        "evidence_links": ["source:document-catalog-1#page-1"],
+        "image_url": product_image_url(product_name),
+        "evidence_links": seed.get("evidence_links", ["source:document-catalog-1#page-1"]),
     }
+
+
+def product_image_url(product_name: str) -> str | None:
+    """Return the reviewed same-origin image path for a known product."""
+
+    normalized_name = unicodedata.normalize("NFKC", product_name).replace(" ", "").strip()
+    return next(
+        (
+            image_url
+            for product_prefix, image_url in PRODUCT_IMAGE_URLS.items()
+            if normalized_name.startswith(product_prefix)
+        ),
+        None,
+    )
 
 
 def recommendation_message(recommendations: Sequence[object]) -> str:
