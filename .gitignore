@@ -229,3 +229,6 @@ pnpm-workspace.yaml
 # Personal archive (not project artifacts; user keeps these locally)
 体检报告/
 前端ui/
+
+# AFK runner (package.json) dependencies
+node_modules/
