@@ -6,7 +6,7 @@
 
 - Python/uv 与 `uv sync --extra dev` 完成的开发环境。
 - 测试库为临时 SQLite 文件；产品或审核相关测试不得污染 `var/genesis-evidence.sqlite3`。
-- 端到端使用本地服务：Evidence API（默认 `127.0.0.1:8091`）与 Review API（默认 `127.0.0.1:8090`），密钥分别通过 `GENESIS_EVIDENCE_API_KEY` 与 `GENESIS_EVIDENCE_REVIEW_API_KEY` 注入。
+- 端到端使用本地服务：Evidence API（默认 `127.0.0.1:8091`）与 Review API（默认 `127.0.0.1:8090`），密钥分别通过 `GENESIS_EVIDENCE_API_KEY` 与 `GENESIS_EVIDENCE_REVIEW_API_KEY` 注入，审核员标识通过 `GENESIS_EVIDENCE_REVIEWER_ID` 注入。
 
 ## 用例摘要
 
@@ -38,10 +38,10 @@
 
 - **ID**: `QA-EXCL-002`
 - **环境**: `uv run pytest` + 临时 SQLite；推荐器启用。
-- **前置**: 目标 condition 至少有一条 `published` 且无 `high_risk_marketing_claim` 的可用产品。
-- **数据**: 同一 condition 下构造四条记录：`blocked`、`in_review`、`published` 且带 `high_risk_marketing_claim`、`withdrawn`。
+- **前置**: 目标 condition 至少有一条 `published` 且无 `high_risk_marketing_claim` 的可用产品；用户年龄 >=40；finding 非紧急且 severity 小于 3。
+- **数据**: 同一 condition 下构造五条记录：`blocked`、`in_review`、`published` 且带 `high_risk_marketing_claim`、`withdrawn`，以及一条 `published` 且无 `high_risk_marketing_claim` 的对照产品。
 - **动作**:
-  1. 关闭紧急/高危抑制开关，确认 finding 不为紧急、severity 小于 3。
+  1. 确认 finding 非紧急、severity 小于 3 且用户年龄 >=40。
   2. 调用推荐器并保存返回产品集合。
   3. 与输入产品状态逐条比对。
 - **可观察结果**: 返回集合只含状态为 `published` 且无 `high_risk_marketing_claim` 的产品；其余三类绝不出现。
@@ -52,7 +52,7 @@
 - **ID**: `QA-URG-003`
 - **环境**: `uv run pytest` + 临时 SQLite；推荐器启用。
 - **前置**: 目标 condition 有可用已发布无风险标产品；用户年龄 >=40。
-- **数据**: 构造两个 finding：`urgency=urgent` 及 `abnormality_severity=3`（再以 `urgency=emergency` 覆盖第二分支）。
+- **数据**: 构造三个 finding：`urgency=urgent`、`urgency=emergency`、`abnormality_severity=3`。
 - **动作**:
   1. 对每个 finding 调用推荐器。
   2. 读取 `recommendations[]` 与患者侧 `patient_reply`。
@@ -88,11 +88,11 @@
 ### QA-E2E-001 端到端全链路患者可见推荐
 
 - **ID**: `QA-E2E-001`
-- **环境**: 本地 `uv run genesis-evidence-api`、`uv run genesis-evidence-review`、临时 SQLite/Object Store；记录提交哈希、构建 ID、服务 URL 与执行时间戳。
+- **环境**: 本地 `uv run genesis-evidence-api`、`uv run genesis-evidence-review`、临时 SQLite/Object Store；注入 `GENESIS_EVIDENCE_API_KEY`、`GENESIS_EVIDENCE_REVIEW_API_KEY` 与 `GENESIS_EVIDENCE_REVIEWER_ID`；记录提交哈希、构建 ID、服务 URL 与执行时间戳。
 - **前置**: T1 一次性迁移已就位；T2 双入口接线完成；T3 患者侧推荐块渲染完成；T4 轻量产品审核位可用。
-- **数据**: 迁移后 43 个 `blocked` 候选 + 4 个 `published` 种子；一条目标为 `COND_DYSLIPIDEMIA` 的已确认异常观测（`observation_id`、`metric_code`、`value`、`unit`、`reference_low/high`、`evidence_text`、页码/来源均完整）。
+- **数据**: 迁移后 43 个 `blocked` 候选 + 4 个 `published` 种子；一条目标为 `COND_DYSLIPIDEMIA` 的已确认异常观测（`observation_id`、`confirmation_status=confirmed`、`metric_code`、`value`、`unit`、`reference_low/high`、`evidence_text`、`source_file_index`、`source_page`、来源均完整）。
 - **动作**:
-  1. 启动 Evidence API（`GENESIS_EVIDENCE_API_KEY` 满足至少 24 字符）与 Review API，等待 `/health` 正常。
+  1. 启动 Evidence API（`GENESIS_EVIDENCE_API_KEY` 满足至少 24 字符）与 Review API（`GENESIS_EVIDENCE_REVIEW_API_KEY` 满足至少 24 字符并提供 `GENESIS_EVIDENCE_REVIEWER_ID`），等待 `/health` 正常。
   2. 运行确定性迁移/回填，确认 `blocked=43`、`published=4`，无旧仓运行期路径读取。
   3. 通过轻量产品审核位确认最小种子池发布状态与审计注记。
   4. `POST /api/evidence/matches`，发送 `schema_version=3` 的已确认异常观测。
