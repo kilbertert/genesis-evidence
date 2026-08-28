@@ -105,5 +105,5 @@
 ## 执行记录
 
 - 结果工件：`artifacts/qa/product-recommendation-acceptance.md`
-- 测试提交：`d703b3e4df2a32bf885a3091998082ae4176559a`
+- 测试提交：`389a7cff9b1e648f2fb7e05a13ac1221f47c79f3`
 - 结论：`QA-PUB-001` 至 `QA-E2E-001` 全部通过；环境、时间戳、命令结果与残余风险见结果工件。
