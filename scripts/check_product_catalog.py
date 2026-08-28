@@ -17,7 +17,7 @@ except ModuleNotFoundError:
     from scripts.migrate_product_catalog import read_legacy_rows
 
 EXPECTED_BLOCKED_PRODUCTS = 43
-EXPECTED_PUBLISHED_RECOMMENDATIONS = 4
+EXPECTED_PUBLISHED_RECOMMENDATIONS = 10
 FORBIDDEN_RUNTIME_LEGACY_TOKENS = (
     "genesis-health",
     "literature.db",
@@ -119,6 +119,12 @@ def build_fixture_database(directory: Path, target_path: Path) -> Database:
             "天然维生素D3片",
             "复合柠檬酸钙",
             "复合全骨营养餐",
+            "复合槲皮素胶囊",
+            "奶蓟硫辛酸胶囊",
+            "娇韵思®超高浓缩果蔬纤维粉",
+            "护心素胶囊",
+            "活性叶酸胶囊",
+            "超级维BC片",
         )
         candidate_rows = []
         for index in range(43):
