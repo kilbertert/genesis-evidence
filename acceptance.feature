@@ -76,3 +76,24 @@ Feature: 已确认健康风险 → 可审核可发布的营养产品推荐
     Then 页面不产生横向滚动
     And 论文队列、论文摘要与审核步骤按单列顺序阅读
     And 标题不显示 `&lt;...&gt;` 或其他 HTML 实体标记
+
+  Rule: AFK 拉取请求自动化使用可信控制面
+
+  Scenario: 持久化 runner 使用当前 main 作为审核基线
+    Given runner 的本地 main 已落后于 origin main
+    When 仓库所有者创建的同仓库 PR 触发 agent:review
+    Then 可信 controller 将本地 main 重置到当前 origin main
+    And 审核差异以该当前基线计算
+
+  Scenario: 候选代码不能获得交付凭据
+    Given 仓库所有者创建的同仓库 PR 触发 AFK 变更工作流
+    When 工作流执行候选分支
+    Then 宿主依赖和编排只从 main controller 加载
+    And 候选命令只在带只读 token 的 Docker 沙箱执行
+    And 干净 delivery checkout 导入并推送已验证的 Git bundle
+
+  Scenario: 不可信 PR 或缺失交付凭据时停止
+    Given PR 来自 fork、作者不是仓库所有者，或 AGENT_PAT 不可用
+    When PR 被添加 AFK 变更标签
+    Then 工作流不报告成功交付
+    And 凭据失败时记录 agent:blocked
