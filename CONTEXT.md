@@ -24,6 +24,16 @@
 | 产品生命周期 | `blocked → in_review → published → withdrawn`；发布才可见，下架后患者侧推荐消失。 |
 | `patient_visible_body` / `action_message` | 患者侧展示位；推荐块复用它并增加产品名、营养素、理由、安全提醒、免责与证据回链。 |
 
+## 论文审核工作台术语
+
+| 术语 | 约束 |
+| --- | --- |
+| `审核工作台` | 审核员处理论文队列、证据步骤与审计记录的工作界面。 |
+| `论文队列` | 审核工作台中用于选择待处理论文的导航列表。 |
+| `当前审核步骤` | 当前论文最先需要完成或人工处理的工作流步骤；其他步骤仍可展开查看。 |
+
+审核工作台的论文队列与审核内容是两个独立的阅读区域；桌面端分别滚动，移动端恢复为单列阅读。
+
 ## 风控与文案边界
 
 - 紧急或高危 finding 抑制推荐（对齐旧仓 `suppressed_for_urgent_evaluation` 语义）。
@@ -42,3 +52,4 @@
 - `docs/adr/0002-one-time-product-catalog-migration-and-self-governance.md`
 - `docs/adr/0003-anchor-recommendations-under-confirmed-findings.md`
 - `docs/adr/0004-four-product-seed-pool-publication.md`
+- `docs/adr/0005-review-workbench-independent-reading-regions.md`

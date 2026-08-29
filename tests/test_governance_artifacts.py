@@ -22,6 +22,7 @@ QA_CASE_IDS = {
     "QA-E2E-002",
     "QA-E2E-003",
     "QA-DISEASE-001",
+    "QA-WORKBENCH-001",
 }
 
 QA_SCALAR_FIELDS = (
@@ -38,6 +39,7 @@ ADR_NAMES = (
     "0002-one-time-product-catalog-migration-and-self-governance.md",
     "0003-anchor-recommendations-under-confirmed-findings.md",
     "0004-four-product-seed-pool-publication.md",
+    "0005-review-workbench-independent-reading-regions.md",
 )
 
 

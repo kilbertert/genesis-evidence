@@ -30,6 +30,16 @@ def test_paper_record_normalizes_doi_and_uses_it_for_deduplication() -> None:
     assert record.canonical_key == "doi:10.1000/example"
 
 
+def test_paper_record_normalizes_encoded_markup_in_external_titles() -> None:
+    record = PaperRecord(
+        source=SourceName.EUROPE_PMC,
+        source_id="MED:1",
+        title="Effects &lt;i&gt;Ceratonia&lt;/i&gt; &lt;sub&gt;3&lt;/sub&gt;",
+    )
+
+    assert record.title == "Effects Ceratonia 3"
+
+
 def test_policy_blocks_sci_hub_even_if_candidate_claims_open_access() -> None:
     candidate = FullTextCandidate(
         source=SourceName.EUROPE_PMC,
