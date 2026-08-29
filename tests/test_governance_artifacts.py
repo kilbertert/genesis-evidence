@@ -123,11 +123,13 @@ def test_context_glossary_covers_product_recommendation_terms() -> None:
         assert term in context
 
 
-def test_context_decision_links_match_adr_files() -> None:
+def test_context_is_glossary_only_and_adrs_are_separate() -> None:
     context = _read("CONTEXT.md")
 
+    assert "## Decision" not in context
+    assert "## 数据与迁移" not in context
     for name in ADR_NAMES:
-        assert f"docs/adr/{name}" in context
+        assert (ROOT / "docs/adr" / name).is_file()
 
 
 def test_product_recommendation_adrs_record_decision_alternatives_and_rationale() -> None:
