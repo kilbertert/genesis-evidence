@@ -7,6 +7,8 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
+from html import unescape
+from html.parser import HTMLParser
 from typing import Any
 
 
@@ -46,6 +48,22 @@ def normalize_doi(value: str | None) -> str | None:
     doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi)
     doi = re.sub(r"^doi:\s*", "", doi)
     return doi or None
+
+
+class _TitleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def normalize_title_text(value: str) -> str:
+    parser = _TitleTextParser()
+    parser.feed(unescape(value))
+    parser.close()
+    return " ".join("".join(parser.parts).split())
 
 
 def normalize_title(value: str) -> str:
@@ -95,7 +113,7 @@ class PaperRecord:
         self.doi = normalize_doi(self.doi)
         self.pmid = self.pmid.strip() if self.pmid else None
         self.pmcid = self.pmcid.strip().upper() if self.pmcid else None
-        self.title = " ".join(self.title.split())
+        self.title = normalize_title_text(self.title)
 
     @property
     def canonical_key(self) -> str:
