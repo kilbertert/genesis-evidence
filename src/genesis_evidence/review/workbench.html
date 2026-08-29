@@ -5,68 +5,102 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>论文证据审核工作台</title>
   <style>
-    :root { color-scheme: light; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; }
+    :root { color-scheme: light; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; font-size: 16px; line-height: 1.55; --ink: #18231e; --muted: #64736b; --canvas: #f4f6f3; --surface: #fff; --surface-soft: #f8faf8; --line: #d6dfd9; --brand: #1e5b46; --brand-soft: #e5f0eb; --warning: #fff6dc; --warning-line: #e5c979; --danger: #fff0ee; --danger-line: #dcb0aa; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #f3f5f0; color: #17231b; }
-    header { padding: 20px 28px; background: #173f32; color: white; display: flex; gap: 20px; align-items: end; flex-wrap: wrap; }
-    header h1 { margin: 0; font-size: 22px; }
-    header p { margin: 4px 0 0; color: #cfe2d7; }
-    .credentials { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--canvas); color: var(--ink); display: flex; flex-direction: column; overflow: hidden; }
+    header { flex: 0 0 auto; padding: 18px clamp(18px, 3vw, 40px); background: #173f32; color: white; display: flex; gap: 20px; align-items: end; flex-wrap: wrap; }
+    header h1 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: 0; }
+    header p { margin: 6px 0 0; color: #cfe2d7; font-size: 14px; }
+    .credentials { margin-left: auto; display: flex; gap: 10px; align-items: end; flex-wrap: wrap; font-size: 14px; }
     input, select, textarea, button { font: inherit; }
-    input, select, textarea { border: 1px solid #bec9c0; border-radius: 7px; padding: 8px 10px; background: white; }
+    input, select, textarea { border: 1px solid #bec9c0; border-radius: 6px; padding: 8px 10px; background: var(--surface); color: var(--ink); }
     input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 3px solid #9ccbb8; outline-offset: 2px; }
-    textarea { width: 100%; min-height: 82px; resize: vertical; }
-    button { border: 0; border-radius: 7px; padding: 8px 12px; cursor: pointer; background: #24654e; color: white; }
+    textarea { width: 100%; min-height: 82px; resize: vertical; line-height: 1.5; }
+    button { border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; background: var(--brand); color: white; }
     button:disabled { opacity: .62; cursor: wait; }
-    button.secondary { background: #65736b; }
-    button.danger { background: #9b3a32; }
-    main { display: grid; grid-template-columns: minmax(250px, 330px) 1fr; min-height: calc(100vh - 92px); }
-    aside { border-right: 1px solid #d5ddd6; padding: 18px; background: #fbfcfa; }
-    #queue button { display: block; width: 100%; text-align: left; margin: 8px 0; background: white; color: #17231b; border: 1px solid #d5ddd6; }
-    #queue button.active { border-color: #24654e; box-shadow: 0 0 0 2px #d7e8df; }
-    #queue button.loading { border-color: #24654e; }
-    .content { padding: 22px; overflow: auto; }
-    .panel { background: white; border: 1px solid #d5ddd6; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .panel h2, .panel h3 { margin-top: 0; }
-    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
-    .tag { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #e6eee9; margin: 2px; font-size: 12px; }
-    .warning { background: #fff4d8; border-color: #e8ca7a; }
-    .blocked { background: #fff0ee; border-color: #ddb0aa; }
+    button.secondary { background: #64736b; }
+    button.danger { background: #963f37; }
+    main { display: grid; grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    aside, .content { min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+    aside { border-right: 1px solid var(--line); padding: 18px 16px 28px; background: var(--surface-soft); }
+    aside > .review-summary { position: sticky; top: -18px; z-index: 2; padding: 18px 0 10px; background: var(--surface-soft); }
+    aside h2 { font-size: 18px; line-height: 1.25; }
+    #queue button { display: block; width: 100%; text-align: left; margin: 8px 0; padding: 11px 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 1px 1px rgb(20 50 35 / 4%); }
+    #queue button strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-height: 1.35; }
+    #queue button.active { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
+    #queue button.loading { border-color: var(--brand); }
+    .content { padding: 22px clamp(18px, 3vw, 40px) 48px; }
+    .content > .tabs, .content > #reviewView, .content > #diseaseView { width: 100%; max-width: 1180px; margin-inline: auto; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 22px; margin-bottom: 18px; box-shadow: 0 1px 2px rgb(20 50 35 / 3%); }
+    .panel h2, .panel h3 { margin-top: 0; line-height: 1.3; }
+    .panel h2 { font-size: 21px; }
+    .panel h3 { font-size: 16px; }
+    .panel p, .panel li { line-height: 1.65; }
+    .panel p { max-width: 88ch; }
+    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; padding: 12px 0; border-block: 1px solid #e4eae6; font-size: 14px; }
+    .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; background: var(--brand-soft); margin: 2px; font-size: 12px; line-height: 1.35; }
+    .warning { background: var(--warning); border-color: var(--warning-line); }
+    .blocked { background: var(--danger); border-color: var(--danger-line); }
     .review-summary { display: flex; justify-content: space-between; gap: 12px; align-items: start; flex-wrap: wrap; }
     .checklist { list-style: none; padding: 0; margin: 14px 0 0; }
-    .checklist li { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 9px 0; border-top: 1px solid #e2e7e3; }
+    .checklist li { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid #e2e7e3; }
     .check-pass { color: #24654e; }
     .check-action { color: #7a5a00; }
     .check-blocked { color: #a4261d; }
-    .step-label { color: #24654e; font-size: 13px; font-weight: 700; }
-    details.claim > summary { cursor: pointer; font-weight: 700; }
-    .ai-draft { white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f5f0; padding: 10px; }
+    .step-label { color: var(--brand); font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+    details > summary { cursor: pointer; }
+    details.workflow-step > summary { list-style: none; display: flex; align-items: baseline; gap: 10px; }
+    details.workflow-step > summary::-webkit-details-marker { display: none; }
+    details.workflow-step > summary::before { content: '›'; color: var(--brand); font-size: 22px; line-height: 1; }
+    details.workflow-step[open] > summary::before { content: '⌄'; }
+    details.workflow-step > summary h2 { margin: 0; }
+    details.workflow-step > summary + * { margin-top: 16px; }
+    details.claim > summary { cursor: pointer; font-weight: 700; line-height: 1.5; }
+    .ai-draft { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--canvas); padding: 12px; line-height: 1.55; }
     .claim { border-top: 1px solid #e2e7e3; padding-top: 14px; margin-top: 14px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-    .coverage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .coverage-table th, .coverage-table td { border-bottom: 1px solid #d5ddd6; padding: 8px 6px; text-align: left; vertical-align: top; }
-    .coverage-table th { color: #65736b; font-weight: 600; white-space: nowrap; }
+    .table-wrap { overflow-x: auto; }
+    .coverage-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+    .coverage-table th, .coverage-table td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; line-height: 1.5; }
+    .coverage-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
     .coverage-table .status { white-space: nowrap; font-weight: 600; }
-    .tabs { display: flex; gap: 6px; background: #173f32; padding: 8px 28px 0; }
-    .tab { border: 0; border-radius: 8px 8px 0 0; padding: 9px 16px; background: transparent; color: #cfe2d7; cursor: pointer; font-size: 14px; }
-    .tab:hover { background: #22493c; }
-    .tab.is-active { background: #f3f5f0; color: #173f32; font-weight: 700; }
+    .tabs { position: sticky; top: -22px; z-index: 3; display: flex; gap: 4px; padding: 0 0 12px; margin-bottom: 18px !important; background: var(--canvas); border-bottom: 1px solid var(--line); }
+    .tab { border: 0; border-radius: 5px; padding: 8px 13px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+    .tab:hover { background: var(--brand-soft); color: var(--brand); }
+    .tab.is-active { background: var(--brand); color: white; font-weight: 700; }
     .disease-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-    .disease-card { background: white; border: 1px solid #d5ddd6; border-radius: 8px; padding: 16px; }
+    .disease-card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 18px; }
     .disease-header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
     .disease-header h3 { margin: 0; }
     .disease-count { font-size: 13px; font-weight: 700; }
     .disease-papers { border-top: 1px solid #e2e7e3; margin-top: 10px; padding-top: 8px; }
     .disease-paper { border-top: 1px solid #e2e7e3; padding: 8px 0; }
     .disease-paper:first-of-type { border-top: 0; }
-    .muted { color: #65736b; font-size: 13px; }
+    .muted { color: var(--muted); font-size: 14px; }
     .error { color: #a4261d; }
     .loading-state { min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #65736b; }
     .spinner { width: 18px; height: 18px; border: 2px solid #cbd8d0; border-top-color: #24654e; border-radius: 50%; animation: spin .8s linear infinite; flex: 0 0 auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-color: #24654e; } }
-    @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid #d5ddd6; } }
+    @media (max-width: 800px) {
+      html, body { height: auto; min-height: 100%; }
+      body { display: block; overflow: auto; }
+      header { padding: 16px 18px; }
+      header h1 { font-size: 21px; }
+      .credentials { margin-left: 0; width: 100%; align-items: center; }
+      main { display: block; min-height: 0; overflow: visible; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
+      aside > .review-summary { position: static; padding: 0 0 10px; }
+      .content { overflow: visible; padding: 16px 14px 34px; }
+      .content > .tabs, .content > #reviewView, .content > #diseaseView { max-width: none; }
+      .tabs { position: static; margin-bottom: 14px !important; }
+      .panel { padding: 18px 16px; }
+      .panel h2 { font-size: 19px; }
+      .meta { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -87,10 +121,10 @@
     </nav>
     <div id="reviewView">
       <div id="coverage" class="panel"><h2>疾病框架覆盖矩阵</h2><p class="muted">正在加载覆盖状态…</p></div>
-      <div id="detail" class="panel" aria-live="polite"><p>选择一篇论文开始审核。</p></div>
+    <div id="detail" aria-live="polite"><div class="empty-state"><p>选择一篇论文开始审核。</p></div></div>
       <div id="cards" class="panel"><h2>知识卡</h2></div>
     </div>
-    <div id="diseaseView" class="panel">
+    <div id="diseaseView" class="panel" hidden>
       <div class="review-summary"><div><h2>疾病知识库</h2><p id="diseaseSummary" class="muted">按疾病聚合已收录论文,查看疾病框架覆盖。</p></div></div>
       <input id="disease-search" placeholder="搜索疾病名称或代码" aria-label="疾病知识库筛选">
       <div id="diseaseList" class="disease-grid"><p class="muted">正在加载…</p></div>
@@ -100,6 +134,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const plainTitle = value => { let text = String(value ?? ''); for (let i = 0; i < 2; i += 1) text = new DOMParser().parseFromString(text, 'text/html').body.textContent || ''; return text.replace(/\s+/g, ' ').trim(); };
 const designs = ['randomized_controlled_trial','systematic_review_meta_analysis','controlled_feeding_metabolic_study','bioavailability_pharmacokinetic_study','cohort_study','case_control_study','cross_sectional_study','biomarker_validation_study','non_randomized_controlled_study','natural_experiment','ecological_study','animal_study','in_vitro_study','case_series','case_report','guideline','other','uncertain'];
 const robTools = ['rob2','robins_i','robis','amstar2','diagnostic_accuracy','exposure_study','safety_signal','other'];
 const publicationRoles = ['primary','protocol','statistical_analysis_plan','follow_up','subgroup','combined_report','correction','retraction','other'];
@@ -151,7 +186,7 @@ async function loadAll(authenticate = false) {
     conditions = nextConditions; topics = nextTopics; diseasePapers = diseasePapersData;
     renderCoverage(coverage);
     if (currentView === 'disease') renderDiseaseLibrary();
-    $('queue').innerHTML = papers.map(p => `<button data-paper="${esc(p.id)}" class="${p.id === selectedPaper ? 'active' : ''}"><strong>${esc(p.title || '无标题')}</strong><br><span class="muted">${esc(reviewStates[p.review_state] || p.review_state)} · ${p.full_text_not_retrieved ? '全文未取得（台账已闭合）' : p.full_text_available ? esc(p.extraction_job_status || '未入队') : '全文缺失'} / ${esc(p.extraction_job_stage || '—')} · 待审 ${esc(p.pending_claims || 0)}</span></button>`).join('') || '<p class="muted">暂无论文。</p>';
+    $('queue').innerHTML = papers.map(p => `<button data-paper="${esc(p.id)}" class="${p.id === selectedPaper ? 'active' : ''}"><strong title="${esc(plainTitle(p.title || '无标题'))}">${esc(plainTitle(p.title || '无标题'))}</strong><br><span class="muted">${esc(reviewStates[p.review_state] || p.review_state)} · ${p.full_text_not_retrieved ? '全文未取得（台账已闭合）' : p.full_text_available ? esc(p.extraction_job_status || '未入队') : '全文缺失'} / ${esc(p.extraction_job_stage || '—')} · 待审 ${esc(p.pending_claims || 0)}</span></button>`).join('') || '<p class="muted">暂无论文。</p>';
     document.querySelectorAll('[data-paper]').forEach(button => button.onclick = () => openPaper(button.dataset.paper));
     $('jobs').innerHTML = jobs.map(j => `<div class="claim"><strong>${esc(j.title)}</strong><p class="muted">${esc(j.status)} · ${esc(j.stage)} · 尝试 ${esc(j.attempt_count)}</p>${j.error_message ? `<p class="error">${esc(j.error_class)}：${esc(j.error_message)}</p>` : ''}${j.status === 'failed' ? `<button data-retry-job="${esc(j.id)}">重试</button>` : ''}</div>`).join('') || '<p class="muted">暂无任务。</p>';
     document.querySelectorAll('[data-retry-job]').forEach(button => button.onclick = () => runAction(button, '正在重新提交抽取任务…', '抽取任务已重新入队。', async () => { await api(`/api/review/extraction-jobs/${button.dataset.retryJob}/retry`,{method:'POST'}); await loadAll(); }));
@@ -212,7 +247,7 @@ function renderPaper() {
     const failed = job.status === 'failed';
     const state = notRetrieved ? '全文未取得（台账已闭合）' : !job.full_text_available ? '全文缺失' : failed ? '抽取失败' : job.status === 'running' ? '正在处理' : job.status === 'queued' ? '等待处理' : '尚未进入抽取队列';
     const detail = notRetrieved ? `<p>${esc(guidance.next_action)}</p>` : !job.full_text_available ? '<p>该论文没有已保存的全文对象，无法开始独立抽取。</p>' : failed ? `<p class="error">${esc(job.error_class)}：${esc(job.error_message)}</p><button id="retryCurrent">重试失败阶段</button>` : `<p>当前阶段：${esc(stageNames[job.stage] || job.stage || '—')}。任务完成后才会显示通读摘要、独立抽取和差异检查。</p>`;
-    $('detail').innerHTML = `<div class="panel"><h2>${esc(p.title)}</h2><div class="meta"><div>DOI：${esc(p.doi || '—')}</div><div>年份：${esc(p.year || '—')}</div><div>完整性：<span class="tag">${esc(p.integrity_status)}</span></div><div>抽取：<span class="tag">${esc(state)}</span></div></div><h3>${esc(state)}</h3>${detail}</div><div class="panel"><h2>主题筛选台账</h2>${screening}</div>`;
+    $('detail').innerHTML = `<div class="panel"><h2>${esc(plainTitle(p.title))}</h2><div class="meta"><div>DOI：${esc(p.doi || '—')}</div><div>年份：${esc(p.year || '—')}</div><div>完整性：<span class="tag">${esc(p.integrity_status)}</span></div><div>抽取：<span class="tag">${esc(state)}</span></div></div><h3>${esc(state)}</h3>${detail}</div><div class="panel"><h2>主题筛选台账</h2>${screening}</div>`;
     if (failed) $('retryCurrent').onclick = event => runAction(event.currentTarget, '正在重新提交抽取任务…', '抽取任务已重新入队。', async () => { await api(`/api/review/extraction-jobs/${job.id}/retry`,{method:'POST'}); await refreshCurrent(); });
     document.querySelectorAll('[data-screen-paper]').forEach(button => button.onclick = () => screenPaper(button.closest('[data-screen-run]'), button));
     document.querySelectorAll('[data-record-retrieval]').forEach(button => button.onclick = () => recordRetrieval(button.closest('[data-screen-run]'), button));
@@ -224,6 +259,13 @@ function renderPaper() {
   const admittedPaper = current.admission?.status === 'internally_admitted';
   const canHumanAdmit = (guidance.checks || []).every(check => check.status === 'pass' || (check.id === 'dual_ai' && check.status === 'blocked'));
   const allClaimsReviewed = admittedPaper && (current.claims || []).length > 0 && (current.claims || []).every(claim => claim.status !== 'candidate');
+  const screeningPending = (current.collections || []).some(collection => {
+    const suggestion = collection.screening_suggestion || {};
+    if (suggestion.stage) return true;
+    if (collection.title_abstract_decision === 'excluded' || collection.full_text_decision === 'excluded') return false;
+    return collection.full_text_retrieval_status !== 'retrieved' || collection.full_text_decision !== 'included';
+  });
+  const activeStep = screeningPending ? 1 : consistency.verdict !== 'consistent' ? 2 : !admittedPaper ? 3 : !allClaimsReviewed ? 4 : 5;
   const conditionFacts = (extraction.condition_candidates || []).map(item => `<li><strong>${esc(item.condition_code)}</strong>：${esc(item.rationale)}<br><span class="muted">${esc(item.evidence)} · ${esc(item.locator)}</span></li>`).join('') || '<li>未识别到首批健康问题。</li>';
   const symptomFacts = (extraction.directly_reported_symptoms || []).map(item => `${esc(item.name)}（${esc(item.locator)}）`).join('；') || '论文未直接报告症状';
   const factsPanel = `<div class="panel"><h2>AI-A 论文事实摘要</h2><div class="grid"><div><h3>研究的方法或营养措施</h3><p>${(extraction.studied_approach || []).map(esc).join('；') || '未报告'}</p></div><div><h3>研究结局</h3><p>${(extraction.outcomes || []).map(esc).join('；') || '未报告'}</p></div></div><h3>可能相关的健康问题及原文依据</h3><ul>${conditionFacts}</ul><h3>论文直接报告的症状</h3><p>${symptomFacts}</p></div>`;
@@ -239,12 +281,12 @@ function renderPaper() {
     <div class="panel ${guidance.state === 'blocked' ? 'blocked' : guidance.state === 'ready_for_automation' ? 'warning' : ''}">
       <div class="review-summary"><div><span class="step-label">AI 正式执行</span><h2>${esc(reviewStates[guidance.state] || guidance.state)}</h2><p>${esc(guidance.next_action || '')}</p></div><div class="actions"><span class="tag">${(guidance.issues || []).length} 项差异</span><button id="autoCurrent">AI 自动完成当前论文</button></div></div><ul class="checklist">${checkItems}</ul>
     </div>
-    <div class="panel"><h2>${esc(p.title)}</h2><div class="meta"><div>DOI：${esc(p.doi || '—')}</div><div>年份：${esc(p.year || '—')}</div><div>完整性：<span class="tag">${esc(p.integrity_status)}</span></div><div>准入：<span class="tag">${esc(current.admission?.status || 'pending')}</span></div></div><h3>AI-A 通读摘要</h3><p>${esc(extraction.summary || '暂无')}</p><p><strong>研究问题：</strong>${esc(extraction.research_question || '暂无')}</p><p><strong>研究设计候选：</strong>${esc(extraction.study_design || p.study_design_candidate || 'uncertain')}</p><details><summary>查看 AI-B 独立抽取</summary><pre>${esc(JSON.stringify(secondExtraction,null,2))}</pre></details></div>
-    <div class="panel"><span class="step-label">步骤 1 · AI 执行 / 人工可覆盖</span><h2>版本化主题 / PICOTS 筛选</h2>${screening}</div>
-    <div class="panel ${consistency.verdict === 'consistent' ? '' : 'warning'}"><span class="step-label">步骤 2 · AI 执行 / 人工可覆盖</span><h2>两次独立同模型抽取差异裁决</h2>${mustResolve.length ? `<h3>必须裁决 ${mustResolve.length} 项</h3><ul>${issueList(mustResolve)}</ul>` : '<p>没有关键冲突。</p>'}${verifyIssues.length ? `<details><summary>另外核对 ${verifyIssues.length} 项非关键差异</summary><ul>${issueList(verifyIssues)}</ul></details>` : ''}${resolution}</div>
-    <div class="panel"><span class="step-label">步骤 3 · AI 执行 / 人工可接管</span><h2>研究身份确认与论文准入</h2><p class="muted">来源：${sources}<br>Study：${esc(study.id || '缺失')} · ${esc(study.status || '未知')} · 注册号 ${esc((study.registration_ids || []).join('、') || '未报告')}</p><details><summary>人工接管身份与准入决定</summary><div class="grid"><label>研究设计<select id="admitStudyDesign">${options(designs, suggested.study_design || extraction.study_design || 'uncertain')}</select></label><label>Publication 角色<select id="publicationRole">${options(publicationRoles, suggested.publication_role || 'primary')}</select></label></div><h3>关联健康问题</h3>${conditionChecks}<label><input id="identityConfirmed" type="checkbox" ${admittedPaper ? 'checked' : ''}> 已核对论文身份、研究设计、注册/协议及版本关系</label><div class="actions"><button id="admit" ${!canHumanAdmit || admittedPaper ? 'disabled' : ''}>人工覆盖并准入</button><button id="rejectPaper" class="danger">人工拒绝论文</button></div></details></div>
-    <div class="panel"><span class="step-label">步骤 4 · AI 执行 / 人工可接管</span><h2>Result 与 Claim 审核</h2>${admittedPaper ? '' : '<p class="warning">AI 会先完成论文准入，再逐条审核 Claim。</p>'}${claims}</div>
-    <div class="panel"><span class="step-label">步骤 5 · AI 执行 / 证据规则闸门</span><h2>Evidence Profile 与知识卡</h2><p class="muted">AI 会在主题证据体完整时按相同 PICOTS 结果范围建档，并显式记录 GRADE 域。低或极低确定性内容不会发布到患者端。</p><details><summary>人工接管知识卡草稿</summary>${allClaimsReviewed ? '' : '<p class="warning">本论文仍有候选 Claim 未处理。</p>'}<div class="grid"><label>版本化主题<select id="cardTopic">${topicOptions}</select></label><label>健康问题<select id="cardCondition">${conditionOptions()}</select></label><label>版本<input id="cardVersion" value="1.0.0"></label><label>证据确定性<select id="profileCertainty">${options(['high','moderate','low','very_low'],'moderate')}</select></label></div><label>估计目标<textarea id="profileTarget"></textarea></label><label>确定性理由<textarea id="profileRationale"></textarea></label><label>患者可见正文<textarea id="cardBody"></textarea></label><button id="createCard" ${allClaimsReviewed ? '' : 'disabled'}>人工创建草稿</button></details></div>
+    <div class="panel"><h2>${esc(plainTitle(p.title))}</h2><div class="meta"><div>DOI：${esc(p.doi || '—')}</div><div>年份：${esc(p.year || '—')}</div><div>完整性：<span class="tag">${esc(p.integrity_status)}</span></div><div>准入：<span class="tag">${esc(current.admission?.status || 'pending')}</span></div></div><h3>AI-A 通读摘要</h3><p>${esc(extraction.summary || '暂无')}</p><p><strong>研究问题：</strong>${esc(extraction.research_question || '暂无')}</p><p><strong>研究设计候选：</strong>${esc(extraction.study_design || p.study_design_candidate || 'uncertain')}</p><details><summary>查看 AI-B 独立抽取</summary><pre>${esc(JSON.stringify(secondExtraction,null,2))}</pre></details></div>
+    <details class="panel workflow-step" ${activeStep === 1 ? 'open' : ''}><summary><span class="step-label">步骤 1 · AI 执行 / 人工可覆盖</span><h2>版本化主题 / PICOTS 筛选</h2></summary>${screening}</details>
+    <details class="panel workflow-step ${consistency.verdict === 'consistent' ? '' : 'warning'}" ${activeStep === 2 ? 'open' : ''}><summary><span class="step-label">步骤 2 · AI 执行 / 人工可覆盖</span><h2>两次独立同模型抽取差异裁决</h2></summary>${mustResolve.length ? `<h3>必须裁决 ${mustResolve.length} 项</h3><ul>${issueList(mustResolve)}</ul>` : '<p>没有关键冲突。</p>'}${verifyIssues.length ? `<details><summary>另外核对 ${verifyIssues.length} 项非关键差异</summary><ul>${issueList(verifyIssues)}</ul></details>` : ''}${resolution}</details>
+    <details class="panel workflow-step" ${activeStep === 3 ? 'open' : ''}><summary><span class="step-label">步骤 3 · AI 执行 / 人工可接管</span><h2>研究身份确认与论文准入</h2></summary><p class="muted">来源：${sources}<br>Study：${esc(study.id || '缺失')} · ${esc(study.status || '未知')} · 注册号 ${esc((study.registration_ids || []).join('、') || '未报告')}</p><details><summary>人工接管身份与准入决定</summary><div class="grid"><label>研究设计<select id="admitStudyDesign">${options(designs, suggested.study_design || extraction.study_design || 'uncertain')}</select></label><label>Publication 角色<select id="publicationRole">${options(publicationRoles, suggested.publication_role || 'primary')}</select></label></div><h3>关联健康问题</h3>${conditionChecks}<label><input id="identityConfirmed" type="checkbox" ${admittedPaper ? 'checked' : ''}> 已核对论文身份、研究设计、注册/协议及版本关系</label><div class="actions"><button id="admit" ${!canHumanAdmit || admittedPaper ? 'disabled' : ''}>人工覆盖并准入</button><button id="rejectPaper" class="danger">人工拒绝论文</button></div></details></details>
+    <details class="panel workflow-step" ${activeStep === 4 ? 'open' : ''}><summary><span class="step-label">步骤 4 · AI 执行 / 人工可接管</span><h2>Result 与 Claim 审核</h2></summary>${admittedPaper ? '' : '<p class="warning">AI 会先完成论文准入，再逐条审核 Claim。</p>'}${claims}</details>
+    <details class="panel workflow-step" ${activeStep === 5 ? 'open' : ''}><summary><span class="step-label">步骤 5 · AI 执行 / 证据规则闸门</span><h2>Evidence Profile 与知识卡</h2></summary><p class="muted">AI 会在主题证据体完整时按相同 PICOTS 结果范围建档，并显式记录 GRADE 域。低或极低确定性内容不会发布到患者端。</p><details><summary>人工接管知识卡草稿</summary>${allClaimsReviewed ? '' : '<p class="warning">本论文仍有候选 Claim 未处理。</p>'}<div class="grid"><label>版本化主题<select id="cardTopic">${topicOptions}</select></label><label>健康问题<select id="cardCondition">${conditionOptions()}</select></label><label>版本<input id="cardVersion" value="1.0.0"></label><label>证据确定性<select id="profileCertainty">${options(['high','moderate','low','very_low'],'moderate')}</select></label></div><label>估计目标<textarea id="profileTarget"></textarea></label><label>确定性理由<textarea id="profileRationale"></textarea></label><label>患者可见正文<textarea id="cardBody"></textarea></label><button id="createCard" ${allClaimsReviewed ? '' : 'disabled'}>人工创建草稿</button></details></details>
     <div class="panel"><span class="step-label">可审计记录</span><h2>状态转换与执行依据</h2><ol>${audit}</ol></div>`;
   $('detail').firstElementChild.insertAdjacentHTML('afterend', factsPanel);
   $('detail').querySelector('.meta').insertAdjacentHTML('beforeend', jobStatus);
@@ -276,7 +318,7 @@ function renderDiseaseLibrary() {
   $('diseaseList').innerHTML = filtered.map(row => {
     const designs = Object.entries(row.study_designs || {}).sort((a, b) => b[1] - a[1]);
     const designTags = designs.slice(0, 4).map(([design, count]) => `<span class="tag">${esc(studyDesignNames[design] || design)} ${esc(count)}</span>`).join('');
-    const papers = (row.papers || []).map(p => `<details class="disease-paper"><summary><strong lang="en">${esc(p.title)}</strong></summary><p class="muted">${p.year ? esc(p.year) + ' · ' : ''}${studiesName(p.study_design)} ${p.doi ? `<a href="https://doi.org/${encodeURIComponent(p.doi)}" target="_blank" rel="noopener noreferrer">DOI</a>` : '无 DOI'}</p>${p.abstract ? `<p>${esc(p.abstract)}</p>` : ''}</details>`).join('') || '<p class="muted">该疾病暂无已收录论文。</p>';
+    const papers = (row.papers || []).map(p => `<details class="disease-paper"><summary><strong lang="en">${esc(plainTitle(p.title))}</strong></summary><p class="muted">${p.year ? esc(p.year) + ' · ' : ''}${studiesName(p.study_design)} ${p.doi ? `<a href="https://doi.org/${encodeURIComponent(p.doi)}" target="_blank" rel="noopener noreferrer">DOI</a>` : '无 DOI'}</p>${p.abstract ? `<p>${esc(p.abstract)}</p>` : ''}</details>`).join('') || '<p class="muted">该疾病暂无已收录论文。</p>';
     return `<article class="disease-card"><div class="disease-header"><div><h3>${esc(row.condition_name)}</h3><p class="card-code">${esc(row.condition_code)}<br><span class="muted">${esc(row.department)}</span></p></div></div><p class="disease-count">已收录论文:${esc(row.paper_count || 0)}</p><div>${designTags || '<span class="tag">无</span>'}</div><div class="disease-papers">${papers}</div></article>`;
   }).join('') || '<p class="muted">没有匹配的疾病。</p>';
 }
@@ -284,8 +326,8 @@ function studiesName(design) { return studyDesignNames[design] || design || '研
 function switchView(view) {
   currentView = view;
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('is-active', button.dataset.view === view));
-  $('reviewView').style.display = view === 'review' ? '' : 'none';
-  $('diseaseView').style.display = view === 'disease' ? '' : 'none';
+  $('reviewView').hidden = view !== 'review';
+  $('diseaseView').hidden = view !== 'disease';
   if (view === 'disease' && diseasePapers.length) renderDiseaseLibrary();
 }
 function renderCoverage(rows) {
