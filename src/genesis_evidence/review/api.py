@@ -361,6 +361,10 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     def coverage_matrix() -> list[dict[str, object]]:
         return store.list_coverage_matrix()
 
+    @app.get("/api/review/disease-papers", dependencies=[Depends(principal)])
+    def disease_papers() -> list[dict[str, object]]:
+        return store.list_disease_papers()
+
     @app.get("/api/review/products", dependencies=[Depends(principal)])
     def products() -> list[dict[str, object]]:
         return product_store.list_review_products()

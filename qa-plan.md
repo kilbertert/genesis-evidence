@@ -132,6 +132,21 @@
 - **可观察结果**: 五个文件完成解析，共 64 项指标且无解析警告；总胆固醇、LDL-C、Non-HDL 三项异常归并为 `COND_DYSLIPIDEMIA`（血脂异常）；返回已发布的「郅臻堂®植物甾醇咀嚼片」、`product_status=available`、`unmatched=[]`；正常或缺少可行动证据的其余指标进入 `skipped`，不得产生额外疾病或推荐。
 - **清理**: 人工验收完成后删除临时账号、报告记录、对象文件、访问令牌和未脱敏日志；仅保留去标识化 QA 工件。
 
+### QA-DISEASE-001 审核工作台疾病知识库按疾病聚合覆盖
+
+- **ID**: `QA-DISEASE-001`
+- **环境**: 本地 `uv run genesis-evidence-api`（Review API）+ 临时 SQLite；注入 `GENESIS_EVIDENCE_REVIEW_API_KEY` 与 `GENESIS_EVIDENCE_REVIEWER_ID`；浏览器或 HTTP 客户端经 loopback 访问工作台。
+- **前置**: 至少存在 1 篇 `internally_admitted` 论文,其 `paper_admissions.condition_codes_json` 含 `COND_VITAMIN_D_DEFICIENCY`,且该论文经单一 `study_publications`→`studies`(status `verified`)关联研究设计。
+- **数据**: 测试库含 39 篇 admitted 论文（按疾病分布固定）或至少 1 篇目标疾病论文；工作台已连接。
+- **动作**:
+  1. 打开审核工作台首页并切换「疾病知识库」页签。
+  2. 读取 `GET /api/review/disease-papers` 响应,逐疾病核对 `paper_count`、`study_designs` 与 `papers[]`。
+  3. 确认疾病卡显示疾病名、已收录论文数与研究设计标签（取 Top 4）。
+  4. 点开目标疾病卡,展开论文清单并核对标题、年份、DOI 与研究设计。
+  5. 使用搜索框按疾病名称/代码过滤。
+- **可观察结果**: 每个疾病一行,`paper_count` 与 underlying admitted 论文一致,`study_designs` 分布来自 `studies.study_design`;疾病卡与论文清单按预期展开;搜索命中对应卡片;未匹配疾病不出现。仅只读聚合,不触发任何写路径。
+- **清理**: 停止服务,删除临时 SQLite 与测试日志;不改动正式库。
+
 ## 执行记录
 
 - 结果工件：`artifacts/qa/product-recommendation-acceptance.md`

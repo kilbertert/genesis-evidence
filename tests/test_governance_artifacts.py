@@ -21,6 +21,7 @@ QA_CASE_IDS = {
     "QA-E2E-001",
     "QA-E2E-002",
     "QA-E2E-003",
+    "QA-DISEASE-001",
 }
 
 QA_SCALAR_FIELDS = (
