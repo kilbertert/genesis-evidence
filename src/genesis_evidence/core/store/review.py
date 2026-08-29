@@ -1374,6 +1374,78 @@ class ReviewStore:
                     )
         return matrix
 
+    def list_disease_papers(self) -> list[dict[str, object]]:
+        """Aggregate internally-admitted papers per disease for the disease library tab.
+
+        Each disease (condition) gets one row with a paper-level list. The reviewed
+        study design is taken from the verified/merged ``studies`` row joined via
+        ``study_publications`` (role primary preferred), falling back to the paper's
+        ingestion-time candidate design. A paper belongs to a disease only when its
+        ``paper_admissions.condition_codes_json`` strictly contains the condition code,
+        so cross-condition mixing is impossible.
+        """
+
+        with self.database.connect() as connection:
+            conditions = connection.execute(
+                """
+                SELECT code, name, department
+                FROM conditions
+                ORDER BY code
+                """
+            ).fetchall()
+            rows: list[dict[str, object]] = []
+            for condition in conditions:
+                papers = connection.execute(
+                    """
+                    SELECT p.id, p.title, p.abstract, p.doi, p.year,
+                           p.study_design_candidate, p.integrity_status,
+                           p.publication_status,
+                           s.study_design AS reviewed_study_design
+                    FROM papers p
+                    JOIN paper_admissions pa ON pa.paper_id = p.id
+                    LEFT JOIN study_publications sp
+                           ON sp.paper_id = p.id AND sp.role = 'primary'
+                    LEFT JOIN studies s
+                           ON s.id = sp.study_id
+                           AND s.status IN ('verified', 'merged')
+                    WHERE pa.status = 'internally_admitted'
+                      AND EXISTS (
+                          SELECT 1 FROM json_each(pa.condition_codes_json)
+                          WHERE value = ?
+                      )
+                    ORDER BY p.year DESC, p.title
+                    """,
+                    (condition["code"],),
+                ).fetchall()
+                study_designs: dict[str, int] = {}
+                paper_items: list[dict[str, object]] = []
+                for row in papers:
+                    design = row["reviewed_study_design"] or row["study_design_candidate"]
+                    study_designs[design] = study_designs.get(design, 0) + 1
+                    paper_items.append(
+                        {
+                            "id": row["id"],
+                            "title": row["title"],
+                            "abstract": row["abstract"],
+                            "doi": row["doi"],
+                            "year": row["year"],
+                            "study_design": design,
+                            "integrity_status": row["integrity_status"],
+                            "publication_status": row["publication_status"],
+                        }
+                    )
+                rows.append(
+                    {
+                        "condition_code": condition["code"],
+                        "condition_name": condition["name"],
+                        "department": condition["department"],
+                        "paper_count": len(paper_items),
+                        "study_designs": study_designs,
+                        "papers": paper_items,
+                    }
+                )
+        return rows
+
     @staticmethod
     def _require_publishable(connection, card_id: str) -> None:
         card = connection.execute(

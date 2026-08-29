@@ -50,3 +50,13 @@ Feature: 已确认健康风险 → 可审核可发布的营养产品推荐
     Then `recommendations` 为空
     And 患者侧显示「暂无推荐」
     And 该 finding 的 `product_status` 为 `not_implemented`
+
+  Rule: 审核工作台按疾病聚合已收录论文覆盖
+
+  Scenario: 疾病知识库页签按疾病显示已收录论文数与研究设计分布
+    Given 审核员已认证并打开「疾病知识库」页签
+    And 存在 `internally_admitted` 论文,其 `condition_codes_json` 内含 `COND_VITAMIN_D_DEFICIENCY`
+    When 工作台请求 `GET /api/review/disease-papers`
+    Then 每行按 `condition_code` 聚合,包含 `paper_count`、`study_designs` 与 `papers[]`
+    And 疾病卡显示疾病名称、已收录论文数与研究设计标签
+    And 点开卡片可展开该疾病下的论文清单（标题、年份、DOI 与研究设计）
