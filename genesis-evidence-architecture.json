@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Genesis Evidence 架构",
+    "subtitle": "面向 40+ 人群的医学论文证据生产 + 个人体检报告解读 · 两条主线只通过 published 知识卡连接",
+    "output": "genesis-evidence-architecture.html",
+    "quality_profile": "standard",
+    "visual_preset": "blueprint",
+    "viewBox": [1760, 720],
+    "views": [
+      {
+        "id": "literature-line",
+        "label": "论文审核主线",
+        "focus": ["literature_ingest", "review_workbench", "published_evidence"],
+        "note": "论文获取 → 全文处理 → Claim 审核 → published 知识卡发布"
+      },
+      {
+        "id": "reports-line",
+        "label": "体检报告主线",
+        "focus": ["portal_api", "extraction", "matching", "patient_copy"],
+        "note": "多文件报告抽取 → 用户确认 → 确定性校验 → published 知识卡匹配"
+      },
+      {
+        "id": "governance",
+        "label": "治理与发布边界",
+        "focus": ["review_scope", "patient_copy", "published_evidence", "catalog"],
+        "note": "患者可见结论必须引用 published 知识卡;product catalog 是候选层"
+      }
+    ]
+  },
+  "components": [
+    { "id": "reviewer",     "type": "external", "label": "审核员",            "sublabel": "owner",            "pos": [40,     60], "size": [160, 60] },
+    { "id": "patient",      "type": "external", "label": "患者",              "sublabel": "40+ 体检用户",      "pos": [40,    280], "size": [160, 60] },
+
+    { "id": "literature_ingest","type": "backend","label": "literature pipeline","sublabel": "ingest + JATS + ai_extract","pos": [280,  80], "size": [240, 70], "tag": "connectors + GROBID" },
+    { "id": "review_workbench","type": "cloud",  "label": "review workbench",  "sublabel": "review/api + scope", "pos": [580,  80], "size": [220, 70], "tag": "Bearer auth" },
+    { "id": "review_scope", "type": "security",  "label": "review.scope",      "sublabel": "scope guardrails",  "pos": [580, 200], "size": [220, 60] },
+
+    { "id": "published_evidence","type": "database","label": "published 知识卡","sublabel": "core/store/evidence","pos": [880,  80], "size": [220, 60], "tag": "结果契约" },
+    { "id": "catalog",      "type": "database",  "label": "product catalog",   "sublabel": "候选层",              "pos": [880, 200], "size": [220, 60], "tag": "非 published" },
+
+    { "id": "portal_api",   "type": "cloud",     "label": "portal/api",        "sublabel": "个人报告门户",       "pos": [280, 320], "size": [240, 70], "tag": "FastAPI + UI" },
+    { "id": "extraction",   "type": "backend",   "label": "reports/extraction","sublabel": "多文件抽取 + evaluation", "pos": [580, 320], "size": [220, 60] },
+    { "id": "matching",     "type": "security",  "label": "core.matching",     "sublabel": "匹配 published",     "pos": [880, 320], "size": [220, 60], "tag": "radon cc ≤ C" },
+    { "id": "patient_copy", "type": "security",  "label": "core.patient_copy", "sublabel": "患者可见结论",        "pos": [1180, 320], "size": [240, 70], "tag": "只引 published" },
+    { "id": "recommendations","type": "database","label": "products.recommendations","sublabel": "个性化映射","pos": [1480, 320], "size": [220, 60] },
+
+    { "id": "store",        "type": "database",  "label": "core/store",        "sublabel": "papers/reports/review","pos": [1480, 100], "size": [220, 60] },
+    { "id": "health_flow",  "type": "external",  "label": "integrations/health_flow","sublabel": "旧域 bridge","pos": [1480, 220], "size": [220, 60], "tag": "genesis-health 兼容" }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "genesis-evidence 进程内(Python 包 · uv + mutmut)",
+      "wraps": ["literature_ingest", "review_workbench", "review_scope", "published_evidence", "catalog", "portal_api", "extraction", "matching", "patient_copy", "recommendations", "store"]
+    },
+    {
+      "kind": "security-group",
+      "label": "外部依赖(进程外)",
+      "wraps": ["health_flow"]
+    }
+  ],
+  "connections": [
+    { "id": "reviewer-workbench", "from": "reviewer",         "to": "review_workbench",  "label": "审阅",      "labelAt": [220, 30], "via": [[130, 90], [130, 30], [580, 30]] },
+    { "id": "patient-portal",     "from": "patient",          "to": "portal_api",        "label": "查看报告",  "labelAt": [200, 354] },
+
+    { "id": "ingest-workbench",   "from": "literature_ingest","to": "review_workbench",  "label": "Claim" },
+    { "id": "workbench-scope",    "from": "review_workbench", "to": "review_scope",      "label": "guardrails", "labelAt": [690, 165] },
+
+    { "id": "workbench-pub",      "from": "review_workbench", "to": "published_evidence","label": "publish" },
+    { "id": "pub-store",          "from": "published_evidence","to": "store",             "label": "persist" },
+    { "id": "pub-catalog",        "from": "published_evidence","to": "catalog",           "label": "candidates", "labelAt": [990, 170] },
+
+    { "id": "portal-extract",     "from": "portal_api",       "to": "extraction",        "label": "上传文件" },
+    { "id": "extract-match",      "from": "extraction",       "to": "matching",          "label": "validated" },
+    { "id": "match-pub",          "from": "matching",         "to": "published_evidence","label": "match",     "labelAt": [990, 50], "via": [[860, 320], [860, 110], [880, 110]] },
+    { "id": "match-recs",         "from": "matching",         "to": "recommendations",   "label": "personalize", "labelAt": [1480, 290], "via": [[990, 320], [1480, 290]] },
+    { "id": "recs-patient",       "from": "recommendations",  "to": "patient_copy",      "label": "draft",     "labelAt": [1340, 404] },
+    { "id": "patient-portal-ui",  "from": "patient_copy",     "to": "portal_api",        "label": "rendered",  "labelAt": [280, 460], "via": [[1180, 460], [280, 460]] },
+
+    { "id": "scope-extract",      "from": "review_scope",     "to": "extraction",        "label": "policy",    "labelAt": [780, 280], "via": [[690, 250], [690, 320]] },
+    { "id": "store-portal",       "from": "store",            "to": "portal_api",        "label": "reports",   "labelAt": [1740, 290], "via": [[1740, 130], [1740, 460], [260, 460]] },
+    { "id": "hf-store",           "from": "health_flow",      "to": "store",             "label": "legacy",    "labelAt": [1480, 294] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "论文审核主线",
+      "items": [
+        "literature pipeline:connectors + downloader + GROBID/JATS + ai_extraction(Codex-native)",
+        "审核员在 review workbench(Bearer auth)上 guardrails 内 publish",
+        "publish 后落 core/store/evidence(published 知识卡)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "体检报告主线",
+      "items": [
+        "portal/api 接收多文件 → reports/extraction + evaluation",
+        "core.matching 匹配 published 知识卡(radon cc ≤ C)",
+        "products.recommendations 个性化映射 → core.patient_copy 患者可见结论"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "发布边界",
+      "items": [
+        "两条主线只通过 published 知识卡连接",
+        "患者可见结论必须引用 published 知识卡,未发布内容不得出现在患者接口",
+        "产品对外名称统一为'体检报告解读与健康风险提示'"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "旧域兼容与候选层",
+      "items": [
+        "product catalog 是候选层,与 published 推荐分离",
+        "integrations/health_flow 桥接旧 genesis-health 域名(genesis-review / genesis-health)",
+        "scripts/check_*.py 强制 scope / schema / patient_copy / product_catalog"
+      ]
+    }
+  ]
+}
