@@ -2,7 +2,10 @@
 
 The new project runs beside the frozen `genesis-health` services:
 
-- portal: `127.0.0.1:8125` → `genesis-evidence.ranlei.work`
+- evidence API: `127.0.0.1:8125` → read-only published-evidence API; deliberately
+  not exposed as a user domain
+- user portal: `127.0.0.1:8127` → `genesis-evidence.ranlei.work` (HealthFlow
+  report portal)
 - review: `127.0.0.1:8126` → `genesis-evidence-review.ranlei.work`
 
 Create private `var/portal.env` and `var/review.env` from the examples, sync the
