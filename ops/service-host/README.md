@@ -43,23 +43,39 @@ this is enforced rather than merely asked for.
 4. Write the two environment files from `examples/` with mode `640`, owned by
    the identity. Generate the keys **on the host** so they never transit a
    development machine.
-5. Bootstrap the empty database with `bootstrap-db.py`. Do this explicitly
-   rather than relying on one service to create it at startup: the review
-   workbench creates the schema as a side effect, while the evidence API
-   **fails closed** if the tables are absent, so relying on start ordering
-   leaves a race between the two.
+5. Bootstrap the empty database with `bootstrap-db.py`. It takes the database
+   path from its argument, else from `GENESIS_EVIDENCE_DATABASE`, else the
+   project default — so it runs standalone, without sourcing an environment
+   file first:
+
+   ```
+   su -s /bin/bash -c \
+     '/opt/genesis-evidence/.venv/bin/python /opt/genesis-evidence/ops/bootstrap-db.py' \
+     genesis-evidence
+   ```
+
+   Invoke it through the project virtualenv's interpreter rather than the
+   script's shebang: the shebang resolves to the system Python, which does not
+   have the package installed.
+
+   Do this explicitly rather than relying on one service to create it at
+   startup: the review workbench creates the schema as a side effect, while the
+   evidence API **fails closed** if the tables are absent, so relying on start
+   ordering leaves a race between the two.
 6. Install the units and `systemctl enable --now` them.
 
 ## Verification
 
-`auth-probe.sh` checks the evidence API's key boundary from the host itself.
-Run it as the service identity; it reads the key from the environment file.
+`auth-probe.sh` **asserts** the evidence API's key boundary from the host
+itself, and exits nonzero if any case does not match. Run it as the service
+identity; it reads the key from the environment file.
 
-It exercises three cases — no key, a wrong key, and the correct key. The third
-is expected to return a **4xx business rejection**, not 200: a fresh deployment
-has an empty database, so there is nothing published to match against. What the
-correct-key case proves is that authentication *passed* and the request reached
-the domain logic.
+It asserts three cases: no key → `401`, a wrong key → `401`, and the correct key
+→ **not** `401`. The third is deliberately *not* "200": a fresh deployment has
+an empty database, so nothing is published to match against and the correct-key
+request is expected to reach the domain logic and be rejected there. Asserting
+"not 401" is what distinguishes "authenticated, nothing to return" from
+"rejected at the door".
 
 Use a **well-formed** request body when probing the boundary. A malformed body
 fails request validation before the handler's key check runs, so it returns 422
