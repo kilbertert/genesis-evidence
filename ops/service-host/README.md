@@ -86,3 +86,39 @@ regardless of the key — which tests the schema, not the authentication.
 Both services bind loopback only. The public entry point is terminated in front
 of them by the host's web server; the services themselves are never reached by
 their port from outside the host.
+
+`nginx/genesis-evidence.conf` is that entry: one server block per domain,
+proxying to the loopback port of the matching service. It is deployed into the
+host's vhost directory and, like the neighbouring internal entry there, does not
+modify a panel-managed site.
+
+The report portal's block raises `client_max_body_size` to 55m because a single
+submission may carry two large report files.
+
+### Verifying the entry
+
+```
+curl -H 'Host: <domain>' http://<host-address>/          # expect the real app
+curl -H 'Host: other.example.com' http://<host-address>/ # expect NOT our app
+```
+
+The Host-header probe is the verification method: it reaches the entry as the
+public traffic would, without moving DNS, so the path can be proven before any
+traffic is switched. Two things to be careful about:
+
+- **Check content, not just the status code.** A `200` may be a default site or a
+  soft error page; only the response body shows which application answered.
+- **Use a Host header other than the real one to confirm closure.** If an
+  arbitrary host also reaches the app, the entry is not scoped.
+
+### Reloading
+
+Two nginx processes may exist on a host like this: the panel-managed one that
+owns the public ports, and another inside a container that owns nothing public.
+Reload the one that actually owns the ports — signalling the wrong one silently
+changes nothing, and the entry keeps serving the previous configuration.
+
+Also note that the panel's nginx is not necessarily supervised by
+`systemctl`: on this host the LSB unit is in a failed state while nginx runs
+fine, so `systemctl reload nginx` is the wrong command and reports an error that
+has nothing to do with the configuration.
