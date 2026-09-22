@@ -12,29 +12,36 @@
 把"体检报告 → 健康建议"做成可审计的工程系统，必须先回答一个问题：**系统允许自己说什么？**
 本仓库的全部设计都可以从这一条约束推导出来。
 
-1. **系统只复述已发布的、逐条可追溯的内容，不生成新的医学结论。**
-   运行时不调用 LLM 做疾病判断、剂量或治疗建议。患者看到的每一句话都来自一条
-   `published` 知识卡，而知识卡正文由人在审核工作台确认后写入。运行时的语言模型只允许
-   出现在**录入侧**（报告 OCR/结构化、论文事实抽取），其输出一律是待人工确认的候选数据。
+1. **患者侧的医学结论来自已发布、逐条可追溯的知识卡，而不是运行时的自由生成。**
+   疾病结论、剂量与治疗建议必须来自一条 `published` 知识卡。语言模型只出现在**录入侧**
+   （报告 OCR/结构化、论文事实抽取），输出是待确认的候选数据。知识卡正文有两条写入路径，
+   都必须留下 actor：人工在审核工作台填写，或由自主审核流水线在证据闸门全部通过后写入
+   `_automatic_profile` 生成的**模板化**正文（用已审核的 PICOTS 维度填空，不做自由生成），
+   actor 记为 `ai:<一致性检查所用模型>`。**人工签名不是发布的必要条件**——`_build_ready_profiles`
+   可以独立完成创建、审核、发布——决定卡片能否发布的是第 5 节的证据闸门本身。
 2. **模型输出是候选，不是事实。** 论文抽取跑两次独立抽取再做一致性检查，冲突必须裁决；
    报告抽取的每个数值必须能在原文中找到字面证据，否则该行被标记校验问题、不得直接进入匹配；
    未确认的观测永远不参与匹配。
 3. **证伪优先于进度。** 证据闸门（第 5 节）宁可拒绝发布，也不补一条证据、不降低一个阈值。
    疾病覆盖矩阵在筛选台账未闭合时保持 `screening`，而不是提前显示 `claims_ready`
    或 `full_text_ready`。
-4. **两条主线只在一个点耦合。** 论文证据线与报告解读线不共享模型、不共享提示词、不共享运行
-   进程；它们唯一的连接面是 `knowledge_cards.status = 'published'`。这条约束让"哪些内容可以
-   到达患者"成为一个可以被 SQL 检查的问题，而不是一个需要阅读全部代码才能回答的问题。
+4. **两条主线只共享一个可查询的连接面。** 论文证据线与报告解读线不共享模型、不共享提示词、
+   不共享运行进程。论文侧唯一能到达患者的中介是 `knowledge_cards.status = 'published'`，
+   且必须挂在同一 condition 的 scope 上。这条约束让"论文侧哪些内容可以到达患者"成为一个
+   可以被 SQL 检查的问题，而不是一个需要阅读全部代码才能回答的问题。
+   （产品推荐是另一条独立的受审核通路，见第 2.2 节。）
 5. **审计即证据。** 每次状态迁移、准入、拒绝、发布、重试都写入 `audit_events`，并带
    `actor`（人工审核员来自服务端环境变量，不是浏览器参数）。敏感标识不进审计：
-   报告接口只记录计数与代码，不记录图像与患者标识。
+   报告接口只记录计数与代码，不记录图像与患者标识。这也是为什么第 1 条里的两条写入路径
+   可以并存：事后能查出每一张卡是谁、依据哪个策略版本发布的。
 
 由第 1 条推导出的可执行推论：
 
 - 患者可见文案由 `core/patient_copy.py` 的禁用词表在**写入时**与**CI 时**双重拦截；
 - 知识卡的 `published` 状态由 `CHECK` 约束保证字段完整（grade / reviewer / reviewed_at /
   evidence_profile_id / published_at / 非空正文），不可能出现"半发布"；
-- 卡片发布还要过一次证据闸门（`_require_publishable`），它是"这条结论站不站得住"的唯一裁判。
+- 卡片发布还要过一次证据闸门（`_require_publishable`）：人工路径与自主路径调用的是同一个闸门，
+  所以"允许说什么"由证据决定，不由写入者决定。
 
 ---
 
@@ -63,16 +70,17 @@ collection_runs ──► collection_papers ──► full_texts
                                                   │  draft→in_review→approved→published
                                                   │  ← 证据闸门在此判定
                                                   ▼
-                                          【唯一对患者可见的产物】
+                                          【论文侧唯一对患者可见的产物】
 ```
 
 图中的"← 证据闸门在此判定"指卡片发布前必须通过的闸门：schema 完整性、主题台账闭合、
 每条 Claim 可追溯且无高危偏倚、患者文案通过禁用词检查。逐层检查项见第 5 节。
 
-人工审核工作台（`review/api.py` + `workbench.html`）把这条链路切成 5 个可折叠步骤，每步都是
-"AI 先执行，人工可覆盖"：① 主题圈定与筛选 → ② 两次抽取差异裁决 → ③ 身份确认与论文准入 →
-④ Result 与 Claim 审核 → ⑤ Evidence Profile 与知识卡。AI 的自动裁决写在审计里，人工覆盖会
-另写一条审计。
+整条链路由 `EvidenceReviewService.auto_review_paper` 自主推进；人工审核工作台
+（`review/api.py` + `workbench.html`）把同一条链路切成 5 个可折叠步骤，每个步骤都标着
+"AI 执行 / 人工可覆盖（或可接管）"：① 主题圈定与筛选 → ② 两次抽取差异裁决 →
+③ 身份确认与论文准入 → ④ Result 与 Claim 审核 → ⑤ Evidence Profile 与知识卡。
+AI 的自动裁决写在审计里，人工覆盖再写一条，两者共用同一套闸门与同一张审计表。
 
 ### 2.2 主线 B：个人报告解读
 
@@ -88,6 +96,18 @@ portal/api.py ──► EvidenceStore.match_published_cards
         ▼
 患者可见响应：findings[] / unmatched[] / skipped[] + 产品推荐（若已审核发布）+ 审计事件
 ```
+
+患者能看到的四类内容来源不同，边界也不同：
+
+| 内容 | 来源 | 是否需要 `published` 知识卡 |
+| --- | --- | --- |
+| 知识卡正文 | 卡片 `patient_visible_body` | 是（逐字返回，不经模型改写） |
+| 能力文案 | `card_capabilities(grade)` 生成的固定模板 | 否——伴随卡片，因此仍只在卡片已发布时出现 |
+| 科室与复查方向 | `core.conditions` 的静态目录 | 否——是路由提示，不是医学结论 |
+| 产品推荐 | `product_recommendations` 中已审核发布的条目 | 否——受独立的产品闸门约束 |
+
+所以"必须有已发布知识卡"约束的是**疾病结论**，不是响应里的每一句话；能力文案与科室方向只在
+卡片已发布的前提下随附，产品推荐则走它自己的审核闸门。
 
 隔离约束：报告接口是**只读**的，它不拥有上传、不拥有抽取 worker。两条主线之间不共享
 SQLite 文件、ORM 模型、向量索引或提示词。
@@ -150,7 +170,7 @@ SQLite 文件、ORM 模型、向量索引或提示词。
 | `core.patient_copy` | 患者可见文案禁用词闸门 | 同一表同时被写入路径与 CI 使用，两者不可能漂移 |
 | `core.store.database` | `BEGIN IMMEDIATE` 单写事务边界 + schema 初始化 + 幂等迁移 | 队列领取、状态迁移都在同一立即写事务内完成 |
 | `core.store.papers` | 论文域持久化（1600+ 行）：采集、全文对象、抽取任务、准入、Claim、Result | 任务领取依赖 `paper_extraction_jobs_active_paper_unique` 部分唯一索引：同一论文最多一个 queued/running |
-| `core.store.review` | 审核域持久化（2300+ 行）：主题台账、覆盖矩阵、知识卡与**证据闸门** | `_require_publishable` 是唯一的发布裁判；`evidence_body_complete=1` 由系统判定，不接受人工置位 |
+| `core.store.review` | 审核域持久化（2300+ 行）：主题台账、覆盖矩阵、知识卡与**证据闸门** | `_require_publishable` 是唯一的发布裁判，人工与自主路径共用它；`evidence_body_complete=1` 由系统判定，不接受人工置位 |
 | `core.store.evidence` | 对外只读匹配：只读已发布卡片与已发布产品，写审计 | 只有 `status='published' AND grade IN (high,moderate,low)` 的卡可见 |
 | `core.store.reports` | 报告域持久化：上传、确认、评估（`assess`）、无状态复算（`match_published_cards`） | 只有 `confirmed` 的报告可被评估；确认后的观测才进入匹配 |
 | `literature.*` | 检索连接器（DOAJ/Europe PMC/CORE）、全文下载与版权策略、JATS 解析、完整性（撤稿/更正）核查、Ark 抽取与一致性检查 | 连接器只发元数据；CORE 在许可证确认前不可下载；Sci-Hub 类 URL 直接拒绝 |
@@ -190,9 +210,19 @@ integrations.health_flow         ←  portal, tests
 
 数据层还保留两条兼容缝，属已知迁移债：`database._migrate_existing_schema` 把历史共享的
 `results` 表按 claim 拆分；`reports/extraction.py` 重新导出 `evidence_contains_value` 供旧调用者
-（`reports/evaluation.py`）使用——但注册的 `genesis-evidence-evaluate` 入口点并不在
-`pyproject.toml` 的 `[project.scripts]` 里，直接运行会 `ModuleNotFoundError`，应使用
-`python -m genesis_evidence.reports.evaluation`。
+（`reports/evaluation.py`）使用。
+
+`evals/README.md` 记录的 `genesis-evidence-evaluate` 命令在此处**跑不通**。`pyproject.toml`
+的 `[project.scripts]` 没有注册它，而 conda 环境里残留了一份 editable 安装，
+其 `.pth` 指向已删除的工作树 `/home/claude/Projects/.genesis-evidence-complete-canary/src`，
+dist-info 里却仍有这个入口点的声明。于是 shell 能找到 `genesis-evidence-evaluate`，
+执行后抛出 `ModuleNotFoundError: No module named 'genesis_evidence'`——把包注册修复掉
+才是根治。当前可用形式：
+
+```bash
+uv run python -m genesis_evidence.reports.evaluation \
+  evals/report-gold.synthetic.jsonl evals/report-predictions.synthetic.jsonl
+```
 
 ---
 
@@ -203,7 +233,7 @@ integrations.health_flow         ←  portal, tests
 | 簇 | 表 | 关键约束 |
 | --- | --- | --- |
 | 论文证据（19） | `conditions`, `evidence_topics`, `collection_runs`, `papers`, `paper_sources`, `collection_papers`, `full_texts`, `paper_extraction_jobs`, `paper_admissions`, `studies`, `study_publications`, `paper_extractions`, `claims`, `results`, `claim_reviews`, `evidence_profiles`, `evidence_profile_results`, `knowledge_cards`, `card_claims` | `papers` 上三个部分唯一索引保证 DOI/PMID/PMCID 去重；`studies`/`study_publications` 分离"研究身份"与"报告身份"；`knowledge_cards` 的 `CHECK` 保证 `published` 必须字段齐全 |
-| 报告与患者可见（6） | `reports`, `report_files`, `report_observations`, `observation_confirmations`, `assessments`, `assessment_findings` | `assessment_findings` 关联 `condition_code` 与源观测；患者响应只读这些表 + `knowledge_cards` |
+| 报告与患者可见（6） | `reports`, `report_files`, `report_observations`, `observation_confirmations`, `assessments`, `assessment_findings` | `assessment_findings` 关联 `condition_code` 与源观测；患者响应只读这些表 + `knowledge_cards` 与 `product_recommendations` |
 | 产品目录（5） | `product_candidates`, `product_candidate_sources`, `product_recommendations`, `product_review_audits`, `product_mapping_drafts` | `product_recommendations.status='published'` 要求 `audit_note` 非空；来源记录 `source_sha256` 唯一，保证溯源不重复 |
 | 横切（1） | `audit_events` | 所有状态迁移的唯一落点；`actor` 由服务端决定 |
 
@@ -274,8 +304,13 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 ### 已知缺口（不要当成已完成）
 
 - `evidence_profiles.certainty` 是**单值确定性**字段，不是逐域 GRADE 记录，尽管工作台文案写着
-  "显式记录 GRADE 域"。`very_low` 不能发布（`knowledge_cards` CHECK + `transition_card` 双重拦截），
+  "显式记录 GRADE 域"——`_automatic_profile` 确实算出了逐域结果，但只写进审计事件，
+  不落库。`very_low` 不能发布（`knowledge_cards` CHECK + `transition_card` 双重拦截），
   `high`/`moderate` 要求偏倚风险判定已解决为非高危。
+- 知识卡正文可以完全由自主流水线写入：`_build_ready_profiles` 会创建、审核并发布卡片，
+  正文由 `_automatic_profile` 用已审核 PICOTS 维度套模板生成（非自由生成），
+  actor 记为 `ai:<一致性检查所用模型>`。也就是说"人工确认"不是发布的必要条件，
+  证据闸门才是；目前唯一的操作者约束是**一篇论文若已被具名审核员拒绝，自动路径会停下**。
 - `needs_recheck` 目前是固定值 `True`（`core/store/reports.py:494`），没有基于审核状态的复查策略；
   `matching.py` 里已用 `# ponytail:` 注释标明"在经审核的指标专属阈值发布前，
   偏离参考界一律记为 routine / severity 1"。
@@ -327,16 +362,23 @@ uv run radon cc -s -a -n C src/genesis_evidence/core/matching.py
 uv run mutmut run && uv run mutmut results
 ```
 
-前四个 guard 由 `.github/workflows/quality.yml` 在 CI 中强制执行。`check_review_workbench_layout.py`
-需要 headless Chrome，不在 CI 中运行，改动 `workbench.html` 的滚动边界时本地执行。
+`.github/workflows/quality.yml` 在 CI 中强制执行上面前六项：`ruff check`、`pytest` 与四个 guard
+（`check_scope` / `check_schema` / `check_patient_copy` / `check_product_catalog`）。
+`check_review_workbench_layout.py` 需要 headless Chrome，**不在** CI 中运行，
+改动 `workbench.html` 的滚动边界时本地执行。默认分支 Ruleset 要求 `quality` 与
+`Workflow policy` 两个检查通过。
 
 本地进程（不承载报告上传）：
 
 ```bash
-GENESIS_EVIDENCE_API_KEY=...  uv run genesis-evidence-api       # 只读证据接口
-GENESIS_EVIDENCE_REVIEW_API_KEY=... uv run genesis-evidence-review   # 审核工作台
-PAPER_AI_API_KEY=...          uv run genesis-evidence-worker    # 论文抽取（当前线上停止）
+GENESIS_EVIDENCE_API_KEY=<long-random-key>            uv run genesis-evidence-api
+GENESIS_EVIDENCE_REVIEW_API_KEY=<long-random-key>     uv run genesis-evidence-review
+PAPER_AI_API_KEY=<key>                                uv run genesis-evidence-worker
 ```
+
+三个进程的环境变量名各不相同，且都必须满足最小长度：Evidence API 与审核工作台分别要求
+`GENESIS_EVIDENCE_API_KEY` / `GENESIS_EVIDENCE_REVIEW_API_KEY` 至少 24 字符，
+否则启动时就报错而不是静默放行。论文抽取当前线上已停止。
 
 `genesis-evidence-backlog`（`literature/backlog.py`）处理全文获取与抽取积压，并会重试失败的
 抽取任务；它默认处理全部主题，**只有**设置了 `GENESIS_EVIDENCE_ACTIVE_TOPIC_ID`
