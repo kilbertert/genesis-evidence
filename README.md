@@ -37,7 +37,12 @@
 
 由第 1 条推导出的可执行推论：
 
-- 患者可见文案由 `core/patient_copy.py` 的禁用词表在**写入时**与**CI 时**双重拦截；
+- 患者可见文案由 `core/patient_copy.py` 的禁用词表拦截。**该表有两处调用，覆盖范围不重叠**：
+  运行时在写入前校验（`validate_patient_copy`，用于产品推荐文案与人工创建卡片），
+  CI guard 则扫描一个**固定路径集合**——`src/genesis_evidence/portal/` 下的所有文本文件，
+  外加 `products/recommendations.py` 与 `products/mapping_drafts.py`。也就是说
+  `review/service.py` 里 `_automatic_profile` 生成的卡片正文**不在 CI 扫描范围内**，
+  它只受运行时校验与同表的 `FORBIDDEN_PATIENT_TERMS` 常量约束。
 - 知识卡的 `published` 状态由 `CHECK` 约束保证字段完整（grade / reviewer / reviewed_at /
   evidence_profile_id / published_at / 非空正文），不可能出现"半发布"；
 - 卡片发布还要过一次证据闸门（`_require_publishable`）：人工路径与自主路径调用的是同一个闸门，
@@ -167,7 +172,7 @@ SQLite 文件、ORM 模型、向量索引或提示词。
 | `core.conditions` | 首批 12 个健康问题目录（`condition_code → 指标集合 + 科室 + 复查方向`） | 运行时会随 `Database.initialize()` upsert 进 `conditions` 表，是唯一可写的目录来源 |
 | `core.metrics` | 30 个 canonical `metric_code` 与中文标签、别名归一化、字面数值匹配 | `evidence_contains_value` 是"证据必须字面出现"的判定本身 |
 | `core.contracts` | v2/v3 请求响应模型与能力分层（`card_capabilities`） | 请求 `schema_version` 只接受 `"2"` / `"3"`；v2 保持扁平旧形状以便独立切换 |
-| `core.patient_copy` | 患者可见文案禁用词闸门 | 同一表同时被写入路径与 CI 使用，两者不可能漂移 |
+| `core.patient_copy` | 患者可见文案禁用词表与校验函数 | 词表是唯一来源，但**调用点覆盖范围不同**：运行时校验所有写入路径，CI guard 只扫描固定的文件路径集合 |
 | `core.store.database` | `BEGIN IMMEDIATE` 单写事务边界 + schema 初始化 + 幂等迁移 | 队列领取、状态迁移都在同一立即写事务内完成 |
 | `core.store.papers` | 论文域持久化（1600+ 行）：采集、全文对象、抽取任务、准入、Claim、Result | 任务领取依赖 `paper_extraction_jobs_active_paper_unique` 部分唯一索引：同一论文最多一个 queued/running |
 | `core.store.review` | 审核域持久化（2300+ 行）：主题台账、覆盖矩阵、知识卡与**证据闸门** | `_require_publishable` 是唯一的发布裁判，人工与自主路径共用它；`evidence_body_complete=1` 由系统判定，不接受人工置位 |
@@ -253,7 +258,7 @@ uv run python -m genesis_evidence.reports.evaluation \
 | 1. Schema | `published` 必须带 grade / reviewer / reviewed_at / evidence_profile_id / published_at / 非空正文 | `schema.py` 的 `knowledge_cards` CHECK |
 | 2. 主题闭合 | 主题已 `locked`；每个要求的检索流都有 completed run；无 running run；每条记录都有题录筛选决定；纳入项有全文检索结果；全文纳入项完成抽取、准入、Claim 审核 | `_require_complete_topic` |
 | 3. 单条 Claim | Claim 审核为 `approved`；论文完整性 `clear`、发表状态 `formal`、已内部准入、DOI 非空、全文已处理；`evidence_text` / `locator` 非空；Claim 类型为 `intervention_effect`；排除动物/体外/病例系列设计 | `_require_publishable` |
-| 4. 患者文案 | `patient_visible_body` 通过禁用词闸门 | `core.patient_copy` |
+| 4. 患者文案 | `patient_visible_body` 通过禁用词闸门（人工创建卡片时在 `create_card` 内校验；自主生成的正文见第 1 节关于扫描范围的说明） | `core.patient_copy` |
 
 `_require_publishable` 还要求：至少一条 Claim、每条 Claim 在 Profile 中有对应 Result、
 scope_key 非空，且**上下文卡（grade = `low`）不得携带 `high`/`critical`/`uncertain` 的偏倚风险判定**。
@@ -349,7 +354,7 @@ uv run ruff check .                                  # 静态检查
 uv run pytest                                        # 318 个测试
 uv run python scripts/check_scope.py                 # 冻结产品面（13 个标识符不得出现在 src）
 uv run python scripts/check_schema.py                # 表数预算（31）
-uv run python scripts/check_patient_copy.py          # 患者文案禁用词
+uv run python scripts/check_patient_copy.py          # 患者文案禁用词（仅扫描固定路径集合）
 uv run python scripts/check_product_catalog.py       # 43 blocked / 10 published / 0 无来源
 uv run python -m genesis_evidence.reports.evaluation \
   evals/report-gold.synthetic.jsonl evals/report-predictions.synthetic.jsonl   # 抽取评估
@@ -368,17 +373,28 @@ uv run mutmut run && uv run mutmut results
 改动 `workbench.html` 的滚动边界时本地执行。默认分支 Ruleset 要求 `quality` 与
 `Workflow policy` 两个检查通过。
 
-本地进程（不承载报告上传）：
+本地进程（不承载报告上传）。**不设端口时用的是各自的代码默认值，与第 2.3 节服务表里的部署端口不同**
+（部署端口来自 `var/*.env`）：
 
 ```bash
-GENESIS_EVIDENCE_API_KEY=<long-random-key>            uv run genesis-evidence-api
-GENESIS_EVIDENCE_REVIEW_API_KEY=<long-random-key>     uv run genesis-evidence-review
-PAPER_AI_API_KEY=<key>                                uv run genesis-evidence-worker
+GENESIS_EVIDENCE_API_KEY=<≥24 字符>   uv run genesis-evidence-api       # 默认 127.0.0.1:8091
+GENESIS_EVIDENCE_REVIEW_API_KEY=<≥24 字符> \
+GENESIS_EVIDENCE_REVIEWER_ID=<审核员标识> uv run genesis-evidence-review    # 默认 127.0.0.1:8090
+
+PAPER_AI_API_KEY=<key> \
+GENESIS_EVIDENCE_REVIEWER_ID=<审核员标识> uv run genesis-evidence-worker    # 无监听端口
 ```
 
-三个进程的环境变量名各不相同，且都必须满足最小长度：Evidence API 与审核工作台分别要求
-`GENESIS_EVIDENCE_API_KEY` / `GENESIS_EVIDENCE_REVIEW_API_KEY` 至少 24 字符，
-否则启动时就报错而不是静默放行。论文抽取当前线上已停止。
+三个进程的必填变量各不相同，且都做启动即失败（fail-fast）而不是静默放行：
+
+- Evidence API：`GENESIS_EVIDENCE_API_KEY` 至少 24 字符，且数据库必须已初始化并含所需表；
+- 审核工作台：`GENESIS_EVIDENCE_REVIEW_API_KEY` 至少 24 字符 + 非空
+  `GENESIS_EVIDENCE_REVIEWER_ID`（该值同时是审计 actor）；旧名 `GENESIS_REVIEW_API_KEY` 仍被兼容读取；
+- 论文抽取 worker：`PAPER_AI_API_KEY_FILE` / `PAPER_AI_API_KEY`（旧名 `ARK_API_KEY` 兼容）
+  **以及** `GENESIS_EVIDENCE_REVIEWER_ID`，缺任一个直接退出；它的队列收敛靠
+  `GENESIS_EVIDENCE_ACTIVE_TOPIC_ID`，不读 `..._BACKLOG_TOPIC_ID`（后者只由 backlog 进程使用）。
+
+论文抽取 worker 当前线上已停止。
 
 `genesis-evidence-backlog`（`literature/backlog.py`）处理全文获取与抽取积压，并会重试失败的
 抽取任务；它默认处理全部主题，**只有**设置了 `GENESIS_EVIDENCE_ACTIVE_TOPIC_ID`
