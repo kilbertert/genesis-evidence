@@ -15,13 +15,19 @@ exits nonzero on any failure and prints `SUMMARY pass=<n> fail=<n>`. Note that
 `--resolve` bypasses DNS by design, so a pass validates TLS and routing to the
 given address, not the public DNS record.
 
+`e2e-acceptance.sh` needs the review bearer and the probe state, both of which
+live on the host. Rather than have the operator assemble them by hand, it reads
+them through the project's host tool (`dev-host`), so the three commands compose
+as written. It must therefore run where that tool and the project's
+`.dev-host.toml` are available.
+
 `e2e-acceptance.sh` targets the live entry directly and additionally proves the
 **migrated data** is usable: it fetches an existing user's report and one of its
 page files. That requires an authenticated session, which is obtained without
 knowing any user's password:
 
 ```bash
-mint-probe-session.py        # on the host: writes /tmp/e2e-session.json
+mint-probe-session.py        # on the host: writes /tmp/e2e-state.json (mode 0600)
 #   ... run e2e-acceptance.sh ...
 cleanup-probe-session.py     # on the host: removes that session
 ```
@@ -71,6 +77,27 @@ to a real paper. Run it as the service identity:
 ```bash
 su -s /bin/bash -c '/opt/genesis-evidence/ops/match-probe.sh' genesis-evidence
 ```
+
+## Security limits of this suite (read before running)
+
+Two of these are inherent to the current deployment, not to the scripts:
+
+- **The probe credentials travel in plaintext.** The interim entry is plain HTTP
+  (the domain and certificate are pending, tracked separately). The review
+  bearer and the minted session cookie therefore cross the network unencrypted,
+  and anyone observing the path can capture both. Run this suite over a trusted
+  path, and treat any credential it uses as exposed to that path. This closes
+  when the service moves back behind TLS.
+- **The state file holds a live session token.** It is written `0600` in a
+  private directory, but a predictable path is still readable by root and by
+  anyone who can read that file. It exists only for the duration of a run —
+  mint, run, clean up — and must not be left behind.
+
+One is a property of the scripts:
+
+- `curl -b <file>` expects Netscape cookie-jar format; a `name=value` file sends
+  nothing, silently. The suite passes the cookie as a literal string for this
+  reason.
 
 ## TLS
 

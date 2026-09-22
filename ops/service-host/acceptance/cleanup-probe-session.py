@@ -6,7 +6,7 @@ authenticated requests without knowing a user's password. That session must be
 removed afterwards — leaving it behind means a live credential for a real
 account exists with nobody accountable for it.
 
-    cleanup-probe-session.py /tmp/e2e-session.json
+    cleanup-probe-session.py [state-file]     # default /tmp/e2e-state.json
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ DB = "/opt/health-flow/var/healthflow.db"
 
 
 def main() -> int:
-    path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/e2e-session.json")
+    path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/e2e-state.json")
     if not path.is_file():
         print(f"no session file at {path}; nothing to remove")
         return 0
