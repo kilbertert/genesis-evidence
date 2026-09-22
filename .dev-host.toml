@@ -26,7 +26,7 @@ description = "移动云服务宿主。genesis-evidence 迁移目标(见 #143/#1
 app     = "/opt/genesis-evidence"
 logs    = "/var/log/genesis-evidence"
 ops     = "/opt/genesis-evidence/ops"
-var     = "/var/log/genesis-evidence"
+var     = "/opt/genesis-evidence/var"
 backups = "/var/backups/genesis-evidence"
 
 # 备注(不进目标解析,给人看):
