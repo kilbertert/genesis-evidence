@@ -15,8 +15,10 @@ genesis-evidence 是阶段二重建项目,与冻结的 `genesis-health` 并排�
 (`/etc/nginx/sites-enabled/frp-demo`)把 `*.ranlei.work` 的 443 转发到本地
 FRP 服务(127.0.0.1:8188),再由 FRP 隧道回落到对应本地端口。
 
-个人报告门户使用 RFC 7617 Basic Auth,凭据仅存在 Health-Flow 的私有
-`var/health-flow.env` 中。因为 Basic Auth 不自带传输加密,只能通过 HTTPS 访问。
+个人报告门户以 **账号会话** 为患者访问边界(`REPORT_ACCOUNT_REQUIRED=true`)。RFC 7617 Basic Auth
+只是可选的操作者兼容闸门(`HEALTHFLOW_BASIC_AUTH_ENABLED`,默认关闭),不是患者访问路径;启用时凭据
+仅存在 Health-Flow 的私有 `var/health-flow.env` 中。Basic Auth 不自带传输加密,启用时只能通过
+HTTPS 访问。
 
 ## 审核工作台访问
 
@@ -34,9 +36,15 @@ sessionStorage 并随每次请求发送。
 |---|---|
 | `genesis-evidence-portal.service` | 只读 Evidence API(FastAPI,8125)；不承载报告上传/解析 |
 | `genesis-evidence-review.service` | 审核工作台(FastAPI,8126) |
-| `genesis-evidence-worker.service` | 论文抽取后台 worker,逐条消费 `paper_extraction_jobs` |
+| `genesis-evidence-worker.service` | 论文抽取后台 worker,逐条消费 `paper_extraction_jobs`。**当前 `disabled` + `inactive`**:按单主题低速验收暂停,不领取任务;已完成数据保留 |
 | `genesis-evidence-frp.service` | FRP 隧道,暴露上面两个 HTTP 服务 |
 | `health-flow.service` | Health-Flow 用户端 + 报告 API(FastAPI + React,8127) |
+| `health-flow-report-worker.service` | Health-Flow 持久化报告解析 worker,消费报告抽取队列 |
+
+`genesis-evidence-review.service` 与 `genesis-evidence-worker.service` 还额外读一份**冻结仓库**的兼容
+env 文件:`EnvironmentFile=-/home/claude/Projects/genesis-health/var/review-api.env`(前缀 `-` 表示
+可选,缺失不阻止启动)。这是阶段二迁移的遗留依赖,不是当前配置来源;`genesis-health` 已冻结,
+新配置一律走 `var/review.env`。
 
 运维命令(均以 `claude` 用户):
 
@@ -51,14 +59,17 @@ systemctl --user restart genesis-evidence-worker   # 改了模型 env 后重启
 
 - `var/review.env` — 审核工作台 + worker 共用:
   `GENESIS_EVIDENCE_DATABASE`、`GENESIS_EVIDENCE_REVIEW_HOST/PORT`、
-  `GENESIS_EVIDENCE_REVIEW_API_KEY`(工作台 Bearer)、`ARK_API_KEY`、
-  `ARK_MAX_TOKENS`(抽取输出预算)。
+  `GENESIS_EVIDENCE_REVIEW_API_KEY`(工作台 Bearer)、`PAPER_AI_API_KEY_FILE`
+  (或 `PAPER_AI_API_KEY`)、`PAPER_AI_BASE_URL`、`PAPER_AI_MODEL`、
+  `PAPER_AI_TIMEOUT_SECONDS`、`PAPER_AI_MAX_TOKENS`(抽取输出预算)。
+  旧的 `ARK_*` 变量名仍被兼容读取,但不再是配置来源。
 - `var/portal.env` — Evidence API:
   `GENESIS_EVIDENCE_PORTAL_HOST/PORT`、`GENESIS_EVIDENCE_API_KEY` 等。
 - `health-flow/var/health-flow.env` — Health-Flow:
   `GENESIS_EVIDENCE_API_URL`、同值的 `GENESIS_EVIDENCE_API_KEY` 等。Health-Flow 只在用户确认指标后调用
-  `POST /api/evidence/matches`，并通过 `X-Genesis-Evidence-Key` 认证；上传接口先持久化并返回 `202 processing`,当前进程内后台解析完成后
-  状态进入 `pending_confirmation`,前端通过带访问令牌的短请求轮询,不依赖反向代理长连接。持久化报告队列在后续阶段补齐。
+  `POST /api/evidence/matches`，并通过 `X-Genesis-Evidence-Key` 认证；上传接口先持久化并返回 `202 processing`，
+  由 `health-flow-report-worker.service`(`app/service/report_worker.py`)在持久化队列上完成解析，
+  状态进入 `pending_confirmation` 后前端通过带访问令牌的短请求轮询，不依赖反向代理长连接。
 
 数据:`var/genesis-evidence.sqlite3`(SQLite)。Evidence API 不读取报告对象存储。
 
