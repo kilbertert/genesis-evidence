@@ -1,0 +1,39 @@
+# genesis-evidence 可访问主机声明
+#
+# 本文件是"项目侧"声明,由 dev-host 读取。与之配对的"主机侧"清单在
+# `~/.config/dev-host/hosts.toml`(库外 600),那里记角色、信任平面、
+# 归属、访问方式与主机公钥。
+#
+# 为什么分成两半:本文件进仓库、可被评审,所以**只写逻辑名与路径**;
+# 地址、指纹、凭据一律留在库外。这样本文件可以安全地进公开仓库。
+# 地址由 `ssh -G <alias>` 从 `~/.ssh/config` 解析,不在这里制造第二个真值来源。
+#
+# 用法:
+#   cd <repo> && dev-host show 36
+#   dev-host read 36 /opt/genesis-evidence/var/portal.env
+#   dev-host exec 36 --allow-service-exec -- systemctl is-active genesis-evidence-portal
+#
+# 注意:36 是服务类主机,写入需要产物身份(`--artifact-sha256`),
+# `exec` 需要显式 `--allow-service-exec`;只读用 read/ls/find,不受限。
+# 执行前会断言主机公钥指纹,不符则**中止**。
+
+[[targets]]
+name        = "36"
+host        = "yidong-36"
+description = "移动云服务宿主。genesis-evidence 迁移目标(见 #143/#144)。该机同时承载公司既有服务,迁移只新增、不改动它们"
+
+[targets.paths]
+app     = "/opt/genesis-evidence"
+logs    = "/var/log/genesis-evidence"
+ops     = "/opt/genesis-evidence/ops"
+var     = "/opt/genesis-evidence/var"
+backups = "/var/backups/genesis-evidence"
+
+# 备注(不进目标解析,给人看):
+#
+# - `app` 与 `ops` 是**计划路径**,随 #144 建立;在该机实际建好并验证归属前,
+#   不要假设符号链接之外的东西已存在。
+# - 两个服务(证据 API、审核工作台)同属**一个**项目身份 —— 策略要求身份粒度
+#   是项目,不是进程。
+# - 只读探测(健康端点、监听、日志)不需要产物身份;任何写入都需要。
+# - 该机上**公司既有服务**不在本项目射程内,既不读也不动。
