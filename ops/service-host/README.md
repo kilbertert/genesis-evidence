@@ -86,3 +86,71 @@ regardless of the key — which tests the schema, not the authentication.
 Both services bind loopback only. The public entry point is terminated in front
 of them by the host's web server; the services themselves are never reached by
 their port from outside the host.
+
+`nginx/genesis-evidence.conf` is that entry: one server block per domain,
+proxying to the loopback port of the matching service. It is deployed into the
+host's vhost directory and, like the neighbouring internal entry there, does not
+modify a panel-managed site.
+
+TLS terminates here with the **Cloudflare Origin certificate** for
+`*.ranlei.work`, matching the existing entry path (Cloudflare → origin). The
+certificate a browser sees is Cloudflare's; this one only has to satisfy
+Cloudflare in Full (strict) mode. Plain HTTP **redirects** to HTTPS rather than
+serving, because patient sessions and the reviewer's bearer key must not cross
+the network in the clear.
+
+The certificate and its private key are installed under the panel's per-site
+certificate directory — mode `700` on the directory, `600` on the key. They are
+**not** in this repository, and are delivered by a private channel.
+
+The report portal's block raises `client_max_body_size` to 55m because a single
+submission may carry two large report files.
+
+### The default-server trap
+
+nginx makes the **first** server block on a port the default for unmatched names,
+and file order is alphabetical. A new file that sorts before the others will take
+over as the default for that port — so an unrelated host reaching it lands on
+whoever wrote last, silently.
+
+That happened here: the first version of this file, listening on 443 without a
+catch-all, became the HTTPS default and served our application to any hostname.
+The fix is an explicit `default_server` block that returns `444`, so "no match"
+says no match instead of answering as us. Any file added to this directory
+should carry one for this reason.
+
+### Verifying the entry
+
+```
+# real domain: expect the actual application
+curl -sk --resolve <domain>:443:<host-address> https://<domain>/ | grep '<title>'
+
+# unrelated host: expect NOT our application
+curl -sk --resolve other.example.com:443:<host-address> https://other.example.com/
+```
+
+The Host-header / SNI probe is the verification method: it reaches the entry as
+the public traffic would, without moving DNS, so the path can be proven before
+any traffic is switched. Three things to be careful about:
+
+- **Check content, not just the status code.** A `200` may be a default site or a
+  soft error page; only the response body shows which application answered.
+- **Probe with an unrelated host too, over the same protocol you changed.** An
+  HTTP-only closure check will miss an HTTPS default that answers everything —
+  that is exactly how the trap above survived its first review.
+- **Confirm the company's own sites still answer** after touching a shared
+  server, by Host header, including any that listen on the same ports.
+
+### Reloading
+
+Two nginx processes may exist on a host like this: the panel-managed one that
+owns the public ports, and another inside a container that owns nothing public.
+Reload the one that actually owns the ports — signalling the wrong one silently
+changes nothing, and the entry keeps serving the previous configuration.
+
+Also note that the panel's nginx is not necessarily supervised by
+`systemctl`: on this host the LSB unit is in a failed state from a date before
+this work while nginx runs fine, so `systemctl reload nginx` is the wrong command
+and its error has nothing to do with the configuration. Run `nginx -t` before
+every reload and check `nginx -T` to see the configuration actually resolved,
+rather than assuming the file on disk is the one being served.
