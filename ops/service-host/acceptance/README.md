@@ -5,17 +5,33 @@ client. Nothing is probed on loopback or from the host itself, so a pass means
 the path a real user takes works end to end: DNS name, TLS, proxy, service.
 
 ```bash
-acceptance.sh <host-address> <review-bearer-key>
+acceptance.sh <host-address> <review-bearer-key>   # pre-cutover, via --resolve
+e2e-acceptance.sh <host-address>                   # post-cutover, via the live entry
 ```
 
-The host address is resolved per-request with `curl --resolve`, so the check
-runs **before** DNS points at the host and without moving any live traffic. The
-reviewer key is an argument rather than a file so the script carries no
-credential.
+`acceptance.sh` resolves the host address per-request with `curl --resolve`, so it
+runs **before** DNS points at the host and without moving any live traffic. It
+exits nonzero on any failure and prints `SUMMARY pass=<n> fail=<n>`. Note that
+`--resolve` bypasses DNS by design, so a pass validates TLS and routing to the
+given address, not the public DNS record.
 
-It exits nonzero if any case fails and prints `SUMMARY pass=<n> fail=<n>`. `curl --resolve`
-bypasses DNS by design, so a pass validates TLS and routing to the given
-address, not the public DNS record — DNS is checked separately at cutover.
+`e2e-acceptance.sh` targets the live entry directly and additionally proves the
+**migrated data** is usable: it fetches an existing user's report and one of its
+page files. That requires an authenticated session, which is obtained without
+knowing any user's password:
+
+```bash
+mint-probe-session.py        # on the host: writes /tmp/e2e-session.json
+#   ... run e2e-acceptance.sh ...
+cleanup-probe-session.py     # on the host: removes that session
+```
+
+**Always run the cleanup.** The minted session is a live credential for a real
+account; leaving it behind means it exists with nobody accountable for it.
+
+While probing, note that `curl -b <file>` expects Netscape cookie-jar format. A
+plain `name=value` file sends **nothing**, silently — which presents as an
+authentication failure rather than a test bug.
 
 ## What it asserts
 
@@ -28,6 +44,10 @@ address, not the public DNS record — DNS is checked separately at cutover.
 | E | An upload returns `202 processing` and its extraction job is **persisted as queued** — with the worker disabled, which is what proves the queue is durable rather than parsed inline |
 | F | The review queue is readable through the entry — an entry-level smoke check only |
 | G | The conditions catalogue is served |
+
+`e2e-acceptance.sh` additionally asserts, against the live entry: the migrated
+paper corpus is readable; the evidence API is **not** reachable from outside;
+and an existing user's report and page file are retrievable.
 
 The negative cases are deliberate. A suite that only asserts the happy path
 passes against a deployment that let anonymous callers through; groups B and D
