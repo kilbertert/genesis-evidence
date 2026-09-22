@@ -1,0 +1,23 @@
+[Unit]
+Description=Genesis Evidence Paper Review Workbench
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=genesis-evidence
+Group=genesis-evidence
+WorkingDirectory=/opt/genesis-evidence
+EnvironmentFile=/opt/genesis-evidence/var/review.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/genesis-evidence/.venv/bin/python -m genesis_evidence.review.api
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/genesis-evidence/var /var/log/genesis-evidence
+
+[Install]
+WantedBy=multi-user.target
