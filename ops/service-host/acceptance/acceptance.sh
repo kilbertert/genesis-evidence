@@ -18,6 +18,18 @@ set -uo pipefail
 
 HOST_ADDR=${1:?host address required}
 REVIEW_KEY=${2:?review bearer key required}
+# By default the suite verifies the certificate chain, so an invalid or
+# mismatched certificate fails instead of passing. Set INSECURE=1 only when the
+# certificate is legitimately not publicly trusted — a Cloudflare Origin
+# certificate is trusted by Cloudflare, not by browsers, so reaching the origin
+# directly requires it. Running this suite from the public internet through
+# Cloudflare would verify the chain and INSECURE=1 would not be needed.
+#
+# This is a deliberate, visible opt-out rather than a blanket -k, so an
+# accidental certificate problem is not silently tolerated.
+INSECURE=${INSECURE:-0}
+TLS=()
+[ "$INSECURE" = "1" ] && TLS=(-k)
 
 PORTAL=https://genesis-evidence.ranlei.work
 REVIEW=https://genesis-evidence-review.ranlei.work
@@ -31,7 +43,7 @@ printf '%%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%%%E
 pass=0; fail=0
 ok()   { printf 'PASS  %s\n' "$1"; pass=$((pass+1)); }
 no()   { printf 'FAIL  %s — %s\n' "$1" "$2"; fail=$((fail+1)); }
-code() { curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$@"; }
+code() { curl -s "${TLS[@]}" -o /dev/null -w '%{http_code}' --max-time 20 "$@"; }
 
 EMAIL="acceptance-$$@example.invalid"
 PASSWORD="acceptance-password-$$"
@@ -40,7 +52,7 @@ echo "== A. entry reachable and serving the real applications =="
 for pair in "${PORTAL}|健康流" "${REVIEW}|审核"; do
   url=${pair%%|*}; want=${pair##*|}
   case "$url" in *review*) R="$RESOLVE_REVIEW";; *) R="$RESOLVE_PORTAL";; esac
-  body=$(curl -sk --max-time 20 $R "$url/" 2>/dev/null)
+  body=$(curl -s "${TLS[@]}" --max-time 20 $R "$url/" 2>/dev/null)
   if printf '%s' "$body" | grep -q "$want"; then ok "entry serves $url"; else no "entry serves $url" "title mismatch"; fi
 done
 
@@ -57,7 +69,7 @@ c=$(code $RESOLVE_PORTAL -b "$COOKIE" "$PORTAL/api/auth/me")
 [ "$c" = 200 ] && ok "session grants access to protected route" || no "session grants access" "got $c"
 
 echo "== C. public metric catalogue (the bridge target is reachable) =="
-cat=$(curl -sk --max-time 20 $RESOLVE_PORTAL "$PORTAL/api/health/metric-catalog" 2>/dev/null)
+cat=$(curl -s "${TLS[@]}" --max-time 20 $RESOLVE_PORTAL "$PORTAL/api/health/metric-catalog" 2>/dev/null)
 n=$(printf '%s' "$cat" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d))" 2>/dev/null || echo 0)
 [ "${n:-0}" -ge 1 ] && ok "metric catalog reachable ($n codes)" || no "metric catalog reachable" "got ${n:-none}"
 
@@ -71,7 +83,7 @@ c=$(code $RESOLVE_REVIEW -H "Authorization: Bearer $REVIEW_KEY" "$REVIEW/api/rev
 
 echo "== E. report upload path (durable queue) =="
 body=$(mktemp)
-c=$(curl -sk -o "$body" -w '%{http_code}' --max-time 30 $RESOLVE_PORTAL -b "$COOKIE" \
+c=$(curl -s "${TLS[@]}" -o "$body" -w '%{http_code}' --max-time 30 $RESOLVE_PORTAL -b "$COOKIE" \
      -X POST "$PORTAL/api/health/report/upload" -F "file=@$TMPPDF;type=application/pdf")
 [ "$c" = 202 ] && ok "upload returns 202" || no "upload returns 202" "got $c"
 st=$(python3 -c "import json;print(json.load(open('$body')).get('status',''))" 2>/dev/null || echo "")
@@ -83,27 +95,24 @@ job=$(python3 -c "import json;print(json.load(open('$body')).get('extraction_job
 [ "$job" = "queued" ] && ok "extraction job persisted as queued" || no "extraction job persisted as queued" "got '$job'"
 rm -f "$body"
 
-echo "== F. main chain: published evidence is present and readable through the entry =="
-# The review workbench reads the same database the evidence API serves from, so
-# a paper visible here is evidence that the published set is queryable through
-# the public entry — not just that a process is listening.
-papers=$(curl -sk --max-time 25 $RESOLVE_REVIEW -H "Authorization: Bearer $REVIEW_KEY" \
+echo "== F. review queue is readable through the entry =="
+# NOTE: this reports the paper queue, which is served regardless of whether any
+# knowledge card references those papers. It therefore does NOT prove the
+# patient-facing evidence chain, and passing it while every card were withdrawn
+# would be a false negative. The chain itself is asserted by the loopback
+# companion (ops/match-probe.sh) on the host, because the evidence API is
+# deliberately not publicly exposed. Kept here as an entry-level smoke check.
+papers=$(curl -s "${TLS[@]}" --max-time 25 $RESOLVE_REVIEW -H "Authorization: Bearer $REVIEW_KEY" \
          "$REVIEW/api/review/papers" 2>/dev/null)
 n=$(printf '%s' "$papers" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('papers',[])))" 2>/dev/null || echo 0)
 [ "${n:-0}" -ge 1 ] && ok "published papers readable through entry ($n)" \
   || no "published papers readable through entry" "got ${n:-none}"
 
 echo "== G. conditions catalogue is served (fixture for the match path) =="
-conds=$(curl -sk --max-time 25 $RESOLVE_REVIEW -H "Authorization: Bearer $REVIEW_KEY" \
+conds=$(curl -s "${TLS[@]}" --max-time 25 $RESOLVE_REVIEW -H "Authorization: Bearer $REVIEW_KEY" \
         "$REVIEW/api/review/conditions" 2>/dev/null)
 n=$(printf '%s' "$conds" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('conditions',[])))" 2>/dev/null || echo 0)
 [ "${n:-0}" -ge 1 ] && ok "conditions catalogue served ($n)" || no "conditions catalogue served" "got ${n:-none}"
-
-echo "== H. metric catalogue for the report flow =="
-catalog=$(curl -sk --max-time 20 $RESOLVE_PORTAL "$PORTAL/api/health/metric-catalog" 2>/dev/null)
-n=$(printf '%s' "$catalog" | python3 -c "import json,sys;print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
-[ "${n:-0}" -ge 1 ] && ok "metric catalog served through entry ($n codes)" \
-  || no "metric catalog served through entry" "got ${n:-none}"
 
 echo
 printf 'SUMMARY pass=%d fail=%d\n' "$pass" "$fail"
