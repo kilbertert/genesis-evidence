@@ -83,6 +83,18 @@ regardless of the key — which tests the schema, not the authentication.
 
 ## Exposure
 
+> **Current state (2026-09-23): the services are exposed directly, and this is
+> temporary.** The entry described below was retired when the deployment moved
+> to interim public-IP access while a company subdomain is arranged.
+> `10006` and `10007` bind `0.0.0.0`; `10005` stays on loopback. There is **no
+> TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store the
+> session cookie over plain HTTP. These three facts travel together: restoring
+> any one of them without the others breaks login or leaves credentials in the
+> clear. What must change when the subdomain and certificate exist is recorded
+> in the project's issue tracker, not only here.
+
+### Target state: loopback behind the host's web server
+
 Both services bind loopback only. The public entry point is terminated in front
 of them by the host's web server; the services themselves are never reached by
 their port from outside the host.
@@ -92,12 +104,19 @@ proxying to the loopback port of the matching service. It is deployed into the
 host's vhost directory and, like the neighbouring internal entry there, does not
 modify a panel-managed site.
 
-TLS terminates here with the **Cloudflare Origin certificate** for
+It was **removed from the host** during the retirement above, and the file is
+kept here as the form to restore. Reinstating it means changing the domain names
+in it — the previous ones are retired — and pointing it at the ports in use.
+
+TLS terminates there with the **Cloudflare Origin certificate** for
 `*.ranlei.work`, matching the existing entry path (Cloudflare → origin). The
 certificate a browser sees is Cloudflare's; this one only has to satisfy
 Cloudflare in Full (strict) mode. Plain HTTP **redirects** to HTTPS rather than
 serving, because patient sessions and the reviewer's bearer key must not cross
 the network in the clear.
+
+That requirement is not hypothetical: it is precisely what the interim state
+above violates, and the reason the interim state is bounded.
 
 The certificate and its private key are installed under the panel's per-site
 certificate directory — mode `700` on the directory, `600` on the key. They are

@@ -84,8 +84,9 @@ systemctl restart genesis-evidence-review   # 改了 env 后重启
 - `https://genesis-health.ranlei.work` — 旧个人健康门户
 - `https://genesis-review.ranlei.work` — 旧证据审核工作台
 
-**访问新版一律用 `genesis-evidence*` 域名,不要再用 `genesis-review` / `genesis-health`
-这两个旧域名**,以免混淆。
+**这四个域名现在全部不可用**,不要用其中任何一个:旧的两个已于 2026-08-13 停用,
+`genesis-evidence*` 两个也随 2026-09-22 的迁移退役。**当前入口是本文开头的 IP + 端口**;
+公司二级域名到位后以新域名为准。
 
 旧 genesis-health 的 6 个 user 服务(`genesis-health-portal`、
 `genesis-health-private-portal`、`genesis-review-api`、`genesis-health-frp`、
