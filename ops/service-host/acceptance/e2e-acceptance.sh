@@ -42,15 +42,22 @@ on_host() { dev-host exec 36 --allow-service-exec -- "$1"; }
 # The bearer is read and used on the host and never crosses to this side, so it
 # cannot be interpolated into a remote command — an operator-supplied key
 # containing a quote must not become shell syntax on the service host. The
-# response is written under a private directory removed on exit, so an
-# interrupted run leaves no protected review data in the shared /tmp.
+# response is streamed to stdout and never written to a file, so there is no
+# host-side copy to be left behind by an interruption: a trap cannot clean up
+# after SIGKILL, which is what sinks temp-file variants of this.
 REVIEW_ENV=/opt/genesis-evidence/var/review.env
 review_get() {
   on_host "KEY=\$(grep '^GENESIS_EVIDENCE_REVIEW_API_KEY=' $REVIEW_ENV | cut -d= -f2-); \
     [ -z \"\$KEY\" ] && exit 3; \
-    d=\$(mktemp -d) && trap 'rm -rf \"\$d\"' EXIT; \
-    curl -s -o \"\$d/out\" --max-time 25 -H \"Authorization: Bearer \$KEY\" \
-      'http://127.0.0.1:10006$1'; cat \"\$d/out\"" 2>/dev/null
+    curl -s --max-time 25 -H \"Authorization: Bearer \$KEY\" \
+      'http://127.0.0.1:10006$1'" 2>/dev/null
+}
+
+# A request carrying a deliberately wrong bearer, for the negative check. Same
+# streaming treatment; the wrong key is a literal, not a secret.
+review_get_with_wrong_key() {
+  on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 25 \
+    -H 'Authorization: Bearer wrong-0000000000000000' 'http://127.0.0.1:10006$1'"
 }
 
 # Status code only, for the negative checks.
@@ -82,6 +89,8 @@ done
 echo "== 3b. the review workbench answers over the private channel =="
 c=$(review_code "/api/review/papers")
 [ "$c" = 401 ] && ok "review API refused without bearer (private channel)" || no "review API (no bearer)" "got $c"
+c=$(review_get_with_wrong_key "/api/review/papers")
+[ "$c" = 401 ] && ok "review API refused with wrong bearer (private channel)" || no "review API (wrong bearer)" "got $c"
 
 # The workbench page itself, so a missing UI cannot pass as a clean run.
 page=$(on_host "curl -s --max-time 20 'http://127.0.0.1:10006/'" 2>/dev/null)

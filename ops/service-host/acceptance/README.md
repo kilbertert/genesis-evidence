@@ -61,7 +61,7 @@ authentication failure rather than a test bug.
 | A | Both entries serve their real application, not a default page |
 | B | Protected routes and upload are refused **without** a session; registration yields a session; the session then grants access |
 | C | The metric catalogue is served through the entry |
-| D | The review API refuses a missing bearer and a wrong bearer, and accepts the real one |
+| D | The review API refuses a missing bearer and a wrong bearer, and accepts the real one — over the private channel, since the workbench has no public entry |
 | E | An upload returns `202 processing` and its extraction job is **persisted as queued** — with the worker disabled, which is what proves the queue is durable rather than parsed inline |
 | F | The review queue is readable through the entry — an entry-level smoke check only |
 | G | The conditions catalogue is served |
@@ -97,12 +97,15 @@ su -s /bin/bash -c '/opt/genesis-evidence/ops/match-probe.sh' genesis-evidence
 
 Two of these are inherent to the current deployment, not to the scripts:
 
-- **The probe credentials travel in plaintext.** The interim entry is plain HTTP
-  (the domain and certificate are pending, tracked separately). The review
-  bearer and the minted session cookie therefore cross the network unencrypted,
-  and anyone observing the path can capture both. Run this suite over a trusted
-  path, and treat any credential it uses as exposed to that path. This closes
-  when the service moves back behind TLS.
+- **The minted session cookie travels in plaintext.** The interim entry is plain
+  HTTP (the domain and certificate are pending, tracked separately), so the
+  session cookie crosses the network unencrypted and anyone observing the path
+  can capture it. Run this suite over a trusted path, and treat that cookie as
+  exposed to it. This closes when the service moves back behind TLS.
+- **The review bearer does not cross the network at all.** `e2e-acceptance.sh`
+  reads it and uses it on the service host, over loopback, so it is not subject
+  to the paragraph above. Earlier revisions passed it into the script; that is
+  no longer the case.
 - **The state file holds a live session token.** It is written `0600` in a
   private directory, but a predictable path is still readable by root and by
   anyone who can read that file. It exists only for the duration of a run —
