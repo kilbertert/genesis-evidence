@@ -40,7 +40,12 @@ def main() -> int:
     # A mismatch is silent — the script succeeds against a database nobody
     # serves, and the acceptance run then passes for the wrong reason. Override
     # with HEALTHFLOW_DB when running anywhere but the service host.
-    db_path = os.environ.get("HEALTHFLOW_DB") or DB
+    #
+    # Resolved to an absolute path before it is opened or recorded: SQLite
+    # resolves a relative path against the current working directory, so a
+    # relative override would name a different database when cleanup later runs
+    # from elsewhere.
+    db_path = os.path.abspath(os.environ.get("HEALTHFLOW_DB") or DB)
 
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row

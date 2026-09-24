@@ -13,6 +13,16 @@
 #
 # The reviewer key is passed in rather than read from a file so this script
 # carries no credential.
+#
+# ---------------------------------------------------------------------------
+# NOT RUNNABLE IN THE CURRENT DEPLOYMENT. It targets the retired
+# `*.ranlei.work` hostnames over HTTPS, and the review workbench it probes no
+# longer has a public entry (that exposure was withdrawn on observed traffic).
+# Use `e2e-acceptance.sh` instead. This file is kept as the form to restore
+# once a company subdomain and certificate exist — and when that happens the
+# review checks still belong on the private channel, because the workbench does
+# not become public just because a domain exists.
+# ---------------------------------------------------------------------------
 
 set -uo pipefail
 

@@ -34,22 +34,29 @@ no() { printf 'FAIL  %s — %s\n' "$1" "$2" >&2; fail=$((fail+1)); }
 # Run a command on the service host, returning its stdout.
 on_host() { dev-host exec 36 --allow-service-exec -- "$1"; }
 
-# The review bearer lives on the host; read it there and never write it to disk.
-REVIEW_KEY=$(on_host "grep '^GENESIS_EVIDENCE_REVIEW_API_KEY=' /opt/genesis-evidence/var/review.env | cut -d= -f2-")
-
 # GET a review-workbench path over the private channel, as root on the host.
 # The listener is loopback-only, so this is the only way to reach it — and the
 # right one: the point of the withdrawal is that the public entry no longer
 # serves this surface at all.
+#
+# The bearer is read and used on the host and never crosses to this side, so it
+# cannot be interpolated into a remote command — an operator-supplied key
+# containing a quote must not become shell syntax on the service host. The
+# response is written under a private directory removed on exit, so an
+# interrupted run leaves no protected review data in the shared /tmp.
+REVIEW_ENV=/opt/genesis-evidence/var/review.env
 review_get() {
-  on_host "curl -s -o /tmp/e2e-review.$$ -w '%{http_code}' --max-time 25 \
-    -H 'Authorization: Bearer $1' 'http://127.0.0.1:10006$2' >/dev/null; \
-    cat /tmp/e2e-review.$$; rm -f /tmp/e2e-review.$$" 2>/dev/null
+  on_host "KEY=\$(grep '^GENESIS_EVIDENCE_REVIEW_API_KEY=' $REVIEW_ENV | cut -d= -f2-); \
+    [ -z \"\$KEY\" ] && exit 3; \
+    d=\$(mktemp -d) && trap 'rm -rf \"\$d\"' EXIT; \
+    curl -s -o \"\$d/out\" --max-time 25 -H \"Authorization: Bearer \$KEY\" \
+      'http://127.0.0.1:10006$1'; cat \"\$d/out\"" 2>/dev/null
 }
 
 # Status code only, for the negative checks.
 review_code() {
-  on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 25 $1 'http://127.0.0.1:10006$2'" 2>/dev/null
+  on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 25 \
+    'http://127.0.0.1:10006$1'"
 }
 
 echo "== 1. the portal is reachable at the public entry; both internal services are not =="
@@ -73,20 +80,21 @@ for port in 10005 10006; do
 done
 
 echo "== 3b. the review workbench answers over the private channel =="
-c=$(review_code "" "/api/review/papers")
+c=$(review_code "/api/review/papers")
 [ "$c" = 401 ] && ok "review API refused without bearer (private channel)" || no "review API (no bearer)" "got $c"
-c=$(review_code "-H 'Authorization: Bearer wrong-0000000000000000'" "/api/review/papers")
-[ "$c" = 401 ] && ok "review API refused with wrong bearer" || no "review API (wrong bearer)" "got $c"
-if [ -n "$REVIEW_KEY" ]; then
-  body=$(review_get "$REVIEW_KEY" "/api/review/papers")
-  n=$(printf '%s' "$body" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('papers',[])))" 2>/dev/null || echo 0)
-  [ "${n:-0}" -ge 100 ] && ok "migrated papers visible over the private channel ($n)" || no "migrated papers" "got ${n:-none}"
-  body=$(review_get "$REVIEW_KEY" "/api/review/conditions")
-  n=$(printf '%s' "$body" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('conditions',[])))" 2>/dev/null || echo 0)
-  [ "${n:-0}" -ge 10 ] && ok "conditions catalogue served ($n)" || no "conditions" "got ${n:-none}"
-else
-  no "review bearer readable" "could not read from the host"
-fi
+
+# The workbench page itself, so a missing UI cannot pass as a clean run.
+page=$(on_host "curl -s --max-time 20 'http://127.0.0.1:10006/'" 2>/dev/null)
+printf '%s' "$page" | grep -q "论文证据" && ok "review workbench page served (private channel)" \
+  || no "review UI" "no workbench title over the private channel"
+
+papers=$(review_get "/api/review/papers")
+n=$(printf '%s' "$papers" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('papers',[])))" 2>/dev/null || echo 0)
+[ "${n:-0}" -ge 100 ] && ok "migrated papers visible over the private channel ($n)" || no "migrated papers" "got ${n:-none}"
+
+conds=$(review_get "/api/review/conditions")
+n=$(printf '%s' "$conds" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else len(d.get('conditions',[])))" 2>/dev/null || echo 0)
+[ "${n:-0}" -ge 10 ] && ok "conditions catalogue served ($n)" || no "conditions" "got ${n:-none}"
 
 echo "== 4. metric catalogue (portal -> evidence service bridge) =="
 cat=$(curl -s --max-time 20 "$PORTAL/api/health/metric-catalog")

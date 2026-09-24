@@ -1,19 +1,27 @@
 # Product acceptance
 
-Runs the acceptance scenarios against the **public entry**, as an external
-client. Nothing is probed on loopback or from the host itself, so a pass means
-the path a real user takes works end to end: DNS name, TLS, proxy, service.
+**Use `e2e-acceptance.sh`.** The other script in this directory is retained as
+the form to restore when a company subdomain and certificate exist, and does not
+run against the deployment as it stands — see its note below.
 
 ```bash
-acceptance.sh <host-address> <review-bearer-key>   # pre-cutover, via --resolve
-e2e-acceptance.sh <host-address>                   # post-cutover, via the live entry
+e2e-acceptance.sh <host-address>        # current: the live entry, portal via the public address
+acceptance.sh <host-address> <review-bearer-key>   # scheduled: after DNS + TLS are in place
 ```
 
-`acceptance.sh` resolves the host address per-request with `curl --resolve`, so it
-runs **before** DNS points at the host and without moving any live traffic. It
-exits nonzero on any failure and prints `SUMMARY pass=<n> fail=<n>`. Note that
-`--resolve` bypasses DNS by design, so a pass validates TLS and routing to the
-given address, not the public DNS record.
+`e2e-acceptance.sh` runs the portal checks against the **public entry**, as an
+external client, so a pass means the path a real user takes works end to end.
+The review workbench no longer has a public entry — its exposure was withdrawn
+on observed traffic — so its checks run over the private channel instead, and
+the suite asserts that both internal listeners refuse from outside. That
+negative assertion is what would catch a regression in the exposure.
+
+`acceptance.sh` targets **retired** `*.ranlei.work` hostnames over HTTPS, so it
+cannot pass today: the domains are gone and the workbench it probes is no longer
+publicly reachable. It is kept, unrewritten, as the shape to reinstate once a
+company subdomain and certificate exist — at which point the review checks
+belong on the private channel again, because the workbench does not become
+public just because a domain exists.
 
 `e2e-acceptance.sh` needs the review bearer and the probe state, both of which
 live on the host. Rather than have the operator assemble them by hand, it reads

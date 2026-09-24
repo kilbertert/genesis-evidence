@@ -83,15 +83,15 @@ regardless of the key — which tests the schema, not the authentication.
 
 ## Exposure
 
-> **Current state.** Two of the three listeners are still on the interim
-> public-IP entry while a company subdomain is arranged: `10007` (patient
-> portal) binds `0.0.0.0` and serves real patients; `10005` and `10006` bind
-> loopback. There is **no TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a
-> browser will store the session cookie over plain HTTP. Those facts travel
-> together: restoring the cookie flag without TLS breaks login, and leaving it
-> unset with TLS leaves credentials in the clear. What must change when the
-> subdomain and certificate exist is recorded in the project's issue tracker,
-> not only here.
+> **Current state (live listeners).** Until the host change below runs, `10006`
+> and `10007` both bind `0.0.0.0`: the patient portal serves real external
+> users, and the review workbench is still on the interim public-IP entry even
+> though its exposure has been decided against. `10005` binds loopback. There is
+> **no TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store
+> the session cookie over plain HTTP. Those facts travel together: restoring the
+> cookie flag without TLS breaks login, and leaving it unset with TLS leaves
+> credentials in the clear. What must change when the subdomain and certificate
+> exist is recorded in the project's issue tracker, not only here.
 
 ### `10006`: the decision to withdraw its exposure, and how the acceptance changed
 
