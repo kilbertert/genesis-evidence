@@ -12,6 +12,7 @@ account exists with nobody accountable for it.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sqlite3
 import sys
@@ -25,14 +26,33 @@ def main() -> int:
         print(f"no session file at {path}; nothing to remove")
         return 0
     data = json.loads(path.read_text())
-    connection = sqlite3.connect(DB)
-    removed = connection.execute(
-        "DELETE FROM user_sessions WHERE id=?", (data["session_id"],)
-    ).rowcount
+    # Remove from the database the session was minted in, not a fixed path.
+    # Session ids are local to a database; deleting by id against a different
+    # one can remove an unrelated patient's session instead of the probe's.
+    db = data.get("db_path") or os.environ.get("HEALTHFLOW_DB") or DB
+    connection = sqlite3.connect(db)
+    # Match on the token hash as well as the id: the state file names both, so
+    # a stale or hand-edited state cannot delete a session it does not describe.
+    token_hash = data.get("token_hash")
+    if token_hash:
+        removed = connection.execute(
+            "DELETE FROM user_sessions WHERE id=? AND token_hash=?",
+            (data["session_id"], token_hash),
+        ).rowcount
+    else:
+        removed = connection.execute(
+            "DELETE FROM user_sessions WHERE id=?", (data["session_id"],)
+        ).rowcount
     connection.commit()
     remaining = connection.execute("SELECT count(*) FROM user_sessions").fetchone()[0]
     accounts = connection.execute("SELECT count(*) FROM user_accounts").fetchone()[0]
     connection.close()
+    if removed == 0:
+        # Leave the state file in place: it still names a live session, or one
+        # in a database this run could not open. Unlinking here would discard
+        # the only record of what still needs removing.
+        print(f"nothing removed from {db}; state file kept at {path}", file=sys.stderr)
+        return 1
     path.unlink()
     print(f"removed probe session(s): {removed}")
     print(f"sessions remaining: {remaining} | accounts: {accounts}")

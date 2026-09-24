@@ -100,6 +100,12 @@ def main() -> int:
             "cookie_name": COOKIE,
             "cookie": f"{COOKIE}={token}",
             "session_id": session_id,
+            # Recorded so cleanup removes the row from the database it was
+            # actually created in. Session ids are local to a database, so
+            # deleting by id against a different one can remove an unrelated
+            # patient's session instead.
+            "db_path": db_path,
+            "token_hash": token_hash,
             "account": acct["email"],
             "report_id": target["report_id"],
             "file_index": target["file_index"],

@@ -93,11 +93,11 @@ regardless of the key — which tests the schema, not the authentication.
 > subdomain and certificate exist is recorded in the project's issue tracker,
 > not only here.
 
-### Exposure of `10006` was withdrawn on observed traffic (2026-09-24)
+### `10006`: the decision to withdraw its exposure, and how the acceptance changed
 
 `10006` is the paper review workbench — an internal tool with a single
-server-side reviewer identity and no public use case. It had been binding
-`0.0.0.0` alongside the patient portal. Before withdrawing that binding, the
+server-side reviewer identity and no public use case. It binds `0.0.0.0`
+alongside the patient portal. Before deciding to withdraw that binding, the
 service's own access log was read for the preceding two weeks and the client
 addresses classified:
 
@@ -107,14 +107,27 @@ addresses classified:
 | `10007` patient portal | 107 | **at least six distinct external addresses** |
 
 Every apparent "external" hit on `10006` resolved to the platform's own egress
-address, which is also the address the acceptance harness runs from. With no
-observed external use, the binding was returned to loopback, and the operator
-recorded it in the private operations inventory.
+address, which is also where the acceptance harness runs. With no observed
+external use, the binding is returned to loopback. This is the rule the policy
+states, applied rather than assumed: an exposure is closed on **observed
+traffic**, not on "nothing is using it". The patient portal is the
+counter-example in the same measurement — it has real external clients, so its
+entry stays until TLS replaces it.
 
-This is the rule the policy states, applied rather than assumed: an exposure is
-closed on **observed traffic**, not on "nothing is using it". The patient
-portal is the counter-example in the same measurement — it has real external
-clients, so its entry stays until TLS replaces it.
+**The host change is separate and deliberate.** Setting
+`GENESIS_EVIDENCE_REVIEW_HOST=127.0.0.1` in the service's environment file and
+restarting `genesis-evidence-review.service` is a service-host mutation, so it
+travels the same path as any other: an identified artifact, from a merged
+revision. Until it runs, the listener is still on `0.0.0.0` and this section
+describes an intent, not a state.
+
+**Acceptance follows the listener.** `e2e-acceptance.sh` no longer probes
+`10006` through the public address; it asserts that both internal listeners
+(`10005`, `10006`) refuse from outside, and reaches the workbench over the
+private channel for the authenticated checks. The negative assertion is the
+one that would catch a regression — which is why it is now the acceptance step
+for this surface, rather than a positive probe that only passed while the
+exposure was open.
 
 Any future remote access to `10006` uses a separate channel (SSH tunnel or the
 private plane) and does not restore a public binding.
