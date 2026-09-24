@@ -83,15 +83,54 @@ regardless of the key — which tests the schema, not the authentication.
 
 ## Exposure
 
-> **Current state (2026-09-23): the services are exposed directly, and this is
-> temporary.** The entry described below was retired when the deployment moved
-> to interim public-IP access while a company subdomain is arranged.
-> `10006` and `10007` bind `0.0.0.0`; `10005` stays on loopback. There is **no
-> TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store the
-> session cookie over plain HTTP. These three facts travel together: restoring
-> any one of them without the others breaks login or leaves credentials in the
-> clear. What must change when the subdomain and certificate exist is recorded
-> in the project's issue tracker, not only here.
+> **Current state (live listeners).** Until the host change below runs, `10006`
+> and `10007` both bind `0.0.0.0`: the patient portal serves real external
+> users, and the review workbench is still on the interim public-IP entry even
+> though its exposure has been decided against. `10005` binds loopback. There is
+> **no TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store
+> the session cookie over plain HTTP. Those facts travel together: restoring the
+> cookie flag without TLS breaks login, and leaving it unset with TLS leaves
+> credentials in the clear. What must change when the subdomain and certificate
+> exist is recorded in the project's issue tracker, not only here.
+
+### `10006`: the decision to withdraw its exposure, and how the acceptance changed
+
+`10006` is the paper review workbench — an internal tool with a single
+server-side reviewer identity and no public use case. It binds `0.0.0.0`
+alongside the patient portal. Before deciding to withdraw that binding, the
+service's own access log was read for the preceding two weeks and the client
+addresses classified:
+
+| Listener | Requests from the platform's own egress | Requests from any other source |
+| --- | --- | --- |
+| `10006` review workbench | 70 | **0** |
+| `10007` patient portal | 107 | **at least six distinct external addresses** |
+
+Every apparent "external" hit on `10006` resolved to the platform's own egress
+address, which is also where the acceptance harness runs. With no observed
+external use, the binding is returned to loopback. This is the rule the policy
+states, applied rather than assumed: an exposure is closed on **observed
+traffic**, not on "nothing is using it". The patient portal is the
+counter-example in the same measurement — it has real external clients, so its
+entry stays until TLS replaces it.
+
+**The host change is separate and deliberate.** Setting
+`GENESIS_EVIDENCE_REVIEW_HOST=127.0.0.1` in the service's environment file and
+restarting `genesis-evidence-review.service` is a service-host mutation, so it
+travels the same path as any other: an identified artifact, from a merged
+revision. Until it runs, the listener is still on `0.0.0.0` and this section
+describes an intent, not a state.
+
+**Acceptance follows the listener.** `e2e-acceptance.sh` no longer probes
+`10006` through the public address; it asserts that both internal listeners
+(`10005`, `10006`) refuse from outside, and reaches the workbench over the
+private channel for the authenticated checks. The negative assertion is the
+one that would catch a regression — which is why it is now the acceptance step
+for this surface, rather than a positive probe that only passed while the
+exposure was open.
+
+Any future remote access to `10006` uses a separate channel (SSH tunnel or the
+private plane) and does not restore a public binding.
 
 ### Target state: loopback behind the host's web server
 

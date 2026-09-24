@@ -34,7 +34,20 @@ COOKIE = "healthflow_session"
 def main() -> int:
     state_path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_STATE)
 
-    c = sqlite3.connect(DB)
+    # This script runs ON the service host, against the database the running
+    # service is configured with. `docs/deployment.md` records that layout; the
+    # default above must match the DATABASE_URL `health-flow.service` loads.
+    # A mismatch is silent — the script succeeds against a database nobody
+    # serves, and the acceptance run then passes for the wrong reason. Override
+    # with HEALTHFLOW_DB when running anywhere but the service host.
+    #
+    # Resolved to an absolute path before it is opened or recorded: SQLite
+    # resolves a relative path against the current working directory, so a
+    # relative override would name a different database when cleanup later runs
+    # from elsewhere.
+    db_path = os.path.abspath(os.environ.get("HEALTHFLOW_DB") or DB)
+
+    c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
 
     # Choose a real user (never test residue) who owns a report whose file has
@@ -82,6 +95,12 @@ def main() -> int:
     session_id = c.execute(
         "SELECT id FROM user_sessions WHERE token_hash=?", (token_hash,)
     ).fetchone()[0]
+    # What SQLite says this file is, as opposed to the path we reached it by.
+    # Cleanup uses it to tell "opened the wrong database" apart from "right
+    # database, probe session already gone" — two cases that otherwise look
+    # identical and need opposite responses.
+    db_file = c.execute("PRAGMA database_list").fetchone()[2]
+    db_file = os.path.abspath(db_file) if db_file else None
     c.close()
 
     # 0600 before writing: the file holds a live credential, and a predictable
@@ -92,6 +111,13 @@ def main() -> int:
             "cookie_name": COOKIE,
             "cookie": f"{COOKIE}={token}",
             "session_id": session_id,
+            # Recorded so cleanup removes the row from the database it was
+            # actually created in. Session ids are local to a database, so
+            # deleting by id against a different one can remove an unrelated
+            # patient's session instead.
+            "db_path": db_path,
+            "db_file": db_file,
+            "token_hash": token_hash,
             "account": acct["email"],
             "report_id": target["report_id"],
             "file_index": target["file_index"],

@@ -1,19 +1,33 @@
 # User service deployment
 
-The new project runs beside the frozen `genesis-health` services:
+> **This file describes the development host.** The services run on a service
+> host in production; see `ops/service-host/` for that deployment. The unit
+> files here exist so the same services can be run and exercised on the
+> development host.
+
+The development-host services, and the frozen `genesis-health` project they were
+originally built beside:
 
 - evidence API: `127.0.0.1:8125` → read-only published-evidence API; deliberately
   not exposed as a user domain
-- user portal: `127.0.0.1:8127` → `genesis-evidence.ranlei.work` (Health-Flow
-  report portal)
-- review: `127.0.0.1:8126` → `genesis-evidence-review.ranlei.work`
+- user portal: `127.0.0.1:8127` (Health-Flow report portal)
+- review: `127.0.0.1:8126` (paper review workbench)
+
+The retired `*.ranlei.work` domains are gone; port numbers and exposure for the
+current deployment live in `docs/deployment.md`, not here.
 
 Create private `var/portal.env` and `var/review.env` from the examples, sync the
-canonical environment, then install the four unit files into
+canonical environment, then install the three unit files into
 `~/.config/systemd/user/`. The review process temporarily accepts the legacy
 `GENESIS_REVIEW_API_KEY` when the new key is empty; set a dedicated new key to
 remove that compatibility dependency. Set `GENESIS_EVIDENCE_REVIEWER_ID` to the
 one authenticated human reviewer; audit identities are derived from this server-side value.
+
+Each unit reads only this project's own `var/*.env`. An earlier revision also
+loaded the frozen `genesis-health` project's env file as a compatibility
+fallback; that dependency was removed on 2026-09-24, because a unit that reads
+a project slated for archive will silently lose its environment the day that
+project moves. If a value is needed, it belongs in this project's `var/*.env`.
 The worker shares `var/review.env`, requires `PAPER_AI_API_KEY_FILE` or
 `PAPER_AI_API_KEY`, and processes one persisted paper-extraction job at a time.
 **It is currently `disabled` and `inactive`**: extraction is paused for
