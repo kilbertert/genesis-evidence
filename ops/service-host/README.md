@@ -83,15 +83,41 @@ regardless of the key — which tests the schema, not the authentication.
 
 ## Exposure
 
-> **Current state (2026-09-23): the services are exposed directly, and this is
-> temporary.** The entry described below was retired when the deployment moved
-> to interim public-IP access while a company subdomain is arranged.
-> `10006` and `10007` bind `0.0.0.0`; `10005` stays on loopback. There is **no
-> TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store the
-> session cookie over plain HTTP. These three facts travel together: restoring
-> any one of them without the others breaks login or leaves credentials in the
-> clear. What must change when the subdomain and certificate exist is recorded
-> in the project's issue tracker, not only here.
+> **Current state.** Two of the three listeners are still on the interim
+> public-IP entry while a company subdomain is arranged: `10007` (patient
+> portal) binds `0.0.0.0` and serves real patients; `10005` and `10006` bind
+> loopback. There is **no TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a
+> browser will store the session cookie over plain HTTP. Those facts travel
+> together: restoring the cookie flag without TLS breaks login, and leaving it
+> unset with TLS leaves credentials in the clear. What must change when the
+> subdomain and certificate exist is recorded in the project's issue tracker,
+> not only here.
+
+### Exposure of `10006` was withdrawn on observed traffic (2026-09-24)
+
+`10006` is the paper review workbench — an internal tool with a single
+server-side reviewer identity and no public use case. It had been binding
+`0.0.0.0` alongside the patient portal. Before withdrawing that binding, the
+service's own access log was read for the preceding two weeks and the client
+addresses classified:
+
+| Listener | Requests from the platform's own egress | Requests from any other source |
+| --- | --- | --- |
+| `10006` review workbench | 70 | **0** |
+| `10007` patient portal | 107 | **at least six distinct external addresses** |
+
+Every apparent "external" hit on `10006` resolved to the platform's own egress
+address, which is also the address the acceptance harness runs from. With no
+observed external use, the binding was returned to loopback, and the operator
+recorded it in the private operations inventory.
+
+This is the rule the policy states, applied rather than assumed: an exposure is
+closed on **observed traffic**, not on "nothing is using it". The patient
+portal is the counter-example in the same measurement — it has real external
+clients, so its entry stays until TLS replaces it.
+
+Any future remote access to `10006` uses a separate channel (SSH tunnel or the
+private plane) and does not restore a public binding.
 
 ### Target state: loopback behind the host's web server
 

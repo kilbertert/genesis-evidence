@@ -34,7 +34,15 @@ COOKIE = "healthflow_session"
 def main() -> int:
     state_path = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_STATE)
 
-    c = sqlite3.connect(DB)
+    # This script runs ON the service host, against the database the running
+    # service is configured with. `docs/deployment.md` records that layout; the
+    # default above must match the DATABASE_URL `health-flow.service` loads.
+    # A mismatch is silent — the script succeeds against a database nobody
+    # serves, and the acceptance run then passes for the wrong reason. Override
+    # with HEALTHFLOW_DB when running anywhere but the service host.
+    db_path = os.environ.get("HEALTHFLOW_DB") or DB
+
+    c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
 
     # Choose a real user (never test residue) who owns a report whose file has

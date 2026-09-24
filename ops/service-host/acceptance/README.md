@@ -24,7 +24,14 @@ as written. It must therefore run where that tool and the project's
 `e2e-acceptance.sh` targets the live entry directly and additionally proves the
 **migrated data** is usable: it fetches an existing user's report and one of its
 page files. That requires an authenticated session, which is obtained without
-knowing any user's password:
+knowing any user's password.
+
+`mint-probe-session.py` reads the health-flow database directly, so it must point
+at **the same database the running service loads** — otherwise it mints a session
+for rows nothing serves, and the run passes for the wrong reason. Its default
+targets the service host's layout; set `HEALTHFLOW_DB` when auditing anywhere
+else. The development host is the case that differs: its service loads a
+project-local database while the default names the service host's path.
 
 ```bash
 mint-probe-session.py        # on the host: writes /tmp/e2e-state.json (mode 0600)
