@@ -83,23 +83,22 @@ regardless of the key — which tests the schema, not the authentication.
 
 ## Exposure
 
-> **Current state (live listeners).** Until the host change below runs, `10006`
-> and `10007` both bind `0.0.0.0`: the patient portal serves real external
-> users, and the review workbench is still on the interim public-IP entry even
-> though its exposure has been decided against. `10005` binds loopback. There is
-> **no TLS**, and `AUTH_COOKIE_SECURE` is set to `false` so a browser will store
-> the session cookie over plain HTTP. Those facts travel together: restoring the
-> cookie flag without TLS breaks login, and leaving it unset with TLS leaves
-> credentials in the clear. What must change when the subdomain and certificate
-> exist is recorded in the project's issue tracker, not only here.
+> **Current state (live listeners, verified 2026-09-28).** `10005` and `10006`
+> bind **loopback**; `10007` binds `0.0.0.0` and serves real external users, so it
+> is the only exposed listener. There is **no TLS**, and `AUTH_COOKIE_SECURE` is
+> set to `false` so a browser will store the session cookie over plain HTTP.
+> Those two facts travel together: restoring the cookie flag without TLS breaks
+> login, and leaving it unset with TLS leaves credentials in the clear. What must
+> change when the subdomain and certificate exist is recorded in the project's
+> issue tracker, not only here.
 
 ### `10006`: the decision to withdraw its exposure, and how the acceptance changed
 
 `10006` is the paper review workbench — an internal tool with a single
-server-side reviewer identity and no public use case. It binds `0.0.0.0`
-alongside the patient portal. Before deciding to withdraw that binding, the
-service's own access log was read for the preceding two weeks and the client
-addresses classified:
+server-side reviewer identity and no public use case. It used to bind `0.0.0.0`
+alongside the patient portal; it is loopback-only now (see Current state above).
+Before deciding to withdraw that binding, the service's own access log was read
+for the preceding two weeks and the client addresses classified:
 
 | Listener | Requests from the platform's own egress | Requests from any other source |
 | --- | --- | --- |
@@ -114,12 +113,12 @@ traffic**, not on "nothing is using it". The patient portal is the
 counter-example in the same measurement — it has real external clients, so its
 entry stays until TLS replaces it.
 
-**The host change is separate and deliberate.** Setting
-`GENESIS_EVIDENCE_REVIEW_HOST=127.0.0.1` in the service's environment file and
-restarting `genesis-evidence-review.service` is a service-host mutation, so it
-travels the same path as any other: an identified artifact, from a merged
-revision. Until it runs, the listener is still on `0.0.0.0` and this section
-describes an intent, not a state.
+**The host change ran on 2026-09-28** (service-host mutation, delivered as the
+revision built from `b941fd1`): `GENESIS_EVIDENCE_REVIEW_HOST=127.0.0.1` was set
+in `/opt/genesis-evidence/var/review.env` and `genesis-evidence-review.service`
+restarted. Verified by `ss -ltn`, which shows `127.0.0.1:10006`, and by the
+negative assertion in `e2e-acceptance.sh` — `10006` is unreachable from an
+external client. If this is ever reverted, revert it deliberately.
 
 **Acceptance follows the listener.** `e2e-acceptance.sh` no longer probes
 `10006` through the public address; it asserts that both internal listeners
