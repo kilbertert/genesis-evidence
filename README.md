@@ -298,10 +298,11 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 
 | 决策 | 依据 |
 | --- | --- |
-| 推荐挂在已确认 finding 下，不另做疾病匹配 | [ADR 0003](docs/adr/0003-anchor-recommendations-under-confirmed-findings.md) |
-| 产品数据一次性迁移进本仓库，运行时不再读旧库 | [ADR 0002](docs/adr/0002-one-time-product-catalog-migration-and-self-governance.md) |
-| 推荐从冻结的旧仓库迁回本仓库 | [ADR 0001](docs/adr/0001-unfreeze-phase-2-product-recommendations.md) |
-| 只发布 4 条人工审核过的种子推荐，其余 39 条候选保持 `blocked` | [ADR 0004](docs/adr/0004-four-product-seed-pool-publication.md)（后续审核已把已发布池扩到 10 条） |
+| 商品权威归商城，本仓库商品能力整体退役，患者侧把关由商城可售性过滤承担 | [ADR 0006](docs/adr/0006-retire-product-capability-and-move-goods-authority-to-the-mall.md) |
+| 推荐挂在已确认 finding 下，不另做疾病匹配 | [ADR 0003](docs/adr/0003-anchor-recommendations-under-confirmed-findings.md)（已被 ADR 0006 取代） |
+| 产品数据一次性迁移进本仓库，运行时不再读旧库 | [ADR 0002](docs/adr/0002-one-time-product-catalog-migration-and-self-governance.md)（已被 ADR 0006 取代） |
+| 推荐从冻结的旧仓库迁回本仓库 | [ADR 0001](docs/adr/0001-unfreeze-phase-2-product-recommendations.md)（已被 ADR 0006 取代） |
+| 只发布 4 条人工审核过的种子推荐，其余 39 条候选保持 `blocked` | [ADR 0004](docs/adr/0004-four-product-seed-pool-publication.md)（已被 ADR 0006 取代） |
 | 工作台采用独立阅读区域（队列与内容各自滚动） | [ADR 0005](docs/adr/0005-review-workbench-independent-reading-regions.md) |
 | AFK 变更工作流的可信控制面 | [ADR 0002（可信 PR 控制面）](docs/adr/0002-trusted-pr-control-plane.md) |
 | 每条外部标准的具体映射 | [docs/evidence-governance-standards.md](docs/evidence-governance-standards.md)（PRISMA 2020、Cochrane/MECIR、AHRQ PICOTS、RFC 6750、NISO JATS 1.3、Ark 流式协议、SQLite 事务/部分索引、systemd 重启策略） |

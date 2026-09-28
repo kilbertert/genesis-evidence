@@ -1,6 +1,6 @@
 # 0003: Anchor recommendations under confirmed findings
 
-Status: Accepted
+Status: Superseded by 0006
 
 Date: 2026-08-28
 

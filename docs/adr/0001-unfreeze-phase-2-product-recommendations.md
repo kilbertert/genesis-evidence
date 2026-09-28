@@ -1,6 +1,6 @@
 # 0001: Unfreeze phase-2 product-recommendation scope
 
-Status: Accepted
+Status: Superseded by 0006
 
 Date: 2026-08-28
 
