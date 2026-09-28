@@ -15,11 +15,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ...products.recommendations import (
-    load_published_products,
-    recommend,
-    recommendation_message,
-)
 from ...reports.extraction import (
     PendingReportExtraction,
     ReportExtractionError,
@@ -599,8 +594,6 @@ class ReportStore:
                 """,
                 (assessment["id"],),
             ).fetchall()
-            published_products = load_published_products(connection)
-            subject_age = report["inferred_age"]
         visible = []
         for row in findings:
             item = dict(row)
@@ -608,21 +601,6 @@ class ReportStore:
             item["sorting"] = json.loads(item.pop("sorting_json"))
             item["needs_recheck"] = bool(item["needs_recheck"])
             item.update(card_capabilities(str(item["grade"])))
-            recommendations = recommend(
-                str(item["condition_code"]),
-                item["source_observation_ids"],
-                products=published_products,
-                urgency=str(item["urgency"]),
-                abnormality_severity=int(item["abnormality_severity"]),
-                subject_age=subject_age,
-            )
-            item["recommendations"] = [
-                recommendation.as_dict() for recommendation in recommendations
-            ]
-            item["recommendation_message"] = recommendation_message(recommendations)
-            item["product_status"] = (
-                "available" if recommendations else "not_implemented"
-            )
             visible.append(item)
         return {
             "report_id": report_id,
@@ -659,7 +637,6 @@ class ReportStore:
                 ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall()
-            published_products = load_published_products(connection)
             cards: dict[tuple[str, str], dict[str, object]] = {}
             for row in card_rows:
                 scope_key = str(row["scope_key"] or "").strip()
@@ -731,7 +708,6 @@ class ReportStore:
                         "content_layer": card["content_layer"],
                         "action_status": card["action_status"],
                         "action_message": card["action_message"],
-                        "product_status": card["product_status"],
                     },
                 )
                 finding["source_observation_ids"].append(inp.observation_id)  # type: ignore[union-attr]
@@ -759,20 +735,6 @@ class ReportStore:
             for item in findings:
                 card = item.pop("card")
                 finding = {**item, "card": card}
-                recommendations = recommend(
-                    str(finding["condition_code"]),
-                    finding["source_observations"],  # type: ignore[arg-type]
-                    products=published_products,
-                    urgency=str(finding["urgency"]),
-                    abnormality_severity=int(finding["abnormality_severity"]),
-                )
-                finding["recommendations"] = [
-                    recommendation.as_dict() for recommendation in recommendations
-                ]
-                finding["recommendation_message"] = recommendation_message(recommendations)
-                finding["product_status"] = (
-                    "available" if recommendations else "not_implemented"
-                )
                 result_findings.append(finding)
             result_payload = {
                 "schema_version": "2",
@@ -784,13 +746,6 @@ class ReportStore:
                 "message": "" if result_findings else "暂无已审核内容",
             }
             patient_reply = patient_reply_v2(result_findings, result.unmatched)
-            for patient_finding, finding in zip(
-                patient_reply["findings"], result_findings, strict=True
-            ):
-                patient_finding["recommendations"] = finding["recommendations"]
-                patient_finding["recommendation_message"] = finding[
-                    "recommendation_message"
-                ]
             result_payload["patient_reply"] = patient_reply
             for finding in result_findings:
                 finding["sorting"] = {
@@ -814,9 +769,6 @@ class ReportStore:
                     "metric_codes": result.metric_codes,
                     "card_ids": sorted(
                         {item["card"]["id"] for item in result_findings}  # type: ignore[index]
-                    ),
-                    "recommendation_count": sum(
-                        len(finding["recommendations"]) for finding in result_findings
                     ),
                 },
                 actor=actor,

@@ -1,4 +1,4 @@
-"""SQLite stores split by the two product lines."""
+"""SQLite stores grouped by the evidence and report lines."""
 
 from .database import Database
 from .evidence import EvidenceStore

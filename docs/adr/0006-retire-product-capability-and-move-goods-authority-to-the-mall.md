@@ -8,12 +8,13 @@ Supersedes: 0001, 0002, 0003, 0004
 
 Parent: PRD #159
 
-**Removal status: not yet executed.** This record settles the *decision*; the
-code and data described under "Decision" are still present in the running
-system. The five product tables, the review routes, the recommendation engine,
-and the product fields on the evidence response are removed by the later slices
-of #173. Until those land, this document describes the approved target and must
-not be read as a description of current runtime behavior.
+**Removal status: executed in code.** This record settled the *decision*; the
+slices of #173 then removed the product surface — the review routes and offline
+tooling, the recommendation engine, the product fields on the evidence response,
+and the five tables from the schema. One residue remains and is called out under
+Consequences: an already-deployed database keeps the five tables and their rows
+until a separate, deliberate drop runs. A fresh database is 26 tables; production
+is still 31 until then.
 
 ## Context
 
@@ -147,9 +148,21 @@ display".
 - **Already-stored evidence payloads carry the removed fields.** They are
   migrated rather than read leniently, so the strict contract stays strict and a
   genuine future contract drift is still caught.
-- **The frozen-scope guard is reversed.** ADR 0001 unfroze
+- **The frozen-scope guard is back to its full set.** ADR 0001 unfroze
   `nutrition_product` / `supplier_product` / `supplement_recommendation` for the
-  implementation slices; with the capability gone they return to the frozen set.
+  implementation slices. Those three names were never actually removed from
+  `scripts/check_scope.py`'s `FROZEN_IDENTIFIERS`, so no guard edit is owed —
+  the set already rejects them, and with the capability gone nothing in `src/`
+  should ever mention them again.
+- **Already-deployed databases keep the five product tables.** `Database.initialize()`
+  only runs `CREATE TABLE IF NOT EXISTS`; it never drops. So the schema change makes
+  a *new* database 26 tables, while the deployed database keeps 31 and their rows.
+  This is deliberate, not an oversight: an automatic `DROP` inside `initialize()`
+  would run on every service start, which makes a destructive, irreversible act a
+  side effect of a deployment command. Dropping the residue is instead a separate
+  deliberate operation with its own backup, on the same footing as any other
+  service-host data change. Until it runs, `scripts/check_schema.py` measures a
+  fresh database and does not describe production.
 - **This record is the prerequisite that releases #170.** With the conflict
   resolved, the mapping file's "cannot be used as a delivery basis" note is
   lifted, leaving only the mall-side values it still needs.

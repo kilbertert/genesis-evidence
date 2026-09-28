@@ -29,7 +29,6 @@
    不共享运行进程。论文侧唯一能到达患者的中介是 `knowledge_cards.status = 'published'`，
    且必须挂在同一 condition 的 scope 上。这条约束让"论文侧哪些内容可以到达患者"成为一个
    可以被 SQL 检查的问题，而不是一个需要阅读全部代码才能回答的问题。
-   （产品推荐是另一条独立的受审核通路，见第 2.2 节。）
 5. **审计即证据。** 每次状态迁移、准入、拒绝、发布、重试都写入 `audit_events`，并带
    `actor`（人工审核员来自服务端环境变量，不是浏览器参数）。敏感标识不进审计：
    报告接口只记录计数与代码，不记录图像与患者标识。这也是为什么第 1 条里的两条写入路径
@@ -38,10 +37,9 @@
 由第 1 条推导出的可执行推论：
 
 - 患者可见文案由 `core/patient_copy.py` 的禁用词表拦截。**该表有两处调用，覆盖范围不重叠**：
-  运行时在写入前校验（`validate_patient_copy`，用于产品推荐文案与人工创建卡片），
-  CI guard 则扫描一个**固定路径集合**——`src/genesis_evidence/portal/` 下的所有文本文件，
-  外加 `products/recommendations.py` 与 `products/mapping_drafts.py`。也就是说
-  `review/service.py` 里 `_automatic_profile` 生成的卡片正文**不在 CI 扫描范围内**，
+  运行时在写入前校验（`validate_patient_copy`，用于人工创建卡片），
+  CI guard 则扫描一个**固定路径集合**——`src/genesis_evidence/portal/` 下的所有文本文件。
+  也就是说 `review/service.py` 里 `_automatic_profile` 生成的卡片正文**不在 CI 扫描范围内**，
   它只受运行时校验与同表的 `FORBIDDEN_PATIENT_TERMS` 常量约束。
 - 知识卡的 `published` 状态由 `CHECK` 约束保证字段完整（grade / reviewer / reviewed_at /
   evidence_profile_id / published_at / 非空正文），不可能出现"半发布"；
@@ -99,20 +97,19 @@ portal/api.py ──► EvidenceStore.match_published_cards
         │  ③ metric_code → conditions 目录 → 该 condition 的 published 卡
         │  ④ 按 condition 聚合 finding，每个 metric 保留自己的证据项与卡片等级
         ▼
-患者可见响应：findings[] / unmatched[] / skipped[] + 产品推荐（若已审核发布）+ 审计事件
+患者可见响应：findings[] / unmatched[] / skipped[] + 审计事件（不含商品，见 ADR 0006）
 ```
 
-患者能看到的四类内容来源不同，边界也不同：
+患者能看到的几类内容来源不同，边界也不同：
 
 | 内容 | 来源 | 是否需要 `published` 知识卡 |
 | --- | --- | --- |
 | 知识卡正文 | 卡片 `patient_visible_body` | 是（逐字返回，不经模型改写） |
 | 能力文案 | `card_capabilities(grade)` 生成的固定模板 | 否——伴随卡片，因此仍只在卡片已发布时出现 |
 | 科室与复查方向 | `core.conditions` 的静态目录 | 否——是路由提示，不是医学结论 |
-| 产品推荐 | `product_recommendations` 中已审核发布的条目 | 否——受独立的产品闸门约束 |
 
 所以"必须有已发布知识卡"约束的是**疾病结论**，不是响应里的每一句话；能力文案与科室方向只在
-卡片已发布的前提下随附，产品推荐则走它自己的审核闸门。
+卡片已发布的前提下随附。**商品不在这个响应里**——商品权威已移到商城，见 ADR 0006。
 
 隔离约束：报告接口是**只读**的，它不拥有上传、不拥有抽取 worker。两条主线之间不共享
 SQLite 文件、ORM 模型、向量索引或提示词。
@@ -149,7 +146,7 @@ SQLite 文件、ORM 模型、向量索引或提示词。
                     ┌─────────────────────────────────────────┐
   应用/编排层      →  │ review.service(1355)  review.scope(729)   │
                     │ literature.{ingestion,ai_extraction,...}  │
-                    │ products.catalog(727)  reports.extraction │
+                    │ reports.extraction(1355)                  │
                     └───────────────┬─────────────────────────┘
                                     ▼
                     ┌─────────────────────────────────────────┐
@@ -160,7 +157,6 @@ SQLite 文件、ORM 模型、向量索引或提示词。
                     ┌─────────────────────────────────────────┐
   确定性内核（纯） →  │ core.{matching,conditions,metrics,        │
                     │       contracts,patient_copy}             │
-                    │ products.recommendations(333)             │
                     └─────────────────────────────────────────┘
 ```
 
@@ -181,8 +177,6 @@ SQLite 文件、ORM 模型、向量索引或提示词。
 | `literature.*` | 检索连接器（DOAJ/Europe PMC/CORE）、全文下载与版权策略、JATS 解析、完整性（撤稿/更正）核查、Ark 抽取与一致性检查 | 连接器只发元数据；CORE 在许可证确认前不可下载；Sci-Hub 类 URL 直接拒绝 |
 | `review.service` | 自主论文审核编排：筛选台账终结、身份准入、自动 Claim 审核、自动建档、卡草稿与迁移 | 每个自动决定都写 `policy_version`（当前 `literature-review-ai/1.5`）与 `requested_by` |
 | `review.scope` | PICOTS 匹配与 Evidence Profile 稳定结果范围解析（`metric:<code>` / `condition:<code>` / `outcome:<slug>`） | 无状态、无存储依赖；**禁止** import `genesis_evidence.review`（会成环） |
-| `products.catalog` | 产品候选层（`blocked` 池）与已发布推荐池的审核、迁移、发布闸门 | 带 `high_risk_marketing_claim` 的产品永远不能进入 `published` |
-| `products.recommendations` | 确定性纯函数 `recommend(...)` + 已发布产品加载 | 与疾病匹配解耦：condition_code 由调用方给出，引擎不做二次疾病匹配 |
 | `reports.*` | 有序多模态报告抽取（停在用户确认之前）、抽取评估指标、持久化 worker | 抽取不产生诊断，只产生候选观测与原文证据 |
 | `integrations.health_flow` | health-flow `MetricRecord` → Evidence API v3 的确定性适配器 | 必须显式传入 `confirmed=True`，未确认行只能进 `skipped` |
 | `portal.api` | 唯一对外证据接口：鉴权、CSP/无缓存头、UUID 关联 ID、审计 | 不信任上游 `abnormal_flag`、VLM 置信度与 RAG 结论 |
@@ -194,7 +188,6 @@ SQLite 文件、ORM 模型、向量索引或提示词。
 ```text
 core.conditions / core.metrics   ←  所有模块
 core.matching                    ←  core.store.{evidence,reports}, portal, 测试
-products.recommendations         ←  core.store.{evidence,reports}, products.catalog
 integrations.health_flow         ←  portal, tests
 ```
 
@@ -203,7 +196,6 @@ integrations.health_flow         ←  portal, tests
 | 回边 | 原因 |
 | --- | --- |
 | `core.store → literature.{ai_extraction, models}` | 存储层写入前需要 `CheckedPaperExtraction` 与 `PaperRecord` 类型校验，避免"先落库再校验" |
-| `core.store → products.recommendations` | 患者响应在 finding 装配点直接附加推荐，而不是二次请求（见 ADR 0003） |
 | `core.store → reports.extraction` | 报告类型与确认输入模型被存储层直接复用 |
 | `review.service → literature.{ai_extraction, jats}` | 自动审核需要研究设计枚举与 JATS 事实抽取 |
 | `literature.extraction_worker → review.service` | worker 在每个阶段结束后调用自动审核 |
@@ -238,8 +230,7 @@ uv run python -m genesis_evidence.reports.evaluation \
 | 簇 | 表 | 关键约束 |
 | --- | --- | --- |
 | 论文证据（19） | `conditions`, `evidence_topics`, `collection_runs`, `papers`, `paper_sources`, `collection_papers`, `full_texts`, `paper_extraction_jobs`, `paper_admissions`, `studies`, `study_publications`, `paper_extractions`, `claims`, `results`, `claim_reviews`, `evidence_profiles`, `evidence_profile_results`, `knowledge_cards`, `card_claims` | `papers` 上三个部分唯一索引保证 DOI/PMID/PMCID 去重；`studies`/`study_publications` 分离"研究身份"与"报告身份"；`knowledge_cards` 的 `CHECK` 保证 `published` 必须字段齐全 |
-| 报告与患者可见（6） | `reports`, `report_files`, `report_observations`, `observation_confirmations`, `assessments`, `assessment_findings` | `assessment_findings` 关联 `condition_code` 与源观测；患者响应只读这些表 + `knowledge_cards` 与 `product_recommendations` |
-| 产品目录（5） | `product_candidates`, `product_candidate_sources`, `product_recommendations`, `product_review_audits`, `product_mapping_drafts` | `product_recommendations.status='published'` 要求 `audit_note` 非空；来源记录 `source_sha256` 唯一，保证溯源不重复 |
+| 报告与患者可见（6） | `reports`, `report_files`, `report_observations`, `observation_confirmations`, `assessments`, `assessment_findings` | `assessment_findings` 关联 `condition_code` 与源观测；患者响应只读这些表 + `knowledge_cards` |
 | 横切（1） | `audit_events` | 所有状态迁移的唯一落点；`actor` 由服务端决定 |
 
 > `scripts/check_schema.py` 强制 `表数 ≤ 31`。**新增一张表就是一次架构决定**，必须同时回答
@@ -270,7 +261,7 @@ scope_key 非空，且**上下文卡（grade = `low`）不得携带 `high`/`crit
 发布与**能力**是两个独立决定——`core.contracts.card_capabilities(grade)` 让任何已发布卡片
 （包括 `moderate`/`high`）都返回 `content_layer=context_only`、`action_status=not_available`，
 直到存在单独审核过的行动内容。已发布卡片必须使用 `研究提示` 这类研究语言
-（PRD #103 已确认的决定），不得成为诊断、产品推荐、剂量或治疗指令。
+（PRD #103 已确认的决定），不得成为诊断、商品推荐、剂量或治疗指令。
 
 ---
 
@@ -285,8 +276,8 @@ scope_key 非空，且**上下文卡（grade = `low`）不得携带 `high`/`crit
 **路径 2 — 报告到患者响应**：health-flow 确认观测 → 每个 metric 独立走一遍
 `EvidenceMatcher` → 同一 condition 的多个 metric 聚合为一个 finding（每个保留自己的 evidence item；
 等级不同的 finding 报 `evidence_strength="mixed"`，绝不塌缩成单一等级）→ 未覆盖的关联进
-`unmatched`，正常或证据不足的进 `skipped` → 在同一装配点附加已发布产品推荐
-（抑制条件：紧急/危重 urgency、severity ≥ 3、或已知年龄 < 40）。
+`unmatched`，正常或证据不足的进 `skipped`。响应到 finding 为止：商品不在其中，
+患者侧商品由商城按 `condition_code` 与标签映射另行提供（见 ADR 0006）。
 
 **路径 3 — 审核员动作**：工作台 → Bearer 鉴权 → `review/api.py` → `ReviewStore` 或
 `EvidenceReviewService`（自动路径）→ 同一事务内写状态 + 写 `audit_events`。
@@ -299,10 +290,6 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 | 决策 | 依据 |
 | --- | --- |
 | 商品权威归商城，本仓库商品能力整体退役，患者侧把关由商城可售性过滤承担 | [ADR 0006](docs/adr/0006-retire-product-capability-and-move-goods-authority-to-the-mall.md) |
-| 推荐挂在已确认 finding 下，不另做疾病匹配 | [ADR 0003](docs/adr/0003-anchor-recommendations-under-confirmed-findings.md)（已被 ADR 0006 取代） |
-| 产品数据一次性迁移进本仓库，运行时不再读旧库 | [ADR 0002](docs/adr/0002-one-time-product-catalog-migration-and-self-governance.md)（已被 ADR 0006 取代） |
-| 推荐从冻结的旧仓库迁回本仓库 | [ADR 0001](docs/adr/0001-unfreeze-phase-2-product-recommendations.md)（已被 ADR 0006 取代） |
-| 只发布 4 条人工审核过的种子推荐，其余 39 条候选保持 `blocked` | [ADR 0004](docs/adr/0004-four-product-seed-pool-publication.md)（已被 ADR 0006 取代） |
 | 工作台采用独立阅读区域（队列与内容各自滚动） | [ADR 0005](docs/adr/0005-review-workbench-independent-reading-regions.md) |
 | AFK 变更工作流的可信控制面 | [ADR 0002（可信 PR 控制面）](docs/adr/0002-trusted-pr-control-plane.md) |
 | 每条外部标准的具体映射 | [docs/evidence-governance-standards.md](docs/evidence-governance-standards.md)（PRISMA 2020、Cochrane/MECIR、AHRQ PICOTS、RFC 6750、NISO JATS 1.3、Ark 流式协议、SQLite 事务/部分索引、systemd 重启策略） |
@@ -352,16 +339,15 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 ```bash
 uv sync --extra dev
 uv run ruff check .                                  # 静态检查
-uv run pytest                                        # 318 个测试
+uv run pytest                                        # 290 个测试
 uv run python scripts/check_scope.py                 # 冻结产品面（13 个标识符不得出现在 src）
-uv run python scripts/check_schema.py                # 表数预算（31）
+uv run python scripts/check_schema.py                # 表数预算（26）
 uv run python scripts/check_patient_copy.py          # 患者文案禁用词（仅扫描固定路径集合）
-uv run python scripts/check_product_catalog.py       # 43 blocked / 10 published / 0 无来源
 uv run python -m genesis_evidence.reports.evaluation \
   evals/report-gold.synthetic.jsonl evals/report-predictions.synthetic.jsonl   # 抽取评估
 ```
 
-复杂度与变异测试按风险触发（`pyproject.toml` 的 `[tool.mutmut]` 已限定到匹配器、目录与推荐引擎）：
+复杂度与变异测试按风险触发（`pyproject.toml` 的 `[tool.mutmut]` 已限定到匹配器）：
 
 ```bash
 uv run radon cc -s -a -n C src/genesis_evidence/core/matching.py
@@ -369,7 +355,7 @@ uv run mutmut run && uv run mutmut results
 ```
 
 `.github/workflows/quality.yml` 在 CI 中强制执行上面前六项：`ruff check`、`pytest` 与四个 guard
-（`check_scope` / `check_schema` / `check_patient_copy` / `check_product_catalog`）。
+（`check_scope` / `check_schema` / `check_patient_copy`）。
 `check_review_workbench_layout.py` 需要 headless Chrome，**不在** CI 中运行，
 改动 `workbench.html` 的滚动边界时本地执行。默认分支 Ruleset 要求 `quality` 与
 `Workflow policy` 两个检查通过。
@@ -402,11 +388,3 @@ GENESIS_EVIDENCE_REVIEWER_ID=<审核员标识> uv run genesis-evidence-worker   
 （或旧名 `GENESIS_EVIDENCE_BACKLOG_TOPIC_ID`）才会收敛到单主题。
 `genesis-evidence-worker` 与它共用 `var/review.env`；私有 env 文件不提交 Git，模板见 `ops/examples/`。
 
-### 产品目录
-
-产品候选与已发布推荐是分离的两层。从旧文献库一次性回填候选池：
-
-```bash
-uv run python scripts/migrate_product_catalog.py --source-db ../genesis-health/var/literature/literature.db
-uv run python scripts/check_product_catalog.py
-```

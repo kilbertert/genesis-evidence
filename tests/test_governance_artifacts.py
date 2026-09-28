@@ -5,22 +5,17 @@ from genesis_evidence.core.patient_copy import FORBIDDEN_PATIENT_TERMS
 ROOT = Path(__file__).parents[1]
 
 ACCEPTANCE_SCENARIOS = (
-    "已发布风险展示已发布推荐",
-    "未发布或带风险标的产品不出现",
-    "紧急或高危风险项抑制推荐",
-    "推荐文案不触发患者禁用词",
-    "未匹配到安全已发布产品时显示暂无推荐",
+    "已确认风险返回已发布证据且不含商品",
+    "未发布知识卡不进入患者侧",
+    "边界观测如实返回",
+    "患者文案不触发禁用词",
 )
 
 QA_CASE_IDS = {
-    "QA-PUB-001",
-    "QA-EXCL-002",
-    "QA-URG-003",
-    "QA-FORBID-004",
-    "QA-EMPTY-005",
-    "QA-E2E-001",
-    "QA-E2E-002",
-    "QA-E2E-003",
+    "QA-EVID-001",
+    "QA-EVID-002",
+    "QA-EVID-003",
+    "QA-EVID-004",
     "QA-DISEASE-001",
     "QA-WORKBENCH-001",
 }
@@ -35,10 +30,6 @@ QA_SCALAR_FIELDS = (
 )
 
 ADR_NAMES = (
-    "0001-unfreeze-phase-2-product-recommendations.md",
-    "0002-one-time-product-catalog-migration-and-self-governance.md",
-    "0003-anchor-recommendations-under-confirmed-findings.md",
-    "0004-four-product-seed-pool-publication.md",
     "0005-review-workbench-independent-reading-regions.md",
     "0006-retire-product-capability-and-move-goods-authority-to-the-mall.md",
 )
@@ -66,7 +57,7 @@ def _field_value(block: str, field: str) -> str:
     return ""
 
 
-def test_acceptance_feature_covers_product_recommendation_contract() -> None:
+def test_acceptance_feature_covers_the_evidence_contract() -> None:
     feature = _read("acceptance.feature")
 
     assert feature.startswith("Feature:")
@@ -93,33 +84,20 @@ def test_qa_plan_cases_have_complete_metadata() -> None:
         assert "\n  1. " in block, f"{case_id} has no ordered actions"
 
 
-def test_qa_plan_end_to_end_case_is_executable() -> None:
-    plan = _read("qa-plan.md")
-    e2e = _qa_cases(plan)["QA-E2E-001"]
-
-    assert "POST /api/evidence/matches" in e2e
-    assert "confirmation_status=confirmed" in e2e
-    assert "FORBIDDEN_PATIENT_TERMS" in e2e
-    assert "GENESIS_EVIDENCE_REVIEWER_ID" in e2e
-
-
-def test_context_glossary_covers_product_recommendation_terms() -> None:
+def test_context_glossary_covers_the_evidence_terms() -> None:
     context = _read("CONTEXT.md")
 
     for term in (
         "体检报告解读与健康风险提示",
         "健康风险提示",
-        "健康管理建议",
-        "产品审核位",
-        "blocked",
-        "published",
-        "high_risk_marketing_claim",
-        "recommendations[]",
         "condition_code",
-        "product_status",
+        "evidence_items",
+        "published",
         "patient_visible_body",
         "action_message",
-        "blocked → in_review → published → withdrawn",
+        "content_layer",
+        "action_status",
+        "已移到商城",
     ):
         assert term in context
 
@@ -133,7 +111,7 @@ def test_context_is_glossary_only_and_adrs_are_separate() -> None:
         assert (ROOT / "docs/adr" / name).is_file()
 
 
-def test_product_recommendation_adrs_record_decision_alternatives_and_rationale() -> None:
+def test_adrs_record_decision_alternatives_and_rationale() -> None:
     for name in ADR_NAMES:
         text = _read(f"docs/adr/{name}")
         for heading in ("## Decision", "## Alternatives Considered", "## Rationale"):

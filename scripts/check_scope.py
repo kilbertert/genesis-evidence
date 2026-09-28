@@ -1,4 +1,4 @@
-"""Fail CI when frozen product surfaces enter the active package."""
+"""Fail CI when frozen out-of-scope surfaces enter the active package."""
 
 from __future__ import annotations
 
