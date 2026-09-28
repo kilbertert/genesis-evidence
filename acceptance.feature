@@ -23,11 +23,12 @@ Feature: 已确认健康风险 → 只返回已发布证据，不返回商品
     Then 该观测进入 `unmatched`，原因为 `no_published_knowledge_card`
     And 响应不为它构造 finding
 
-  Scenario: 未命中目录或无已发布卡时如实返回
-    Given 观测的 metric 不在 canonical 指标目录内，或其 condition 没有已发布知识卡
-    When health-flow 提交该观测
-    Then 该观测进入 `unmatched` 或 `skipped`，并给出具体 `reason`
+  Scenario: 边界观测如实返回
+    Given 目录内的 metric 存在三种边界：condition 无已发布知识卡、数值落在参考范围内、缺少参考范围
+    When health-flow 提交这些观测
+    Then 每条进入 `unmatched` 或 `skipped`，并给出具体 `reason`
     And 响应不构造空 finding，也不以草稿内容补充
+    And 目录外的 `metric_code` 由上游拦截，不进入本接口
 
   Scenario: 患者文案不触发禁用词
     Given 证据响应含患者可见正文与行动提示

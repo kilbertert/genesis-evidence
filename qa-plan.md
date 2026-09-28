@@ -42,17 +42,18 @@
 - **可观察结果**: 该观测进入 `unmatched` 且 `reason == "no_published_knowledge_card"`；`findings` 为空；响应不以草稿内容补充。
 - **清理**: 同 QA-EVID-001。
 
-### QA-EVID-003 未命中目录或无已发布卡时如实返回
+### QA-EVID-003 边界观测如实返回
 
 - **ID**: `QA-EVID-003`
 - **环境**: 同 QA-EVID-001。
-- **前置**: 观测的 `metric_code` 不在 canonical 目录内（`unknown_metric_code`）；另一条在目录内但 condition 无已发布卡；第三条落在参考范围内。
-- **数据**: 三条观测各覆盖一种边界，外加一条参考范围缺失的观测。
+- **前置**: 目录内的 metric 有三种边界：condition 无已发布卡、落在参考范围内、缺参考范围。
+- **数据**: 三条**目录内**观测，各覆盖一种边界。
 - **动作**:
-  1. `POST /api/evidence/matches`，四条观测一次提交。
+  1. `POST /api/evidence/matches`，三条观测一次提交。
   2. 逐条核对 `unmatched[]` 与 `skipped[]` 的 `reason`。
-- **可观察结果**: 四条分别进入 `unmatched` 或 `skipped` 并给出具体 `reason`（`unknown_metric_code` / `no_published_knowledge_card` / `within_reference_range` / `missing_reference_range`）；不构造空 finding；响应不报错。
+- **可观察结果**: 状态 200；三条分别进入 `unmatched`（`no_published_knowledge_card`）或 `skipped`（`within_reference_range` / `missing_reference_range`）；不构造空 finding；其余观测不受影响。
 - **清理**: 同 QA-EVID-001。
+- **备注（实测）**: **目录外的 `metric_code` 不走这条路径**——`validate_observation` 会先抛 `ValueError`，接口返回 **400**，整批被拒。`EvidenceSkipped.reason` 里虽声明了 `unknown_metric_code`，但当前没有任何代码路径产出它。上游（health-flow 适配器）在提交前就把未知指标过滤为 `unknown_metric`，所以这是**跨系统边界的既有约定，不是缺陷**；但它意味着"单条未知指标不会让整批失败"这个假设**不成立**。
 
 ### QA-EVID-004 患者文案不触发禁用词
 
