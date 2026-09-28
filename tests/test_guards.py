@@ -21,13 +21,11 @@ def test_scope_and_patient_copy_guards_reject_forbidden_text(
         guard.main()
 
 
-def test_patient_copy_guard_scans_recommendation_copy(
+def test_patient_copy_guard_scans_portal_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recommendation_copy = tmp_path / "recommendations.py"
-    recommendation_copy.write_text("COPY = '健康产品可以治愈风险'", encoding="utf-8")
-    monkeypatch.setattr(check_patient_copy, "ROOT", tmp_path / "portal")
-    monkeypatch.setattr(check_patient_copy, "ADDITIONAL_PATHS", (recommendation_copy,))
+    (tmp_path / "page.py").write_text("COPY = '健康产品可以治愈风险'", encoding="utf-8")
+    monkeypatch.setattr(check_patient_copy, "ROOT", tmp_path)
 
-    with pytest.raises(SystemExit, match="recommendations.py: 治愈"):
+    with pytest.raises(SystemExit, match="page.py: 治愈"):
         check_patient_copy.main()
