@@ -8,6 +8,13 @@ Supersedes: 0001, 0002, 0003, 0004
 
 Parent: PRD #159
 
+**Removal status: not yet executed.** This record settles the *decision*; the
+code and data described under "Decision" are still present in the running
+system. The five product tables, the review routes, the recommendation engine,
+and the product fields on the evidence response are removed by the later slices
+of #173. Until those land, this document describes the approved target and must
+not be read as a description of current runtime behavior.
+
 ## Context
 
 ADRs 0001–0004 brought a nutrition-product capability into this repository: a
