@@ -17,6 +17,55 @@
 
 ## 用例
 
+### QA-EVID-001 已确认风险返回已发布证据且不含商品
+
+- **ID**: `QA-EVID-001`
+- **环境**: `uv run pytest` + 临时 SQLite；证据接口通过 `TestClient` 直接调用，不需要外部服务。
+- **前置**: `COND_DYSLIPIDEMIA` 在 `metric:ldl_c` scope 上存在 `published` 知识卡，带 Claim 与论文回链。
+- **数据**: 一条 `schema_version=3` 的已确认异常观测（`ldl_c` 4.2，参考上限 3.4，含原文证据与来源页）。
+- **动作**:
+  1. `POST /api/evidence/matches`，提交该观测。
+  2. 断言 finding 的 `condition_code`、`evidence_items[].card.patient_visible_body` 与 `card.sources[]`。
+  3. 对响应 JSON 的全部键名做一次遍历。
+- **可观察结果**: 状态 200；finding 含 `condition_code` 与 `evidence_items`，每项带 `metric_code`、`evidence_strength` 与卡片回链；**响应键名中不出现** `recommendations`、`recommendation_message`、`product_status`。
+- **清理**: 临时 SQLite 随 tmp_path 回收。
+
+### QA-EVID-002 未发布知识卡不进入患者侧
+
+- **ID**: `QA-EVID-002`
+- **环境**: 同 QA-EVID-001。
+- **前置**: 同一 metric 只有 `draft` / `in_review` / `approved` / `stale` / `rejected` 状态的知识卡（逐状态各跑一次）。
+- **数据**: 同 QA-EVID-001 的观测。
+- **动作**:
+  1. `POST /api/evidence/matches`。
+  2. 检查 `unmatched[]` 与 `findings[]`。
+- **可观察结果**: 该观测进入 `unmatched` 且 `reason == "no_published_knowledge_card"`；`findings` 为空；响应不以草稿内容补充。
+- **清理**: 同 QA-EVID-001。
+
+### QA-EVID-003 未命中目录或无已发布卡时如实返回
+
+- **ID**: `QA-EVID-003`
+- **环境**: 同 QA-EVID-001。
+- **前置**: 观测的 `metric_code` 不在 canonical 目录内（`unknown_metric_code`）；另一条在目录内但 condition 无已发布卡；第三条落在参考范围内。
+- **数据**: 三条观测各覆盖一种边界，外加一条参考范围缺失的观测。
+- **动作**:
+  1. `POST /api/evidence/matches`，四条观测一次提交。
+  2. 逐条核对 `unmatched[]` 与 `skipped[]` 的 `reason`。
+- **可观察结果**: 四条分别进入 `unmatched` 或 `skipped` 并给出具体 `reason`（`unknown_metric_code` / `no_published_knowledge_card` / `within_reference_range` / `missing_reference_range`）；不构造空 finding；响应不报错。
+- **清理**: 同 QA-EVID-001。
+
+### QA-EVID-004 患者文案不触发禁用词
+
+- **ID**: `QA-EVID-004`
+- **环境**: CI 确定性检查，`uv run python scripts/check_patient_copy.py`。
+- **前置**: `core/patient_copy.py` 的 `FORBIDDEN_PATIENT_TERMS` 已定义；扫描根为 `src/genesis_evidence/portal/`。
+- **数据**: 以含「治愈」的临时文件替换扫描根内容作为反向样本。
+- **动作**:
+  1. 对真实源码运行 `check_patient_copy.py`。
+  2. 对反向样本运行同一脚本。
+- **可观察结果**: 真实源码退出码 0；反向样本以 `SystemExit` 失败并指出文件名与命中词。
+- **清理**: 临时文件随测试目录回收。
+
 ### QA-DISEASE-001 审核工作台疾病知识库按疾病聚合覆盖
 
 - **ID**: `QA-DISEASE-001`

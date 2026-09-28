@@ -12,6 +12,10 @@ ACCEPTANCE_SCENARIOS = (
 )
 
 QA_CASE_IDS = {
+    "QA-EVID-001",
+    "QA-EVID-002",
+    "QA-EVID-003",
+    "QA-EVID-004",
     "QA-DISEASE-001",
     "QA-WORKBENCH-001",
 }

@@ -8,12 +8,13 @@ Supersedes: 0001, 0002, 0003, 0004
 
 Parent: PRD #159
 
-**Removal status: not yet executed.** This record settles the *decision*; the
-code and data described under "Decision" are still present in the running
-system. The five product tables, the review routes, the recommendation engine,
-and the product fields on the evidence response are removed by the later slices
-of #173. Until those land, this document describes the approved target and must
-not be read as a description of current runtime behavior.
+**Removal status: executed in code.** This record settled the *decision*; the
+slices of #173 then removed the product surface — the review routes and offline
+tooling, the recommendation engine, the product fields on the evidence response,
+and the five tables from the schema. One residue remains and is called out under
+Consequences: an already-deployed database keeps the five tables and their rows
+until a separate, deliberate drop runs. A fresh database is 26 tables; production
+is still 31 until then.
 
 ## Context
 
