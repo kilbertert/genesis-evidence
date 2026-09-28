@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add product recommendation acceptance and governance baseline
 - Align product acceptance traceability (#117)
 - Record canonical product e2e (#118)
+- Record ADR 0006: goods authority moves to the mall and the product capability is retired (#173)
 - Update mutation test totals (#120)
 - Record real five-image report acceptance
 - Add real acceptance traceability

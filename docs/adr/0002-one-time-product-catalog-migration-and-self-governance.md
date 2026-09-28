@@ -1,6 +1,6 @@
 # 0002: One-time product-catalog migration and self-governance
 
-Status: Accepted
+Status: Superseded by 0006
 
 Date: 2026-08-28
 

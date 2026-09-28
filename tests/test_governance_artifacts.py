@@ -40,6 +40,7 @@ ADR_NAMES = (
     "0003-anchor-recommendations-under-confirmed-findings.md",
     "0004-four-product-seed-pool-publication.md",
     "0005-review-workbench-independent-reading-regions.md",
+    "0006-retire-product-capability-and-move-goods-authority-to-the-mall.md",
 )
 
 

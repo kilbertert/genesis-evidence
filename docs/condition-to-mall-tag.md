@@ -154,14 +154,16 @@
   不是本文件的隐含前提，也不能假定平台侧会兜底；
 - 若后续决定在平台侧重新引入审核闸门，那是**新的决定**，需要单独记录，不能靠本文件的措辞沿用。
 
-### 这需要一条取代 ADR 的决定
+### 这条边界已由 ADR 0006 确立
 
-本仓库 `docs/adr/0004-four-product-seed-pool-publication.md` 的 Consequences 明确写着：
+上面的边界曾经与本仓库 ADR 0004 冲突，该 ADR 的 Consequences 写着：
 
 > the recommendation engine must never bypass the published-only gate to reach blocked candidates
 
-本文件描述的边界与它**直接冲突**：接入后患者侧商品不再经过平台侧的 `published` 闸门。
-这条 ADR 至今仍然有效，因此**在它被显式取代之前，本文件不能作为交付依据**。
+**该冲突已解决**：`docs/adr/0006-retire-product-capability-and-move-goods-authority-to-the-mall.md`
+显式取代了 ADR 0001–0004，把患者侧商品把关的归属写成商城侧的可售性过滤，并明确平台侧
+**不再叠加第二道**。ADR 0004 的 published-only 规则是被**取代**，不是被缩窄——商品离开本仓库后
+它已无适用对象。
 
-取代它的是 **#173**（商品能力退役与 superseding ADR），不是本文件。#173 完成前，
-本节描述的是一个**待决状态**，不是已生效的治理决定。
+因此本文件现在是**可用**的交付依据。**仍然缺的是取值**：12 行里只有 2 行有取值，且两行都未在
+真实租户上验证（见「验证状态」一节）。
