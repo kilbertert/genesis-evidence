@@ -95,10 +95,10 @@ regardless of the key — which tests the schema, not the authentication.
 ### `10006`: the decision to withdraw its exposure, and how the acceptance changed
 
 `10006` is the paper review workbench — an internal tool with a single
-server-side reviewer identity and no public use case. It binds `0.0.0.0`
-alongside the patient portal. Before deciding to withdraw that binding, the
-service's own access log was read for the preceding two weeks and the client
-addresses classified:
+server-side reviewer identity and no public use case. It used to bind `0.0.0.0`
+alongside the patient portal; it is loopback-only now (see Current state above).
+Before deciding to withdraw that binding, the service's own access log was read
+for the preceding two weeks and the client addresses classified:
 
 | Listener | Requests from the platform's own egress | Requests from any other source |
 | --- | --- | --- |
