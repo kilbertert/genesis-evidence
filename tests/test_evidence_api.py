@@ -1,4 +1,3 @@
-import json
 
 from fastapi.testclient import TestClient
 
@@ -566,7 +565,6 @@ def test_low_card_is_context_only(tmp_path) -> None:
     assert "行动建议门槛" in finding["action_message"]
     assert finding["evidence_items"][0]["card"]["content_layer"] == "context_only"
     assert finding["evidence_items"][0]["card"]["action_status"] == "not_available"
-    patient_finding = response.json()["patient_reply"]["findings"][0]
 
 
 def test_very_low_published_legacy_card_is_invisible_to_patient_api(tmp_path) -> None:
