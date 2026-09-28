@@ -147,9 +147,12 @@ display".
 - **Already-stored evidence payloads carry the removed fields.** They are
   migrated rather than read leniently, so the strict contract stays strict and a
   genuine future contract drift is still caught.
-- **The frozen-scope guard is reversed.** ADR 0001 unfroze
+- **The frozen-scope guard is back to its full set.** ADR 0001 unfroze
   `nutrition_product` / `supplier_product` / `supplement_recommendation` for the
-  implementation slices; with the capability gone they return to the frozen set.
+  implementation slices. Those three names were never actually removed from
+  `scripts/check_scope.py`'s `FROZEN_IDENTIFIERS`, so no guard edit is owed —
+  the set already rejects them, and with the capability gone nothing in `src/`
+  should ever mention them again.
 - **This record is the prerequisite that releases #170.** With the conflict
   resolved, the mapping file's "cannot be used as a delivery basis" note is
   lifted, leaving only the mall-side values it still needs.
