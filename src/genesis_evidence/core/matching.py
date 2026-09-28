@@ -127,7 +127,6 @@ def patient_reply_v3(
             "content_layer": finding["content_layer"],
             "action_status": finding["action_status"],
             "action_message": finding["action_message"],
-            "product_status": finding["product_status"],
             "evidence_items": finding["evidence_items"],
         }
         visible_findings.append(visible)
@@ -186,7 +185,6 @@ def patient_reply_v2(
                 "content_layer": finding["content_layer"],
                 "action_status": finding["action_status"],
                 "action_message": finding["action_message"],
-                "product_status": finding["product_status"],
             }
         )
     if visible_findings:

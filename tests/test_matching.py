@@ -42,7 +42,6 @@ def _card(card_id: str, *, scope_key: str, grade: str = "moderate") -> dict[str,
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": "msg",
-        "product_status": "not_implemented",
     }
 
 
@@ -246,7 +245,6 @@ def test_patient_reply_v2_uses_flat_card_shape() -> None:
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": "msg",
-        "product_status": "not_implemented",
     }
     assert patient_reply_v2([finding], []) == {
         "title": "体检报告解读与健康风险提示",
@@ -271,8 +269,7 @@ def test_patient_reply_v2_uses_flat_card_shape() -> None:
                 "content_layer": "context_only",
                 "action_status": "not_available",
                 "action_message": "msg",
-                "product_status": "not_implemented",
-            }
+                    }
         ],
         "unmatched_count": 0,
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
@@ -296,7 +293,6 @@ def test_patient_reply_v3_carries_evidence_items_per_finding() -> None:
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": "msg",
-        "product_status": "not_implemented",
         "evidence_items": [
             {
                 "metric_code": "fasting_glucose",

@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CardStatus = Literal["draft", "in_review", "approved", "published", "rejected", "stale"]
 CardContentLayer = Literal["context_only"]
 ActionStatus = Literal["not_available"]
-ProductStatus = Literal["not_implemented", "available"]
 EvidenceStrength = Literal["high", "moderate", "low", "very_low", "mixed"]
 ReportStatus = Literal[
     "uploaded",
@@ -49,7 +48,6 @@ def card_capabilities(grade: str) -> dict[str, str]:
             if grade in {"moderate", "high"}
             else "当前证据确定性尚未达到具体行动建议门槛。"
         ),
-        "product_status": "not_implemented",
     }
 
 
@@ -209,7 +207,6 @@ class PublishedEvidenceCard(BaseModel):
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
-    product_status: ProductStatus
 
 
 class EvidenceSortingV2(BaseModel):
@@ -244,9 +241,6 @@ class EvidenceFindingV2(BaseModel):
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
-    product_status: ProductStatus
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = Field(min_length=1)
 
 
 class EvidenceUnmatchedV2(BaseModel):
@@ -280,9 +274,6 @@ class PatientReplyFindingV2(BaseModel):
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
-    product_status: ProductStatus
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = Field(min_length=1)
 
 
 class PatientReplyV2(BaseModel):
@@ -360,9 +351,6 @@ class EvidenceFinding(BaseModel):
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
-    product_status: ProductStatus
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = Field(min_length=1)
 
 
 class EvidenceUnmatched(BaseModel):
@@ -413,9 +401,6 @@ class PatientReplyFinding(BaseModel):
     content_layer: CardContentLayer
     action_status: ActionStatus
     action_message: str = ""
-    product_status: ProductStatus
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = Field(min_length=1)
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -456,21 +441,3 @@ class EvidenceMatchResponse(BaseModel):
         if any(not finding.evidence_items for finding in self.patient_reply.findings):
             raise ValueError("patient findings require evidence_items")
         return self
-
-
-class ProductRecommendation(BaseModel):
-    """Companion recommendation block attached to each confirmed finding."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    recommendation_id: str = Field(min_length=1)
-    product_id: str = Field(min_length=1)
-    product_name: str = Field(min_length=1)
-    nutrient: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    safety_message: str = Field(min_length=1)
-    disclaimer: str = Field(min_length=1)
-    image_url: str | None = Field(default=None, pattern=r"^/products/[A-Za-z0-9_-]+\.png$")
-    evidence_links: list[str] = Field(min_length=1)
-    evidence_strength: EvidenceStrength
-    priority: int = Field(ge=0)
