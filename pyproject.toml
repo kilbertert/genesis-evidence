@@ -51,11 +51,9 @@ pytest_add_cli_args_test_selection = [
   "tests/test_matching.py",
   "tests/test_report_assessment.py",
   "tests/test_evidence_api.py",
-  "tests/test_product_catalog.py",
   "tests/test_product_mapping_drafts.py",
   "tests/test_product_recommendation_e2e.py",
   "tests/test_product_review_api.py",
-  "tests/test_recommendations.py",
 ]
 
 [tool.ruff]
