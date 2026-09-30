@@ -39,14 +39,20 @@ https://hstclub.com/shopPackage/pages/goods/goods-detail/index
   ?detection_id=report-33&exp=…&id=<spu>&quantity=1&spu_id=<spu>&tenant_id=…&sig=…
 ```
 
-## 负向用例（全部按预期拒绝）
+## 负向用例
 
-| 场景 | 结果 |
-| --- | --- |
-| 无会话读报告商品 | `401` |
-| 同一张票据兑换第二次 | `401` `票据已被使用` |
-| 用本主体会话读**别人**的报告 | `404` |
-| 映射表外的 `condition_code` | 不查映射、`label_pairs_for` 返回空 → `no_label_data` |
+**三条是被拒绝，一条只是「空」**——两者不是一回事，不要合并成一句「全部拒绝」。
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 无会话读报告商品 | 拒绝 | `401` ✅ |
+| 同一张票据兑换第二次 | 拒绝 | `401` `票据已被使用` ✅ |
+| 用本主体会话读**别人**的报告 | 拒绝 | `404` ✅ |
+| 映射表外的 `condition_code` | **空结果**（不是拒绝） | 不查映射、`label_pairs_for` 返回 `()` → `no_label_data` ✅ |
+
+最后一条的期望就是空：没有映射的健康方向**不去问商城**，也不退化成「把该租户全部商品
+推给这个风险」。它没有 HTTP 错误码可报——调用方拿到的是 `200` + 空 `items` + 明确的
+`reason`，这正是设计要的形态。
 
 第三条是**存在性不泄漏**的形态：不属于你的报告返回 `404` 而不是 `403`，无法据此判断
 某个 id 是否存在。
@@ -76,8 +82,37 @@ https://hstclub.com/shopPackage/pages/goods/goods-detail/index
 - 插入了一份**验收用报告**（`COND_HYPERTENSION_RISK`），归属为本次验收主体；
 - 留下了 2 条**票据消费记录**与 1 条**主体记录**（`hst-acceptance-1`）。
 
-三样都在服务宿主的 SQLite 库里，**是夹具不是数据**。清理方式见
-`ops/service-host/README.md` 的验收夹具一节（另开票补）。
+三样都在服务宿主的 SQLite 库里，**是夹具不是数据**。清理方式**本仓还没有**——那句
+「见 README 的验收夹具一节」是写这份记录时的预期，那节当时并不存在。现在就地给出
+清理步骤，不指向一个不存在的地方：
+
+```bash
+# 在服务主机 36 上，以服务身份跑；先备份
+set -a; . /opt/health-flow/var/health-flow.env; set +a
+cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%dT%H%M%S)
+```
+
+```python
+# 同样以服务身份跑。SUB 是本次验收主体。
+import os, sqlite3
+
+c = sqlite3.connect(os.environ["DATABASE_URL"].replace("sqlite:///", ""))
+cur = c.cursor()
+SUB = "account:<租户标识>:hst-acceptance-1"
+for sql, args in (
+    ("delete from medical_reports where owner_id = ?", (SUB,)),
+    ("delete from user_sessions where account_id = ?", (SUB,)),
+    ("delete from ticket_subjects where external_subject = ?", ("hst-acceptance-1",)),
+    ("delete from ticket_redemptions where subject = ?", ("hst-acceptance-1",)),
+):
+    cur.execute(sql, args)
+    print(sql.split("from")[1].split("where")[0].strip(), "->", cur.rowcount, "行")
+c.commit()
+```
+
+**顺序有讲究**：先删报告（它引用主体），再删会话与主体。票据消费记录与主体也可以留
+——它们到 `exp` 自动失去意义，删它们只是把库擦干净。**不要**用不带条件的
+`delete from medical_reports`：那会删掉真实患者的报告。
 
 ## 未验证
 
