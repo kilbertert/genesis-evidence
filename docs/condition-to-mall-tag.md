@@ -45,8 +45,22 @@
 | `COND_MALNUTRITION_RISK` | 营养不良风险 | 营养状态评估 |
 | `COND_CHRONIC_CONSTIPATION` | 慢性便秘 | 肠道健康评估 |
 
-**12 行的取值全部已由运营在商城侧建好**（2026-09-30），且**类别名就是标签名**
-（「慢病风险」那版作废——现阶段用的是按疾病方向分类、标签名与取值同名的那一版）。
+**12 行的取值全部已由运营在商城侧建好**（2026-09-30），也是公告的**阶段终点**。
+
+实测确认的三层实际形状（同一个租户，逐列读出）：
+
+| 层 | 实际值（以 `COND_HYPERTENSION_RISK` 为例） |
+| --- | --- |
+| 类别名（`goods_label_category.cate_name`） | `高血压风险` |
+| **标签名（`goods_label.label_name`）** | `心血管功能评估` |
+| **取值（`goods_label_option.option_name`）** | `心血管功能评估` |
+
+**标签名与取值同名（12/12），与类别**不同名**。** 取货的两层是 (标签名, 取值)——所以
+`{"labelName":"心血管功能评估","optionName":"心血管功能评估"}` 这一对是正确的，
+不是巧合也不是笔误：实测它以「商城 C 端读回」与「按标签取货」两种方式各命中一次
+（见下节）。
+
+> 早先那一版（所有方向共用一个 `慢病风险` 类别）没有采用。以商城后台里的行为为准。
 
 这 12 个取值不是本仓发明的：运营按 `docs/mall-label-setup-checklist.md` 的建议名在商城
 后台建了类别与取值，然后**把实际用的名字报回来**，本表照抄。名字写错不会报错、只会静默
@@ -116,9 +130,12 @@
 ```bash
 curl -s -H 'tenant-id: <租户标识>' -H 'client-type: H5' \
   -X POST -H 'Content-Type: application/json' \
-  -d '{"goodsSpuLabels":[{"labelName":"<取值>","optionName":"<取值>"}],"returnUnion":true}' \
+  -d '{"goodsSpuLabels":[{"labelName":"<标签名>","optionName":"<取值>"}],"returnUnion":true}' \
   https://<商城入口>/mallapi/goodsspu/getGoodsByLabels
 ```
+
+`<标签名>` 与 `<取值>` 是**两个不同的占位符**：本表 12 行的这两个值是**同名**的
+（见上节实测），所以填起来看着一样；但那是因为这 12 行恰好同名，不是可以省成一项。
 
 返回 `data: null` 或空数组都表示「没取到」，而不是「接口坏了」——两者的区别见上表。
 
