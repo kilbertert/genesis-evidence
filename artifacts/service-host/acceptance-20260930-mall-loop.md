@@ -86,29 +86,45 @@ https://hstclub.com/shopPackage/pages/goods/goods-detail/index
 「见 README 的验收夹具一节」是写这份记录时的预期，那节当时并不存在。现在就地给出
 清理步骤，不指向一个不存在的地方：
 
+**先停服务。** 服务在写库时 `cp` 出来的备份可能是撕裂的（SQLite 默认回滚日志模式下，
+拷到一个「页写了一半」的瞬间），更糟的是**库还开着 WAL 时，已提交的事务可能只在 `-wal`
+里、不在主文件里**——那样的备份用来回滚会丢数据。所以顺序是：
+
 ```bash
-# 在服务主机 36 上，以服务身份跑；先备份
+# 在服务主机 36 上，以 root 跑
+systemctl stop health-flow                     # 1. 先停，保证没有在途写入
 set -a; . /opt/health-flow/var/health-flow.env; set +a
 cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%dT%H%M%S)
 ```
 
+停服务之后备份才是自洽的。清理完再 `systemctl start health-flow`。
+
 ```python
-# 同样以服务身份跑。SUB 是本次验收主体。
+# 以服务身份跑（36 上是 health-flow）。SUB 是本次验收主体。
 import os, sqlite3
 
 c = sqlite3.connect(os.environ["DATABASE_URL"].replace("sqlite:///", ""))
 cur = c.cursor()
-SUB = "account:<租户标识>:hst-acceptance-1"
+TENANT = "<租户标识>"                      # 与报告、会话、主体三处都相关
+SUB = f"account:{TENANT}:hst-acceptance-1"  # 报告与外键用的主体标识
 for sql, args in (
     ("delete from medical_reports where owner_id = ?", (SUB,)),
     ("delete from user_sessions where account_id = ?", (SUB,)),
-    ("delete from ticket_subjects where external_subject = ?", ("hst-acceptance-1",)),
-    ("delete from ticket_redemptions where subject = ?", ("hst-acceptance-1",)),
+    # 票据那两张表按 (租户, 子标识) 定位——只按子标识会删到别的租户的同名行
+    ("delete from ticket_subjects where tenant_id = ? and external_subject = ?",
+     (TENANT, "hst-acceptance-1")),
+    ("delete from ticket_redemptions where tenant_id = ? and subject = ?",
+     (TENANT, "hst-acceptance-1")),
 ):
     cur.execute(sql, args)
     print(sql.split("from")[1].split("where")[0].strip(), "->", cur.rowcount, "行")
 c.commit()
 ```
+
+**两张票据表必须按 `(tenant_id, subject)` 两个条件删。** `ticket_subjects` 的身份约束
+本就是 `(tenant_id, external_subject)`，`ticket_redemptions` 也有 `tenant_id` 列——
+只给 `subject` 一个条件，别的租户若恰好也有一个叫 `hst-acceptance-1` 的主体，
+它的记录会被一起删掉。清理脚本比它要删的那几行危险得多，条件要按表的身份键写全。
 
 **顺序有讲究**：先删报告（它引用主体），再删会话与主体。票据消费记录与主体也可以留
 ——它们到 `exp` 自动失去意义，删它们只是把库擦干净。**不要**用不带条件的
