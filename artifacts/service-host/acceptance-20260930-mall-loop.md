@@ -82,38 +82,38 @@ https://hstclub.com/shopPackage/pages/goods/goods-detail/index
 - 插入了一份**验收用报告**（`COND_HYPERTENSION_RISK`），归属为本次验收主体；
 - 留下了 2 条**票据消费记录**与 1 条**主体记录**（`hst-acceptance-1`）。
 
-三样都在服务宿主的 SQLite 库里，**是夹具不是数据**。清理方式**本仓还没有**——那句
-「见 README 的验收夹具一节」是写这份记录时的预期，那节当时并不存在。现在就地给出
-清理步骤，不指向一个不存在的地方：
+三样都在服务宿主的 SQLite 库里，**是夹具不是数据**。清理步骤如下（这块曾经指向
+`ops/service-host/README.md` 的「验收夹具一节」——**那节不存在**，现在就地给出）。
 
-**先停服务。** 服务在写库时 `cp` 出来的备份可能是撕裂的（SQLite 默认回滚日志模式下，
-拷到一个「页写了一半」的瞬间），更糟的是**库还开着 WAL 时，已提交的事务可能只在 `-wal`
-里、不在主文件里**——那样的备份用来回滚会丢数据。所以顺序是：
+**整段一次跑完；任一步失败都不会走到「启动服务」那一步**（`set -euo pipefail`）：
 
 ```bash
-# 在服务主机 36 上，以 root 跑。备份用字面路径，不需要 DATABASE_URL
-systemctl stop health-flow                     # 1. 先停，保证没有在途写入
-cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%dT%H%M%S)
-```
+# 在服务主机 36 上以 root 跑。整段粘进一个 shell 即可。
+set -euo pipefail
 
-停服务之后备份才是自洽的。清理完再 `systemctl start health-flow`。
+# 1. 先停服务，保证备份与删除期间没有在途写入
+systemctl stop health-flow
 
-```bash
-# 2. 以服务身份清理。DATABASE_URL 必须在新 shell 里**重新 source**：
-#    它是只读文件、属主是服务身份，上面以 root 做的 set -a 不会传进来，漏掉就 KeyError。
+# 2. 备份。字面路径，不需要 DATABASE_URL。
+cp /opt/health-flow/var/healthflow.db \
+   /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%dT%H%M%S)
+
+# 3. 以服务身份删夹具。DATABASE_URL 必须**在这个 shell 里重新 source**：
+#    环境文件属主是服务身份、以 root 读不到，且上一步的导出不会跨 runuser 传递。
 runuser -u health-flow -- bash -lc '
-set -a; . /opt/health-flow/var/health-flow.env; set +a
-/opt/health-flow/.venv/bin/python - <<PY
+  set -euo pipefail
+  set -a; . /opt/health-flow/var/health-flow.env; set +a
+  /opt/health-flow/.venv/bin/python - <<PY
 import os, sqlite3
 
 c = sqlite3.connect(os.environ["DATABASE_URL"].replace("sqlite:///", ""))
 cur = c.cursor()
-TENANT = "<租户标识>"                       # 与报告、会话、主体三处都相关
-SUB = f"account:{TENANT}:hst-acceptance-1"  # 报告与外键用的主体标识
+TENANT = os.environ["MALL_WEBAPI_TENANT_ID"]
+SUB = f"account:{TENANT}:hst-acceptance-1"
 for sql, args in (
     ("delete from medical_reports where owner_id = ?", (SUB,)),
     ("delete from user_sessions where account_id = ?", (SUB,)),
-    # 票据那两张表按 (租户, 子标识) 定位——只按子标识会删到别的租户的同名行
+    # 票据两张表按 (租户, 子标识) 定位——只给子标识会删到别的租户的同名行
     ("delete from ticket_subjects where tenant_id = ? and external_subject = ?",
      (TENANT, "hst-acceptance-1")),
     ("delete from ticket_redemptions where tenant_id = ? and subject = ?",
@@ -125,19 +125,25 @@ c.commit()
 PY
 '
 
-# 3. 清理成功才启动。三步之间用 && 串起来——不带它的话，runuser 失败会被启动的
-#    成功退出码盖掉：服务照常起来、夹具却没删干净，而整段脚本看起来是成功的。
-runuser -u health-flow -- bash -lc '...' && systemctl start health-flow
+# 4. 只有上一步成功才启动。写在同一段里、set -e 生效，所以失败就不会走到这里。
+systemctl start health-flow
 ```
 
-**两张票据表必须按 `(tenant_id, subject)` 两个条件删。** `ticket_subjects` 的身份约束
-本就是 `(tenant_id, external_subject)`，`ticket_redemptions` 也有 `tenant_id` 列——
-只给 `subject` 一个条件，别的租户若恰好也有一个叫 `hst-acceptance-1` 的主体，
-它的记录会被一起删掉。清理脚本比它要删的那几行危险得多，条件要按表的身份键写全。
+几点值得写下来：
 
-**顺序有讲究**：先删报告（它引用主体），再删会话与主体。票据消费记录与主体也可以留
-——它们到 `exp` 自动失去意义，删它们只是把库擦干净。**不要**用不带条件的
-`delete from medical_reports`：那会删掉真实患者的报告。
+- **先停服务再备份。** 服务在写库时 `cp` 出来的备份可能落在「页写了一半」的瞬间；
+  库开着 WAL 时，已提交的事务还可能只在 `-wal` 里、不在主文件里——那样的备份用来回滚
+  会丢数据。
+- **`DATABASE_URL` 在那个 `runuser` 的 shell 里重新 source。** 环境文件属主是服务身份，
+  root 读不到；上一步的导出也不会跨 `runuser` 传递。漏掉就 `KeyError`，一行都删不掉。
+- **票据两张表按 `(tenant_id, subject)` 两个条件删。** `ticket_subjects` 的身份约束
+  本就是 `(tenant_id, external_subject)`，`ticket_redemptions` 也有 `tenant_id` 列——
+  只给 `subject` 一个条件，别的租户若恰好也有一个叫 `hst-acceptance-1` 的主体，
+  它的记录会被一起删掉。清理脚本比它要删的那几行危险得多，条件要按表的身份键写全。
+- **删的顺序**：报告 → 会话 → 主体 → 票据消费。报告引用主体，先删它。
+- **`delete` 一律带 `where`。** 不带条件的 `delete from medical_reports` 会删掉真实
+  患者的报告——那是这段脚本里唯一不可挽回的操作。
+- 票据消费记录与主体也可以留着——它们到 `exp` 自动失去意义，删它们只是把库擦干净。
 
 ## 未验证
 
