@@ -125,8 +125,9 @@ c.commit()
 PY
 '
 
-# 3. 清理完再启动
-systemctl start health-flow
+# 3. 清理成功才启动。三步之间用 && 串起来——不带它的话，runuser 失败会被启动的
+#    成功退出码盖掉：服务照常起来、夹具却没删干净，而整段脚本看起来是成功的。
+runuser -u health-flow -- bash -lc '...' && systemctl start health-flow
 ```
 
 **两张票据表必须按 `(tenant_id, subject)` 两个条件删。** `ticket_subjects` 的身份约束
