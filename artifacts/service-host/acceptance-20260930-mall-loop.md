@@ -91,21 +91,24 @@ https://hstclub.com/shopPackage/pages/goods/goods-detail/index
 里、不在主文件里**——那样的备份用来回滚会丢数据。所以顺序是：
 
 ```bash
-# 在服务主机 36 上，以 root 跑
+# 在服务主机 36 上，以 root 跑。备份用字面路径，不需要 DATABASE_URL
 systemctl stop health-flow                     # 1. 先停，保证没有在途写入
-set -a; . /opt/health-flow/var/health-flow.env; set +a
 cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%dT%H%M%S)
 ```
 
 停服务之后备份才是自洽的。清理完再 `systemctl start health-flow`。
 
-```python
-# 以服务身份跑（36 上是 health-flow）。SUB 是本次验收主体。
+```bash
+# 2. 以服务身份清理。DATABASE_URL 必须在新 shell 里**重新 source**：
+#    它是只读文件、属主是服务身份，上面以 root 做的 set -a 不会传进来，漏掉就 KeyError。
+runuser -u health-flow -- bash -lc '
+set -a; . /opt/health-flow/var/health-flow.env; set +a
+/opt/health-flow/.venv/bin/python - <<PY
 import os, sqlite3
 
 c = sqlite3.connect(os.environ["DATABASE_URL"].replace("sqlite:///", ""))
 cur = c.cursor()
-TENANT = "<租户标识>"                      # 与报告、会话、主体三处都相关
+TENANT = "<租户标识>"                       # 与报告、会话、主体三处都相关
 SUB = f"account:{TENANT}:hst-acceptance-1"  # 报告与外键用的主体标识
 for sql, args in (
     ("delete from medical_reports where owner_id = ?", (SUB,)),
@@ -119,6 +122,11 @@ for sql, args in (
     cur.execute(sql, args)
     print(sql.split("from")[1].split("where")[0].strip(), "->", cur.rowcount, "行")
 c.commit()
+PY
+'
+
+# 3. 清理完再启动
+systemctl start health-flow
 ```
 
 **两张票据表必须按 `(tenant_id, subject)` 两个条件删。** `ticket_subjects` 的身份约束
