@@ -45,6 +45,14 @@ class PaperIdentityConflict(RuntimeError):
     """Raised when one source record resolves to multiple stored papers."""
 
 
+class PaperRetracted(RuntimeError):
+    """Raised when durable evidence is refused because the paper is retracted.
+
+    Distinct from a refusal on rights or format grounds: a caller records it as a
+    retraction, not as "the licence does not permit processing".
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class StoredObject:
     key: str
@@ -1064,6 +1072,15 @@ class PaperStore:
     ) -> None:
         now = _now()
         with self.database.transaction() as connection:
+            # Rechecked inside the write transaction: the caller's earlier read cannot see
+            # a retraction committed while the download was in flight, and a paper that is
+            # retracted now must not gain durable full text. Same boundary `save_full_text`
+            # never had but candidate-claim storage already enforces.
+            status_row = connection.execute(
+                "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+            if status_row is not None and status_row["integrity_status"] == "retracted":
+                raise PaperRetracted("full text cannot be stored for a retracted paper")
             connection.execute(
                 """
                 INSERT INTO full_texts(paper_id, object_key, sha256, media_type, rights_status)
@@ -1102,6 +1119,11 @@ class PaperStore:
     def enqueue_extraction(self, paper_id: str, *, collection_run_id: str | None) -> str:
         now = _now()
         with self.database.transaction() as connection:
+            status_row = connection.execute(
+                "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+            if status_row is not None and status_row["integrity_status"] == "retracted":
+                raise PaperRetracted("extraction cannot be queued for a retracted paper")
             full_text = connection.execute(
                 "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
             ).fetchone()

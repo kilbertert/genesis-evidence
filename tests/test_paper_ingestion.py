@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore
+from genesis_evidence.core.store.papers import PaperRetracted
 from genesis_evidence.literature.ai_extraction import (
     CheckedPaperExtraction,
     ConsistencyReport,
@@ -1258,9 +1259,58 @@ def test_acquisition_seam_refuses_a_retracted_paper_without_caller_help(tmp_path
         integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
     )
 
-    job_id = service._ingest_candidate(None, paper_id, _record().full_text_candidates[0])
+    # Raised, not None: a caller must be able to tell a retraction from a rights refusal,
+    # or it records the wrong reason in the retrieval ledger.
+    with pytest.raises(PaperRetracted):
+        service._ingest_candidate(None, paper_id, _record().full_text_candidates[0])
 
-    assert job_id is None, "a retracted paper must not reach full-text storage"
     with database.connect() as connection:
         assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
+
+
+def test_storing_full_text_rechecks_retraction_committed_during_download(tmp_path) -> None:
+    """The retraction boundary is the write transaction, not an earlier read.
+
+    The seam reads integrity before the download. A retraction committed while the bytes
+    are in flight is invisible to that read, so the store must recheck inside the same
+    transaction that makes the full text durable.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/race")
+    stored = ObjectStore(tmp_path / "objects").put(b"<article/>", suffix="xml")
+
+    # Stand in for the interleaving: the caller's earlier read saw a clear paper.
+    store.update_integrity(paper_id, "retracted", detail={"reason": "withdrawn mid-flight"})
+
+    with pytest.raises(PaperRetracted):
+        store.save_full_text(
+            paper_id,
+            stored,
+            media_type="application/xml",
+            rights_status="redistributable",
+        )
+
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+
+
+def test_enqueue_rechecks_retraction(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/queue")
+    stored = ObjectStore(tmp_path / "objects").put(b"<article/>", suffix="xml")
+    store.save_full_text(
+        paper_id, stored, media_type="application/xml", rights_status="redistributable"
+    )
+    store.update_integrity(paper_id, "retracted", detail={"reason": "withdrawn"})
+
+    with pytest.raises(PaperRetracted):
+        store.enqueue_extraction(paper_id, collection_run_id=None)
+
+    with database.connect() as connection:
         assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0

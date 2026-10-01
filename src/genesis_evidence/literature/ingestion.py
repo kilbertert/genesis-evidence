@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.store.papers import ObjectStore, PaperStore
+from ..core.store.papers import ObjectStore, PaperRetracted, PaperStore
 from .connectors.base import LiteratureConnector
 from .downloader import FullTextDownloader
 from .integrity import IntegrityStatus, PublicationIntegrityChecker
@@ -118,6 +118,11 @@ class LiteratureIngestionService:
                     for candidate in record.full_text_candidates:
                         try:
                             result = self._ingest_candidate(run_id, paper_id, candidate)
+                        except PaperRetracted:
+                            # Retracted after the early check, before the durable write.
+                            # Skip rather than fail: the paper was withdrawn, no error.
+                            counts["skipped_full_texts"] += len(record.full_text_candidates)
+                            break
                         except Exception as exc:
                             counts["failed_full_texts"] += 1
                             self._store.record_event(
@@ -217,6 +222,17 @@ class LiteratureIngestionService:
                     candidate,
                     extraction_run_id=run_ids[0] if run_ids else None,
                 )
+            except PaperRetracted:
+                # The stored status was retracted even though today's check did not say so.
+                # Close the ledger with the retraction as the reason, not as a rights refusal.
+                self._mark_not_retrieved(
+                    run_ids,
+                    paper_id,
+                    reason="Publication integrity check reports a retracted paper.",
+                    reviewer=reviewer,
+                )
+                counts["not_retrieved"] += 1
+                continue
             except Exception as exc:
                 counts["failed_full_texts"] += 1
                 self._store.record_event(
@@ -272,8 +288,12 @@ class LiteratureIngestionService:
         # the only place a candidate becomes full text, so a refusal here cannot be
         # bypassed by a new acquisition path. Callers still check it early to avoid a
         # pointless download and to record their own audit event; this is the backstop.
+        #
+        # Raised, not returned as ``None``: every other ``None`` from here means a rights or
+        # format refusal, and a caller recording a retracted paper as "the licence does not
+        # permit processing" writes a false reason into the retrieval ledger.
         if self._store.integrity_status(paper_id) == IntegrityStatus.RETRACTED.value:
-            return None
+            raise PaperRetracted("paper is retracted")
         if candidate.format != FullTextFormat.JATS_XML:
             return None
         artifact = self._downloader.download(candidate)
