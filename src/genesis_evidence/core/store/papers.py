@@ -20,6 +20,7 @@ from .screening import (
     not_excluded_sql,
     paper_used_by_profile_sql,
     profiled_papers_sql,
+    run_conclusion,
 )
 
 SEARCH_STREAMS = {
@@ -621,7 +622,21 @@ class PaperStore:
                 full_text = {
                     str(row["full_text_decision"]) for row in records if row["full_text_decision"]
                 }
-                if len(titles) > 1 or len(full_text) > 1:
+                # A run's conclusion is its stage pair, not a collapsed value: see
+                # screening.py for the two matrices where each simpler rule silently
+                # rewrote a decision. Runs that decided nothing are skipped so an unscreened
+                # duplicate still reads as a blank to fill.
+                conclusions = {
+                    conclusion
+                    for row in records
+                    if (
+                        conclusion := run_conclusion(
+                            row["full_text_decision"], row["title_abstract_decision"]
+                        )
+                    )
+                    is not None
+                }
+                if len(conclusions) > 1:
                     conflicts.append(
                         {
                             "paper_id": paper_id,

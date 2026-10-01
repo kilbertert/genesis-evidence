@@ -41,7 +41,11 @@ from .retirement import (
     retire_cards_for_claims,
     retire_cards_for_paper,
 )
-from .screening import excluded_any_stage_sql, included_sql
+from .screening import (
+    excluded_any_stage_sql,
+    included_sql,
+    screening_conflict_sql,
+)
 
 
 class ReviewStore:
@@ -1620,12 +1624,15 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         """,
         (topic_id, topic["exclusion_reasons_json"]),
     ).fetchone()
+    conflict_body = screening_conflict_sql(
+        "cp.paper_id", "cp.title_abstract_decision", "cp.full_text_decision"
+    )
     conflicting_screening = connection.execute(
-        """
+        f"""
         SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
         WHERE cr.topic_id = ? AND cr.status = 'completed'
         GROUP BY cp.paper_id
-        HAVING count(DISTINCT COALESCE(cp.full_text_decision, cp.title_abstract_decision)) > 1
+        HAVING {conflict_body}
         LIMIT 1
         """,
         (topic_id,),

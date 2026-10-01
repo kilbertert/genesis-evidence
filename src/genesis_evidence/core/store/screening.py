@@ -17,6 +17,9 @@ Changing which default applies where is a behavioural change with its own eviden
 this refactor's job. What this module removes is drift in *spelling* — a decision value
 renamed in one call site and missed in its eleven siblings.
 
+This module also owns the duplicate-run **conflict definition** (below), which used to be
+spelled two different ways in the ledger reconciler and the topic-closure gate.
+
 Each helper takes the SQL alias its caller uses, so call sites keep their own FROM/JOIN
 shape and only the predicate is shared.
 """
@@ -85,12 +88,73 @@ def profiled_papers_sql() -> str:
     """
 
 
-# NOT unified here, deliberately: `_require_complete_topic` calls a duplicate-run matrix
-# *conflicting* when
-#   count(DISTINCT COALESCE(full_text_decision, title_abstract_decision)) > 1
-# while `reconcile_topic_ledger` compares the set of title_abstract_decisions and the set of
-# full_text_decisions separately. Those disagree on a reachable matrix — one run with
-# title_abstract=included (full text undecided) beside another with full_text=excluded is a
-# conflict under the first definition and not under the second. Unifying them changes an
-# observable outcome, so it needs its own decision and its own evidence; both keep their
-# current definitions here.
+# --- the duplicate-run conflict definition (one owner) ---------------------------------
+#
+# A paper collected by several completed runs must be reconciled so the runs agree. That is
+# only legitimate while the runs are genuinely the *same* screening record seen twice: one
+# run carries a decision and the others are still blank. Once two runs reached **different
+# stages**, each carries a partial history of its own, no "canonical" value exists, and
+# reconciliation must refuse rather than invent one.
+#
+# A run's conclusion is therefore its stage pair (title_abstract_decision,
+# full_text_decision) — not a single collapsed value. Two runs conflict when they carry two
+# *different* conclusions. A run with no decision at all is not a conclusion; it is a blank
+# that may be filled from a sibling, which is the ordinary duplicate-propagation case.
+#
+# Both simpler rules were tried and each fails on a reachable matrix (both recorded in #208
+# and its follow-up):
+#
+#   comparing the two stage sets separately
+#       run1 = (title included, full text undecided), run2 = (title included, full text
+#       excluded) → the undecided run's NULL drops out of both sets, the two look identical,
+#       and reconciliation copies `full_text_decision = 'excluded'` onto a run that was never
+#       retrieved: a full-text verdict for evidence nobody screened.
+#
+#   collapsing the pair to `COALESCE(full_text, title_abstract)`
+#       run A = (title excluded, full text undecided), run B = (title included, full text
+#       excluded) → both collapse to 'excluded', so reconciliation overwrites both rows and
+#       **erases run A's title-stage exclusion** together with its reason.
+#
+# The stage-pair rule catches both: the pairs differ in each case. It is a strict superset of
+# the two, so it can only add refusals, never remove one — the fail-closed direction.
+
+
+def screening_conflict_sql(
+    paper_id_column: str,
+    title_abstract_column: str,
+    full_text_column: str,
+) -> str:
+    """SQL ``HAVING``/predicate body that is true when a paper's runs conflict.
+
+    Consumed by both the ledger reconciler and the topic-closure gate, so the two cannot
+    disagree about which matrices conflict. The caller supplies the grouped column names.
+
+    A run with no decision at all collapses to SQL NULL and is skipped by
+    ``count(DISTINCT ...)``, so an unscreened duplicate is a blank to fill, not a conflict.
+    """
+
+    del paper_id_column  # the caller already groups by it
+    signature = (
+        f"COALESCE({full_text_column}, '') || '\x1f' || "
+        f"COALESCE({title_abstract_column}, '')"
+    )
+    return (
+        "count(DISTINCT CASE WHEN "
+        f"{full_text_column} IS NULL AND {title_abstract_column} IS NULL THEN NULL "
+        f"ELSE {signature} END) > 1"
+    )
+
+
+def run_conclusion(
+    full_text_decision: object, title_abstract_decision: object
+) -> tuple[object, object] | None:
+    """The stage pair a run concluded, or ``None`` when the run decided nothing yet.
+
+    The Python form of the SQL above, so the reconciler groups runs exactly the way the
+    predicate does.
+    """
+
+    if full_text_decision is None and title_abstract_decision is None:
+        return None
+    return (title_abstract_decision, full_text_decision)
+

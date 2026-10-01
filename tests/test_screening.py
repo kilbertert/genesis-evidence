@@ -144,3 +144,48 @@ def test_no_store_restates_a_screening_predicate_inline(path: str) -> None:
 
     # the immutability walk must not be re-spelled across line breaks either
     assert "FROM evidence_profile_results epr" not in source, f"{path} restates a profile probe"
+
+
+def test_conflict_sql_and_python_agree_on_every_reachable_matrix() -> None:
+    """The SQL predicate and the Python form are two implementations of one rule.
+
+    The ledger reconciler groups runs in Python; the topic-closure gate groups them in SQL.
+    If the two disagree the reconciler will normalize a state closure refuses (or the
+    reverse), which is exactly the drift #208 is about.
+    """
+
+    import itertools
+    import sqlite3
+
+    from genesis_evidence.core.store.screening import run_conclusion, screening_conflict_sql
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        "CREATE TABLE cp(paper_id TEXT, title_abstract_decision TEXT, full_text_decision TEXT);"
+    )
+    body = screening_conflict_sql(
+        "cp.paper_id", "cp.title_abstract_decision", "cp.full_text_decision"
+    )
+    values = [None, "included", "excluded"]
+    checked = 0
+    for left in itertools.product(values, repeat=2):
+        for right in itertools.product(values, repeat=2):
+            connection.execute("DELETE FROM cp")
+            for title, full_text in (left, right):
+                connection.execute("INSERT INTO cp VALUES('p', ?, ?)", (title, full_text))
+            by_sql = connection.execute(
+                f"SELECT count(*) > 0 FROM (SELECT 1 FROM cp WHERE paper_id = 'p' "
+                f"GROUP BY paper_id HAVING {body})"
+            ).fetchone()[0]
+            conclusions = {
+                conclusion
+                for title, full_text in (left, right)
+                if (conclusion := run_conclusion(full_text, title)) is not None
+            }
+            by_python = len(conclusions) > 1
+            assert bool(by_sql) == by_python, (
+                f"SQL says {bool(by_sql)}, Python says {by_python} for "
+                f"{left} vs {right}"
+            )
+            checked += 1
+    assert checked == 81
