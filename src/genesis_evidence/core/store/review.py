@@ -28,6 +28,13 @@ from ...review.scope import (
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
 from .database import Database
+from .retirement import (
+    PUBLISHED_STATUSES,
+    SUPERSEDABLE_STATUSES,
+    _in,
+    retire_cards_for_claims,
+    retire_cards_for_paper,
+)
 
 
 class ReviewStore:
@@ -402,15 +409,7 @@ class ReviewStore:
                 """,
                 ("reviewed" if decision == "approved" else "rejected", claim_id),
             )
-            stale_cards = connection.execute(
-                """
-                UPDATE knowledge_cards SET status = 'stale'
-                WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
-                    SELECT card_id FROM card_claims WHERE claim_id = ?
-                )
-                """,
-                (claim_id,),
-            ).rowcount
+            stale_cards = retire_cards_for_claims(connection, (claim_id,))
             self._audit(
                 connection,
                 "claim",
@@ -588,13 +587,13 @@ class ReviewStore:
             profile_id = str(uuid.uuid4())
             dimensions = _synthesis_dimensions(picots, scope_label)
             predecessors = connection.execute(
-                """
+                f"""
                 SELECT kc.id, kc.status FROM knowledge_cards kc
                 JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
                 WHERE kc.condition_code = ? AND ep.scope_key = ?
-                    AND kc.status IN ('draft', 'in_review', 'approved')
+                    AND kc.status IN ({_in(len(SUPERSEDABLE_STATUSES))})
                 """,
-                (condition_code, scope_key),
+                (condition_code, scope_key, *SUPERSEDABLE_STATUSES),
             ).fetchall()
             if predecessors:
                 connection.execute(
@@ -735,14 +734,15 @@ class ReviewStore:
                         "patient-visible context cards require low, moderate, or high certainty"
                     )
                 connection.execute(
-                    """
+                    f"""
                     UPDATE knowledge_cards SET status = 'stale'
-                    WHERE condition_code = ? AND status = 'published' AND id <> ?
+                    WHERE condition_code = ? AND status IN ({_in(len(PUBLISHED_STATUSES))})
+                        AND id <> ?
                         AND evidence_profile_id IN (
                             SELECT id FROM evidence_profiles WHERE scope_key = ?
                         )
                     """,
-                    (card["condition_code"], card_id, card["scope_key"]),
+                    (card["condition_code"], *PUBLISHED_STATUSES, card_id, card["scope_key"]),
                 )
             connection.execute(
                 """
@@ -1526,16 +1526,7 @@ class ReviewStore:
 
     @staticmethod
     def _stale_cards_for_paper(connection, paper_id: str) -> int:
-        return connection.execute(
-            """
-            UPDATE knowledge_cards SET status = 'stale'
-            WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
-                SELECT cc.card_id FROM card_claims cc
-                JOIN claims c ON c.id = cc.claim_id WHERE c.paper_id = ?
-            )
-            """,
-            (paper_id,),
-        ).rowcount
+        return retire_cards_for_paper(connection, paper_id)
 
     @staticmethod
     def _audit(
