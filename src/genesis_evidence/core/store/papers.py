@@ -17,6 +17,7 @@ from ...literature.models import PaperRecord, SourceName
 from .database import Database
 from .retirement import retire_cards_for_paper
 from .screening import (
+    collapsed_decision,
     not_excluded_sql,
     paper_used_by_profile_sql,
     profiled_papers_sql,
@@ -621,7 +622,21 @@ class PaperStore:
                 full_text = {
                     str(row["full_text_decision"]) for row in records if row["full_text_decision"]
                 }
-                if len(titles) > 1 or len(full_text) > 1:
+                # The collapsed decision, not the two stage sets: see screening.py for why
+                # comparing the sets separately would let a run that reached full-text
+                # `excluded` be treated as agreeing with a run that never reached a verdict.
+                # Runs with no decision at all collapse to `None` and are skipped, exactly as
+                # SQL `count(DISTINCT ...)` skips NULL — otherwise "one run screened, one not
+                # yet" would read as a conflict and stop the normal propagation below.
+                collapsed = {
+                    decided
+                    for row in records
+                    if (decided := collapsed_decision(
+                        row["full_text_decision"], row["title_abstract_decision"]
+                    ))
+                    is not None
+                }
+                if len(collapsed) > 1:
                     conflicts.append(
                         {
                             "paper_id": paper_id,

@@ -651,3 +651,96 @@ def test_reconcile_topic_ledger_preserves_title_exclusion_reason(tmp_path) -> No
         == ("excluded", "wrong_population")
         for row in store.list_topic_ledger(topic_id)
     )
+
+
+def test_reconcile_does_not_fabricate_a_full_text_verdict_for_an_unscreened_run(tmp_path) -> None:
+    """The conflict rule is the *collapsed* one, shared with the closure gate.
+
+    A run that reached full-text `excluded` and a run that never got past an undecided full
+    text are different conclusions for the paper. Comparing the title set and the full-text
+    set separately let the second run's NULL drop out, the two look identical, and
+    reconciliation then copied `full_text_decision = 'excluded'` onto a run that was never
+    retrieved — asserting a full-text verdict for evidence nobody screened. This is #208.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database, screened=False)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (first_run, paper_id),
+        )
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included', "
+            "full_text_decision = 'excluded', primary_exclusion_reason = 'wrong_population' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (second_run, paper_id),
+        )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert len(result["conflicts"]) == 1
+    assert result["normalized_records"] == 0
+    first = next(
+        row for row in store.list_topic_ledger(topic_id) if row["run_id"] == first_run
+    )
+    assert first["full_text_decision"] is None, (
+        "reconciliation must not assert a full-text verdict for a run nobody screened"
+    )
+
+
+def test_the_two_conflict_readers_agree_on_a_divergent_matrix(tmp_path) -> None:
+    """`reconcile_topic_ledger` and `_require_complete_topic` must pick the same matrices.
+
+    They used to disagree on 144 reachable duplicate-run matrices; on 64 of them the closure
+    gate's conflict branch was the only blocker, so reconciliation could normalize away a
+    state closure would refuse.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database, screened=False)
+    first_run = store.start_collection(topic_id=topic_id, source="test", query="one")
+    second_run = store.start_collection(topic_id=topic_id, source="test", query="two")
+    for run_id in (first_run, second_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (first_run, paper_id),
+        )
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included', "
+            "full_text_decision = 'excluded', primary_exclusion_reason = 'wrong_population' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (second_run, paper_id),
+        )
+
+    seen_by_reconcile = bool(store.reconcile_topic_ledger(topic_id, reviewer="r")["conflicts"])
+    # Rebuild the divergent state: reconcile left it alone, so it still holds.
+    with database.connect() as connection:
+        seen_by_closure = connection.execute(
+            """
+            SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
+            WHERE cr.topic_id = ? AND cr.status = 'completed'
+            GROUP BY cp.paper_id
+            HAVING count(DISTINCT COALESCE(cp.full_text_decision, cp.title_abstract_decision)) > 1
+            LIMIT 1
+            """,
+            (topic_id,),
+        ).fetchone() is not None
+
+    assert seen_by_reconcile == seen_by_closure is True

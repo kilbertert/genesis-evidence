@@ -17,6 +17,9 @@ Changing which default applies where is a behavioural change with its own eviden
 this refactor's job. What this module removes is drift in *spelling* — a decision value
 renamed in one call site and missed in its eleven siblings.
 
+This module also owns the duplicate-run **conflict definition** (below), which used to be
+spelled two different ways in the ledger reconciler and the topic-closure gate.
+
 Each helper takes the SQL alias its caller uses, so call sites keep their own FROM/JOIN
 shape and only the predicate is shared.
 """
@@ -85,12 +88,51 @@ def profiled_papers_sql() -> str:
     """
 
 
-# NOT unified here, deliberately: `_require_complete_topic` calls a duplicate-run matrix
-# *conflicting* when
+# --- the duplicate-run conflict definition (one owner) ---------------------------------
+#
+# "Conflicting" is defined once, using the *collapsed* value: a paper's decision for a run is
+# its full-text decision if it has one, otherwise its title/abstract decision. Two completed
+# runs conflict when that collapsed value differs between them. In SQL:
+#
 #   count(DISTINCT COALESCE(full_text_decision, title_abstract_decision)) > 1
-# while `reconcile_topic_ledger` compares the set of title_abstract_decisions and the set of
-# full_text_decisions separately. Those disagree on a reachable matrix — one run with
-# title_abstract=included (full text undecided) beside another with full_text=excluded is a
-# conflict under the first definition and not under the second. Unifying them changes an
-# observable outcome, so it needs its own decision and its own evidence; both keep their
-# current definitions here.
+#
+# Why this and not the obvious alternative of comparing the title set and the full-text set
+# separately: that alternative misses a real disagreement. A run that reached
+# full-text `excluded` and a run that never got past an undecided full text are, *for the
+# paper*, two different conclusions — the second says the screening never reached a verdict,
+# the first says it reached "exclude". Under the separate-set rule the second run's `NULL`
+# simply drops out of the set, the two look identical, and reconciliation then copies
+# `full_text_decision = 'excluded'` onto a run that was never retrieved — asserting a
+# full-text verdict for evidence nobody screened. The collapsed rule treats the undecided run
+# as its own conclusion and refuses to guess, which is the fail-closed direction.
+#
+# The two rules disagree on 144 of the reachable duplicate-run matrices (exhaustive
+# enumeration; 64 of those have closure's conflict branch as the only blocker). Recorded in
+# #208; this module is the single owner of the chosen rule.
+
+
+def screening_conflict_sql(
+    paper_id_column: str,
+    title_abstract_column: str,
+    full_text_column: str,
+) -> str:
+    """SQL ``HAVING``/predicate body that is true when a paper's runs conflict.
+
+    Consumed by both the ledger reconciler and the topic-closure gate, so the two cannot
+    disagree about which matrices conflict. The caller supplies the grouped column names.
+    """
+
+    return (
+        f"count(DISTINCT COALESCE({full_text_column}, {title_abstract_column})) > 1"
+    )
+
+
+def collapsed_decision(full_text_decision: object, title_abstract_decision: object) -> object:
+    """The paper's single decision for one run: full text if present, else title/abstract.
+
+    The Python form of the ``COALESCE`` above, so the reconciler groups runs exactly the way
+    the SQL predicate does.
+    """
+
+    return full_text_decision if full_text_decision is not None else title_abstract_decision
+
