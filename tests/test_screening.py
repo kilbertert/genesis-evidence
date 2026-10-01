@@ -189,3 +189,73 @@ def test_conflict_sql_and_python_agree_on_every_reachable_matrix() -> None:
             )
             checked += 1
     assert checked == 81
+
+
+def test_structured_results_sql_and_python_agree_on_every_matrix() -> None:
+    """The queue runs this check in SQL; the detail runs it in Python.
+
+    If they disagree the queue advertises work the detail refuses — the #211 mismatch.
+    Exhaustive over one and two claims with every required field filled or blank.
+    """
+
+    import itertools
+    import sqlite3
+
+    from genesis_evidence.core.store.screening import (
+        RESULT_FIELDS,
+        has_structured_results,
+        structured_results_sql,
+    )
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE papers(id TEXT);
+        CREATE TABLE claims(id TEXT, paper_id TEXT, result_id TEXT,
+            evidence_text TEXT, locator TEXT);
+        CREATE TABLE results(id TEXT, population TEXT, ingredient_name TEXT,
+            ingredient_form TEXT, dose TEXT, comparator TEXT, outcome TEXT,
+            timepoint TEXT, effect_estimate TEXT, statistical_details TEXT);
+        INSERT INTO papers VALUES('p');
+        """
+    )
+    query = "SELECT " + structured_results_sql("'p'")
+    blanks = [True, False]
+    checked = 0
+
+    for count in (0, 1, 2):
+        for mask in itertools.product(blanks, repeat=len(RESULT_FIELDS) + 2):
+            connection.execute("DELETE FROM claims")
+            connection.execute("DELETE FROM results")
+            claims: list[dict[str, object]] = []
+            for index in range(count):
+                result_id = f"r{index}"
+                values = {
+                    field: ("" if mask[position] else f"v{field}")
+                    for position, field in enumerate(RESULT_FIELDS)
+                }
+                connection.execute(
+                    "INSERT INTO results VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (result_id, *(values[field] for field in RESULT_FIELDS)),
+                )
+                evidence = "" if mask[len(RESULT_FIELDS)] else "evidence"
+                locator = "" if mask[len(RESULT_FIELDS) + 1] else "locator"
+                connection.execute(
+                    "INSERT INTO claims VALUES(?,?,?,?,?)",
+                    (f"c{index}", "p", result_id, evidence, locator),
+                )
+                claims.append(
+                    {
+                        "result_id": result_id,
+                        "evidence_text": evidence,
+                        "locator": locator,
+                        **values,
+                    }
+                )
+            by_sql = bool(connection.execute(query).fetchone()[0])
+            by_python = has_structured_results(claims)
+            assert by_sql == by_python, (
+                f"SQL says {by_sql}, Python says {by_python} for count={count} mask={mask}"
+            )
+            checked += 1
+    assert checked >= 4000

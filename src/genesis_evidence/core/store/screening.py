@@ -185,3 +185,58 @@ def run_conclusion(
         return None
     return (title_abstract_decision, full_text_decision)
 
+
+# --- the structured-results check (one owner) -------------------------------------------
+#
+# "Has this paper produced checkable structured evidence?" is asked by the review detail and
+# must be answered the same way by the queue projection, which runs it in SQL. A paper with
+# an extraction but no claims is not `ready_for_automation`: there is nothing to automate
+# over, and `auto_review_paper` answers `attention_required`. Before this the queue fell
+# through to `ready_for_automation` while the detail said `blocked` (#211).
+
+RESULT_FIELDS: tuple[str, ...] = (
+    "population",
+    "ingredient_name",
+    "ingredient_form",
+    "dose",
+    "comparator",
+    "outcome",
+    "timepoint",
+    "effect_estimate",
+    "statistical_details",
+)
+
+# Carried by the claim row itself rather than by its result.
+CLAIM_FIELDS: tuple[str, ...] = ("result_id", "evidence_text", "locator")
+
+
+def structured_results_sql(paper_id_expression: str) -> str:
+    """SQL predicate true when a paper has at least one fully-populated claim.
+
+    Self-contained: it joins its own `claims`/`results`, so the caller only supplies the
+    expression identifying the paper. Only the emptiness rules live here.
+    """
+
+    required = [
+        f"trim(coalesce(sc.{field}, '')) <> ''" for field in CLAIM_FIELDS
+    ] + [f"trim(coalesce(sr.{field}, '')) <> ''" for field in RESULT_FIELDS]
+    return (
+        "EXISTS (SELECT 1 FROM claims sc JOIN results sr ON sr.id = sc.result_id "
+        f"WHERE sc.paper_id = {paper_id_expression} AND " + " AND ".join(required) + ")"
+    )
+
+
+def has_structured_results(claims: list[dict[str, object]]) -> bool:
+    """The Python form: at least one claim, every one carrying all required fields.
+
+    Mirrors :func:`structured_results_sql`. The detail loads each claim with its result's
+    fields flattened onto the same dict, so one lookup covers both groups.
+    """
+
+    if not claims:
+        return False
+    return all(
+        all(str(claim.get(field) or "").strip() for field in (*CLAIM_FIELDS, *RESULT_FIELDS))
+        for claim in claims
+    )
+
