@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import unicodedata
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.source_excerpt import (
+    Excerpt,
+    attest_segments,
+    normalized_text,
+    segments_from_document,
+)
 from ..core.store import ObjectStore, PaperStore, ReviewStore
 from ..core.store.review import _source_based_consistency_resolution
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
@@ -811,15 +816,16 @@ class EvidenceReviewService:
             document = self._jats.parse(self.objects.read(object_key)).to_dict()
         except (JatsParseError, OSError, ValueError):
             return None
-        source_segments = [_source_text(value) for value in _string_values(document)]
+        source_segments = segments_from_document(document)
         claims = [claim for claim in item.get("claims", []) if isinstance(claim, dict)]
         decisions: list[str] = []
         rejected_claim_ids: set[str] = set()
         for issue in issues:
             fragments = _source_evidence_fragments(issue.get("evidence"))
-            if not fragments or not all(
-                any(fragment in segment for segment in source_segments) for fragment in fragments
-            ):
+            if not fragments or not attest_segments(
+                source_segments,
+                [Excerpt(field="fragment", text=fragment) for fragment in fragments],
+            ).ok:
                 return None
             if not _primary_extraction_supports_fragments(item, issue, fragments):
                 return None
@@ -1038,13 +1044,13 @@ def _automatic_source_verification(
 
     failures: list[str] = []
     result_id = str(claim.get("result_id") or "").strip()
-    evidence = _source_text(claim.get("evidence_text"))
-    locator = _source_text(claim.get("locator"))
+    evidence = normalized_text(claim.get("evidence_text"))
+    locator = normalized_text(claim.get("locator"))
     if not result_id:
         failures.append("missing structured Result")
     if not evidence or not locator:
         failures.append("missing Claim evidence or locator")
-    if evidence != _source_text(claim.get("result_evidence_text")) or locator != _source_text(
+    if evidence != normalized_text(claim.get("result_evidence_text")) or locator != normalized_text(
         claim.get("result_locator")
     ):
         failures.append("Claim does not match its structured Result source")
@@ -1067,8 +1073,8 @@ def _automatic_source_verification(
     extracted_claims = extraction.get("claims", []) if isinstance(extraction, dict) else []
     if not any(
         isinstance(extracted, dict)
-        and evidence in _source_text(extracted.get("evidence"))
-        and locator == _source_text(extracted.get("locator"))
+        and evidence in normalized_text(extracted.get("evidence"))
+        and locator == normalized_text(extracted.get("locator"))
         for extracted in extracted_claims
     ):
         failures.append("evidence excerpt is absent from the primary stored extraction")
@@ -1079,10 +1085,6 @@ def _automatic_source_verification(
         "evidence_source": "paper_extractions.extraction_json",
         "failures": failures,
     }
-
-
-def _source_text(value: object) -> str:
-    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
 
 
 def _source_evidence_fragments(value: object) -> list[str]:
@@ -1111,20 +1113,10 @@ def _source_evidence_fragments(value: object) -> list[str]:
         candidates = [raw]
     fragments: list[str] = []
     for candidate in candidates:
-        fragment = _source_text(candidate).strip(" \"'“”‘’。.；;")
+        fragment = normalized_text(candidate).strip(" \"'“”‘’。.；;")
         if len(fragment) >= 8 and fragment not in fragments:
             fragments.append(fragment)
     return fragments
-
-
-def _string_values(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [text for item in value.values() for text in _string_values(item)]
-    if isinstance(value, (list, tuple)):
-        return [text for item in value for text in _string_values(item)]
-    return []
 
 
 def _primary_extraction_supports_fragments(
@@ -1152,8 +1144,8 @@ def _claims_matching_fragments(
         claim
         for claim in claims
         if any(
-            fragment in _source_text(claim.get("evidence_text"))
-            or fragment in _source_text(claim.get("result_evidence_text"))
+            fragment in normalized_text(claim.get("evidence_text"))
+            or fragment in normalized_text(claim.get("result_evidence_text"))
             for fragment in fragments
         )
     ]

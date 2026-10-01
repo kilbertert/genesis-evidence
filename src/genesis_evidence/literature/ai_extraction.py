@@ -5,9 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-import re
 import time
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -16,6 +14,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.conditions import CONDITION_BY_CODE, CONDITIONS
+from ..core.source_excerpt import Excerpt, attest
 from .models import PaperRecord
 
 DEFAULT_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
@@ -524,7 +523,6 @@ def _normalize_consistency_payload(payload: dict[str, object]) -> dict[str, obje
 
 
 def _require_source_evidence(extraction: PaperExtraction, document: dict[str, object]) -> None:
-    source_segments = [_normalized_text(value) for value in _string_values(document)]
     evidence = [
         (f"condition_candidates[{index}].evidence", candidate.evidence)
         for index, candidate in enumerate(extraction.condition_candidates)
@@ -538,9 +536,12 @@ def _require_source_evidence(extraction: PaperExtraction, document: dict[str, ob
         for index, claim in enumerate(extraction.claims)
     )
     missing = [
-        (path, value)
-        for path, value in evidence
-        if not any(_source_evidence_matches(value, segment) for segment in source_segments)
+        (excerpt.field, excerpt.text)
+        for excerpt in attest(
+            document,
+            [Excerpt(field=path, text=value) for path, value in evidence],
+            tolerance="citations",
+        ).missing
     ]
     if missing:
         details = "; ".join(
@@ -551,43 +552,6 @@ def _require_source_evidence(extraction: PaperExtraction, document: dict[str, ob
         raise PaperAnalysisError(
             f"provider cited evidence that is not present in the full text: {details}"
         )
-
-
-def _normalized_text(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
-
-
-_INLINE_CITATION_RE = re.compile(
-    r"\((?:fig(?:ure)?|table|tbl\.?|appendix|supplement(?:ary)?)\b[^)]{0,160}\)",
-    re.IGNORECASE,
-)
-
-
-def _source_evidence_matches(evidence: str, source_segment: str) -> bool:
-    """Match verbatim evidence when a publisher inserts an inline figure/table cite."""
-
-    normalized_evidence = _citation_spacing(_normalized_text(evidence))
-    if normalized_evidence in source_segment:
-        return True
-    evidence_without_citation = _citation_spacing(
-        _INLINE_CITATION_RE.sub(" ", normalized_evidence)
-    )
-    source_without_citation = _citation_spacing(_INLINE_CITATION_RE.sub(" ", source_segment))
-    return evidence_without_citation in source_without_citation
-
-
-def _citation_spacing(value: str) -> str:
-    return re.sub(r"\s+([,.;:!?])", r"\1", value)
-
-
-def _string_values(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [text for item in value.values() for text in _string_values(item)]
-    if isinstance(value, (list, tuple)):
-        return [text for item in value for text in _string_values(item)]
-    return []
 
 
 _EXTRACTION_PROMPT = """\
