@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
+from genesis_evidence.core.store.screening import screening_conflict_sql
 from genesis_evidence.review.service import EvidenceReviewService
 
 from .test_review_workflow import (
@@ -733,14 +734,62 @@ def test_the_two_conflict_readers_agree_on_a_divergent_matrix(tmp_path) -> None:
     # Rebuild the divergent state: reconcile left it alone, so it still holds.
     with database.connect() as connection:
         seen_by_closure = connection.execute(
-            """
+            f"""
             SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
             WHERE cr.topic_id = ? AND cr.status = 'completed'
             GROUP BY cp.paper_id
-            HAVING count(DISTINCT COALESCE(cp.full_text_decision, cp.title_abstract_decision)) > 1
+            HAVING {screening_conflict_sql(
+                "cp.paper_id", "cp.title_abstract_decision", "cp.full_text_decision"
+            )}
             LIMIT 1
             """,
             (topic_id,),
         ).fetchone() is not None
 
     assert seen_by_reconcile == seen_by_closure is True
+
+
+def test_reconcile_preserves_mixed_stage_exclusions_without_rewriting(tmp_path) -> None:
+    """Two runs that excluded at *different stages* must not be merged into one.
+
+    A title-stage exclusion carries no full-text verdict; a full-text exclusion follows
+    title-stage inclusion. Collapsing both to a single value makes them look identical and
+    reconciliation then overwrites both rows — erasing the title-stage exclusion and its
+    reason. A run's conclusion is its stage pair, so these two conflict and are left alone.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id, _ = _review_case(database, screened=False)
+    title_run = store.start_collection(topic_id=topic_id, source="test", query="title")
+    full_text_run = store.start_collection(topic_id=topic_id, source="test", query="full")
+    for run_id in (title_run, full_text_run):
+        store.add_to_collection(run_id, paper_id, position=1)
+        store.finish_collection(run_id, status="completed", detail={})
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'excluded', "
+            "full_text_decision = NULL, primary_exclusion_reason = 'wrong_population' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (title_run, paper_id),
+        )
+        connection.execute(
+            "UPDATE collection_papers SET title_abstract_decision = 'included', "
+            "full_text_decision = 'excluded', primary_exclusion_reason = 'wrong_outcome' "
+            "WHERE run_id = ? AND paper_id = ?",
+            (full_text_run, paper_id),
+        )
+
+    result = store.reconcile_topic_ledger(topic_id, reviewer="ai:ledger-reconciler")
+
+    assert len(result["conflicts"]) == 1
+    assert result["normalized_records"] == 0
+    rows = {row["run_id"]: row for row in store.list_topic_ledger(topic_id)}
+    assert rows[title_run]["primary_exclusion_reason"] == "wrong_population"
+    assert rows[title_run]["full_text_decision"] is None
+    assert rows[title_run]["title_abstract_decision"] == "excluded"
+    assert rows[full_text_run]["primary_exclusion_reason"] == "wrong_outcome"
+    assert rows[full_text_run]["full_text_decision"] == "excluded"
+    assert rows[full_text_run]["title_abstract_decision"] == "included"

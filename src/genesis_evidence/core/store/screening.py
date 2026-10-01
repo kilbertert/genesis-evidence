@@ -90,25 +90,33 @@ def profiled_papers_sql() -> str:
 
 # --- the duplicate-run conflict definition (one owner) ---------------------------------
 #
-# "Conflicting" is defined once, using the *collapsed* value: a paper's decision for a run is
-# its full-text decision if it has one, otherwise its title/abstract decision. Two completed
-# runs conflict when that collapsed value differs between them. In SQL:
+# A paper collected by several completed runs must be reconciled so the runs agree. That is
+# only legitimate while the runs are genuinely the *same* screening record seen twice: one
+# run carries a decision and the others are still blank. Once two runs reached **different
+# stages**, each carries a partial history of its own, no "canonical" value exists, and
+# reconciliation must refuse rather than invent one.
 #
-#   count(DISTINCT COALESCE(full_text_decision, title_abstract_decision)) > 1
+# A run's conclusion is therefore its stage pair (title_abstract_decision,
+# full_text_decision) — not a single collapsed value. Two runs conflict when they carry two
+# *different* conclusions. A run with no decision at all is not a conclusion; it is a blank
+# that may be filled from a sibling, which is the ordinary duplicate-propagation case.
 #
-# Why this and not the obvious alternative of comparing the title set and the full-text set
-# separately: that alternative misses a real disagreement. A run that reached
-# full-text `excluded` and a run that never got past an undecided full text are, *for the
-# paper*, two different conclusions — the second says the screening never reached a verdict,
-# the first says it reached "exclude". Under the separate-set rule the second run's `NULL`
-# simply drops out of the set, the two look identical, and reconciliation then copies
-# `full_text_decision = 'excluded'` onto a run that was never retrieved — asserting a
-# full-text verdict for evidence nobody screened. The collapsed rule treats the undecided run
-# as its own conclusion and refuses to guess, which is the fail-closed direction.
+# Both simpler rules were tried and each fails on a reachable matrix (both recorded in #208
+# and its follow-up):
 #
-# The two rules disagree on 144 of the reachable duplicate-run matrices (exhaustive
-# enumeration; 64 of those have closure's conflict branch as the only blocker). Recorded in
-# #208; this module is the single owner of the chosen rule.
+#   comparing the two stage sets separately
+#       run1 = (title included, full text undecided), run2 = (title included, full text
+#       excluded) → the undecided run's NULL drops out of both sets, the two look identical,
+#       and reconciliation copies `full_text_decision = 'excluded'` onto a run that was never
+#       retrieved: a full-text verdict for evidence nobody screened.
+#
+#   collapsing the pair to `COALESCE(full_text, title_abstract)`
+#       run A = (title excluded, full text undecided), run B = (title included, full text
+#       excluded) → both collapse to 'excluded', so reconciliation overwrites both rows and
+#       **erases run A's title-stage exclusion** together with its reason.
+#
+# The stage-pair rule catches both: the pairs differ in each case. It is a strict superset of
+# the two, so it can only add refusals, never remove one — the fail-closed direction.
 
 
 def screening_conflict_sql(
@@ -120,19 +128,33 @@ def screening_conflict_sql(
 
     Consumed by both the ledger reconciler and the topic-closure gate, so the two cannot
     disagree about which matrices conflict. The caller supplies the grouped column names.
+
+    A run with no decision at all collapses to SQL NULL and is skipped by
+    ``count(DISTINCT ...)``, so an unscreened duplicate is a blank to fill, not a conflict.
     """
 
+    del paper_id_column  # the caller already groups by it
+    signature = (
+        f"COALESCE({full_text_column}, '') || '\x1f' || "
+        f"COALESCE({title_abstract_column}, '')"
+    )
     return (
-        f"count(DISTINCT COALESCE({full_text_column}, {title_abstract_column})) > 1"
+        "count(DISTINCT CASE WHEN "
+        f"{full_text_column} IS NULL AND {title_abstract_column} IS NULL THEN NULL "
+        f"ELSE {signature} END) > 1"
     )
 
 
-def collapsed_decision(full_text_decision: object, title_abstract_decision: object) -> object:
-    """The paper's single decision for one run: full text if present, else title/abstract.
+def run_conclusion(
+    full_text_decision: object, title_abstract_decision: object
+) -> tuple[object, object] | None:
+    """The stage pair a run concluded, or ``None`` when the run decided nothing yet.
 
-    The Python form of the ``COALESCE`` above, so the reconciler groups runs exactly the way
-    the SQL predicate does.
+    The Python form of the SQL above, so the reconciler groups runs exactly the way the
+    predicate does.
     """
 
-    return full_text_decision if full_text_decision is not None else title_abstract_decision
+    if full_text_decision is None and title_abstract_decision is None:
+        return None
+    return (title_abstract_decision, full_text_decision)
 
