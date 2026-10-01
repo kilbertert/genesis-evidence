@@ -15,6 +15,7 @@ from pathlib import Path
 from ...literature.ai_extraction import CheckedPaperExtraction
 from ...literature.models import PaperRecord, SourceName
 from .database import Database
+from .retirement import retire_cards_for_paper
 
 SEARCH_STREAMS = {
     "effect",
@@ -1043,17 +1044,7 @@ class PaperStore:
             )
             stale_cards = 0
             if status != "clear":
-                stale_cards = connection.execute(
-                    """
-                    UPDATE knowledge_cards SET status = 'stale'
-                    WHERE status IN ('draft', 'in_review', 'approved', 'published') AND id IN (
-                        SELECT cc.card_id FROM card_claims cc
-                        JOIN claims c ON c.id = cc.claim_id
-                        WHERE c.paper_id = ?
-                    )
-                    """,
-                    (paper_id,),
-                ).rowcount
+                stale_cards = retire_cards_for_paper(connection, paper_id)
             self._audit(
                 connection,
                 "paper",

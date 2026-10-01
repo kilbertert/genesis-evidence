@@ -10,6 +10,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ..conditions import CONDITIONS, ConditionDefinition
+from .retirement import (
+    retire_cards_for_claims,
+    retire_ungoverned_profile_cards,
+)
 from .schema import SCHEMA
 
 
@@ -239,17 +243,7 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
                 for row in legacy_reviews
             ],
         )
-    connection.execute(
-        """
-        UPDATE knowledge_cards SET status = 'stale'
-        WHERE status = 'published' AND (
-            evidence_profile_id IS NULL OR NOT EXISTS (
-                SELECT 1 FROM evidence_profiles ep
-                WHERE ep.id = knowledge_cards.evidence_profile_id AND ep.topic_id IS NOT NULL
-            )
-        )
-        """
-    )
+    retire_ungoverned_profile_cards(connection)
     _migrate_legacy_shared_results(connection)
 
 
@@ -350,17 +344,9 @@ def _migrate_legacy_shared_results(connection: sqlite3.Connection) -> None:
                         profile_ref["interpretation"]
                     )
 
-        stale_cards = connection.execute(
-            """
-            UPDATE knowledge_cards SET status = 'stale'
-            WHERE status IN ('draft', 'in_review', 'approved', 'published')
-              AND id IN (
-                  SELECT card_id FROM card_claims
-                  WHERE claim_id IN ({})
-              )
-            """.format(",".join("?" for _ in claims)),
-            [claim["id"] for claim in claims],
-        ).rowcount
+        stale_cards = retire_cards_for_claims(
+            connection, [claim["id"] for claim in claims]
+        )
 
         for row in result_rows:
             connection.execute(
