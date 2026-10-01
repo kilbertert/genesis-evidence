@@ -106,8 +106,7 @@ def attest_segments(
     missing: list[Excerpt] = []
     for excerpt in excerpts:
         found = any(
-            _excerpt_in_segment(excerpt.text, segment, tolerance=tolerance)
-            for segment in segments
+            _excerpt_in_segment(excerpt.text, segment, tolerance=tolerance) for segment in segments
         )
         (attested if found else missing).append(excerpt)
     return AttestationResult(attested=tuple(attested), missing=tuple(missing))
@@ -118,14 +117,26 @@ def _excerpt_in_segment(excerpt: str, segment: str, *, tolerance: CitationTolera
     # come from a non-empty validated field, so this is reachable only by a caller that
     # passes an unvalidated string; treating it as a miss would change today's verdicts.
     # ponytail: no empty/malformed reason code until a caller can actually produce one.
-    normalized_excerpt = _citation_spacing(normalized_text(excerpt))
-    if normalized_excerpt in segment:
-        return True
+    normalized_excerpt = normalized_text(excerpt)
     if tolerance == "strict":
-        return False
-    without_citation = _citation_spacing(_INLINE_CITATION_RE.sub(" ", normalized_excerpt))
-    segment_without_citation = _citation_spacing(_INLINE_CITATION_RE.sub(" ", segment))
-    return without_citation in segment_without_citation
+        return normalized_excerpt in segment
+    return _tolerant_match(normalized_excerpt, segment)
+
+
+def _tolerant_match(normalized_excerpt: str, segment: str) -> bool:
+    """Containment that survives a publisher-inserted inline figure/table citation.
+
+    ``_citation_spacing`` lives here and only here: it belongs to this tolerant comparison,
+    not to the rule. Applying it in strict mode would accept an excerpt whose punctuation
+    differs from the source — a quote the caller considers ungrounded would start attesting.
+    """
+
+    spaced_excerpt = _citation_spacing(normalized_excerpt)
+    if spaced_excerpt in segment:
+        return True
+    return _citation_spacing(_INLINE_CITATION_RE.sub(" ", spaced_excerpt)) in _citation_spacing(
+        _INLINE_CITATION_RE.sub(" ", segment)
+    )
 
 
 def _citation_spacing(value: str) -> str:

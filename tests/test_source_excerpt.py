@@ -57,6 +57,20 @@ def test_strict_mode_is_the_default() -> None:
     assert not attest(document, [_excerpt("Estimate reported.")]).ok
 
 
+def test_strict_mode_does_not_collapse_punctuation_spacing() -> None:
+    """Punctuation-spacing collapse belongs to the tolerant comparison, not to the rule.
+
+    Strict mode is a bare containment test; folding whitespace before punctuation into it
+    would start attesting excerpts whose punctuation differs from the source.
+    """
+
+    document = {"text": "Reported as 3.5 mmol/L."}
+    spaced = _excerpt("Reported as 3.5 mmol/L .")
+
+    assert not attest(document, [spaced], tolerance="strict").ok
+    assert attest(document, [spaced], tolerance="citations").ok
+
+
 def test_all_or_nothing_is_the_callers_decision_over_one_excerpt_at_a_time() -> None:
     segments = segments_from_document({"text": "alpha beta gamma"})
 
