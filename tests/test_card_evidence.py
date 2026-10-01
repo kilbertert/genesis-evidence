@@ -73,3 +73,29 @@ def test_no_store_restates_a_card_eligibility_criterion_inline(path: str) -> Non
 
 def test_sql_values_escapes_and_quotes_a_tuple() -> None:
     assert sql_values(("a", "b'c")) == "'a', 'b''c'"
+
+
+def test_every_declared_criterion_is_actually_consumed() -> None:
+    """A constant nothing reads is a claim of ownership the code does not honour.
+
+    Declaring a value here implies changing it changes eligibility. A declaration whose
+    consumers still spell the value out inline breaks that promise silently — the edit looks
+    like it took effect and does not.
+    """
+
+    import genesis_evidence.core.store.card_evidence as owner
+
+    declared = [
+        name
+        for name, value in vars(owner).items()
+        if name.isupper() and isinstance(value, (str, tuple))
+    ]
+    assert declared, "the owner declares no criteria"
+
+    callers = "\n".join(
+        (STORE_DIR / path.name).read_text()
+        for path in STORE_DIR.glob("*.py")
+        if path.name != "card_evidence.py"
+    )
+    for name in declared:
+        assert name in callers, f"{name} is declared but no store consumes it"

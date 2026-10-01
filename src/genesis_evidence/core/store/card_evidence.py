@@ -32,10 +32,12 @@ CARD_CLAIM_TYPE = "intervention_effect"
 # high or moderate certainty does not, and the publish gate rejects them outright.
 UNRESOLVED_RISK_LEVELS: tuple[str, ...] = ("high", "critical", "uncertain")
 
-# Paper-level preconditions for any card claim.
-REQUIRED_INTEGRITY_STATUS = "clear"
-PUBLISHABLE_PUBLICATION_STATUS = "formal"
-REQUIRED_ADMISSION_STATUS = "internally_admitted"
+# Deliberately NOT owned here: the paper-level statuses `clear`, `formal`, and
+# `internally_admitted`. They are single-token values that also appear in the admission
+# state machine, the workbench guidance, and the extraction worker — not only in card
+# eligibility. Declaring them here without rewiring all of those would be a claim of
+# ownership that changing the constant would not honour, which is worse than leaving them
+# where they are. The admission and full-text status vocabulary is owned by #160.
 
 
 def sql_values(values: tuple[str, ...]) -> str:
