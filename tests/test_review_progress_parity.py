@@ -39,18 +39,10 @@ def _assert_parity(database: Database, paper_id: str) -> None:
 
 
 def test_parity_after_a_fresh_review_case(tmp_path) -> None:
+    # `_review_case` already completes a topic, so this is the post-completion state.
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
     paper_id, _ = _review_case(database)
-
-    _assert_parity(database, paper_id)
-
-
-def test_parity_once_the_topic_is_complete(tmp_path) -> None:
-    database = Database(tmp_path / "evidence.sqlite3")
-    database.initialize()
-    paper_id, _ = _review_case(database)
-    _complete_topic(database, paper_id)
 
     _assert_parity(database, paper_id)
 
@@ -140,6 +132,29 @@ def test_parity_when_a_screening_exclusion_rejects_the_paper(tmp_path) -> None:
     assert result["decision"] == "excluded"
 
     _assert_parity(database, paper_id)
+
+
+def test_extraction_without_claims_diverges_today(tmp_path) -> None:
+    """A known divergence, pinned so it cannot grow unnoticed.
+
+    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
+    to `ready_for_automation` while `_review_guidance`'s structured-results check reports
+    `blocked`. The queue projection has no equivalent of that check.
+
+    The gate above did not catch this because no fixture produced a claimless extraction —
+    the state has to be built by deleting the claims. Filed as its own defect; this test
+    records the current behaviour rather than asserting the gap is correct, so closing the
+    defect means updating this test deliberately.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("ready_for_automation", "blocked")
 
 
 def test_parity_after_a_named_reviewer_rejects_the_paper(tmp_path) -> None:
