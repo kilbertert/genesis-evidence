@@ -359,3 +359,26 @@ def test_exclusion_outranks_not_retrieved_for_a_mixed_paper(tmp_path) -> None:
     )
     assert result["decision"] == "excluded", "the reviewer and the ledger must name one decision"
     _assert_parity(database, paper_id)
+
+
+def test_parity_for_an_admitted_paper_whose_claims_are_gone(tmp_path) -> None:
+    """Admission does not outrank the structured-results check.
+
+    The admission branch returned `completed` for an `internally_admitted` paper before the
+    structured-results gate was consulted, so a paper admitted earlier and now carrying no
+    claims read done in the queue while the detail reported it blocked.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_admissions SET status = 'internally_admitted' WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+
+    _assert_parity(database, paper_id)
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("blocked", "blocked")

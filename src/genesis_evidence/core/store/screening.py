@@ -211,18 +211,38 @@ CLAIM_FIELDS: tuple[str, ...] = ("result_id", "evidence_text", "locator")
 
 
 def structured_results_sql(paper_id_expression: str) -> str:
-    """SQL predicate true when a paper has at least one fully-populated claim.
+    """SQL predicate true when a paper has claims and **none** of them is under-populated.
 
     Self-contained: it joins its own `claims`/`results`, so the caller only supplies the
-    expression identifying the paper. Only the emptiness rules live here.
+    expression identifying the paper.
+
+    "None incomplete", not "one complete": a paper with one good claim and one missing its
+    dose is not checkable evidence, and the Python side requires every claim. Phrasing it as
+    ``EXISTS (complete claim)`` accepted exactly that mixed case.
+
+    Emptiness is "no character other than whitespace". SQLite's one-argument ``trim()``
+    strips **spaces only**, so it must not stand in for Python's ``str.strip()`` — a field
+    holding a tab would read as present here and absent in Python.
     """
 
-    required = [
-        f"trim(coalesce(sc.{field}, '')) <> ''" for field in CLAIM_FIELDS
-    ] + [f"trim(coalesce(sr.{field}, '')) <> ''" for field in RESULT_FIELDS]
+    def present(alias: str, field: str) -> str:
+        # coalesce: a missing result row leaves the field NULL, and `NULL <> ''` is NULL,
+        # not true — which would let an incomplete claim escape the NOT.
+        return (
+            f"trim(coalesce({alias}.{field}, ''), "
+            "' ' || char(9) || char(10) || char(13)) <> ''"
+        )
+
+    # A claim whose result row is missing is incomplete too, hence the LEFT JOIN.
+    required = [present("sc", field) for field in CLAIM_FIELDS] + [
+        present("sr", field) for field in RESULT_FIELDS
+    ]
     return (
-        "EXISTS (SELECT 1 FROM claims sc JOIN results sr ON sr.id = sc.result_id "
-        f"WHERE sc.paper_id = {paper_id_expression} AND " + " AND ".join(required) + ")"
+        f"(EXISTS (SELECT 1 FROM claims sc WHERE sc.paper_id = {paper_id_expression})"
+        " AND NOT EXISTS (SELECT 1 FROM claims sc"
+        " LEFT JOIN results sr ON sr.id = sc.result_id"
+        f" WHERE sc.paper_id = {paper_id_expression}"
+        f" AND NOT ({' AND '.join(required)})))"
     )
 
 

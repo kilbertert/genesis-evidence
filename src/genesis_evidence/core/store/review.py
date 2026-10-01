@@ -860,15 +860,17 @@ class ReviewStore:
                                 AND cr.status = 'completed' AND et.status = 'locked'
                         ) THEN 'blocked'
                         WHEN pa.status = 'rejected' THEN 'blocked'
+                        -- No checkable structured evidence: there is nothing to automate
+                        -- over, and the detail reports `blocked` for the same reason. Must
+                        -- match `has_structured_results`, which the detail uses (#211), and
+                        -- must sit before the admission branch — an admitted paper whose
+                        -- claims are gone is blocked, not completed.
+                        WHEN pe.id IS NOT NULL AND NOT {structured_results_sql("p.id")}
+                            THEN 'blocked'
                         WHEN pa.status = 'internally_admitted' AND NOT EXISTS (
                             SELECT 1 FROM claims pending
                             WHERE pending.paper_id = p.id AND pending.status = 'candidate'
                         ) THEN 'completed'
-                        -- No checkable structured evidence: there is nothing to automate
-                        -- over, and the detail reports `blocked` for the same reason. Must
-                        -- match `has_structured_results`, which the detail uses (#211).
-                        WHEN pe.id IS NOT NULL AND NOT {structured_results_sql("p.id")}
-                            THEN 'blocked'
                         ELSE 'ready_for_automation'
                     END AS review_state,
                     count(c.id) AS claim_count,

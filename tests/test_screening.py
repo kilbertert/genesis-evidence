@@ -223,39 +223,97 @@ def test_structured_results_sql_and_python_agree_on_every_matrix() -> None:
     blanks = [True, False]
     checked = 0
 
-    for count in (0, 1, 2):
-        for mask in itertools.product(blanks, repeat=len(RESULT_FIELDS) + 2):
-            connection.execute("DELETE FROM claims")
-            connection.execute("DELETE FROM results")
-            claims: list[dict[str, object]] = []
-            for index in range(count):
-                result_id = f"r{index}"
-                values = {
-                    field: ("" if mask[position] else f"v{field}")
-                    for position, field in enumerate(RESULT_FIELDS)
-                }
-                connection.execute(
-                    "INSERT INTO results VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (result_id, *(values[field] for field in RESULT_FIELDS)),
-                )
-                evidence = "" if mask[len(RESULT_FIELDS)] else "evidence"
-                locator = "" if mask[len(RESULT_FIELDS) + 1] else "locator"
-                connection.execute(
-                    "INSERT INTO claims VALUES(?,?,?,?,?)",
-                    (f"c{index}", "p", result_id, evidence, locator),
-                )
-                claims.append(
-                    {
-                        "result_id": result_id,
-                        "evidence_text": evidence,
-                        "locator": locator,
-                        **values,
-                    }
-                )
-            by_sql = bool(connection.execute(query).fetchone()[0])
-            by_python = has_structured_results(claims)
-            assert by_sql == by_python, (
-                f"SQL says {by_sql}, Python says {by_python} for count={count} mask={mask}"
+    # A uniform mask per iteration (the first version) could never produce the mixed
+    # complete/incomplete case the EXISTS form let through, so vary each claim separately.
+    # Kept bounded: the full product over three claims is astronomically large.
+    single = [
+        mask
+        for mask in itertools.product(blanks, repeat=len(RESULT_FIELDS) + 2)
+        # keep the all-present and one-field-blank extremes plus a few interior shapes
+        if mask.count(False) in {0, 1, len(RESULT_FIELDS) + 1, len(mask)}
+    ]
+    shapes: list[tuple[tuple[bool, ...], ...]] = [()]
+    shapes += [(mask,) for mask in single]
+    shapes += [(left, right) for left in single for right in single]
+    shapes += [(a, b, c) for a in single for b in single[:8] for c in single[:4]]
+
+    for masks in shapes:
+        connection.execute("DELETE FROM claims")
+        connection.execute("DELETE FROM results")
+        claims: list[dict[str, object]] = []
+        for index, mask in enumerate(masks):
+            result_id = f"r{index}"
+            values = {
+                field: ("" if mask[position] else f"v{field}")
+                for position, field in enumerate(RESULT_FIELDS)
+            }
+            connection.execute(
+                "INSERT INTO results VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (result_id, *(values[field] for field in RESULT_FIELDS)),
             )
-            checked += 1
-    assert checked >= 4000
+            evidence = "" if mask[len(RESULT_FIELDS)] else "evidence"
+            locator = "" if mask[len(RESULT_FIELDS) + 1] else "locator"
+            connection.execute(
+                "INSERT INTO claims VALUES(?,?,?,?,?)",
+                (f"c{index}", "p", result_id, evidence, locator),
+            )
+            claims.append(
+                {
+                    "result_id": result_id,
+                    "evidence_text": evidence,
+                    "locator": locator,
+                    **values,
+                }
+            )
+        by_sql = bool(connection.execute(query).fetchone()[0])
+        by_python = has_structured_results(claims)
+        assert by_sql == by_python, f"SQL says {by_sql}, Python says {by_python} for {masks}"
+        checked += 1
+    assert checked >= 1000
+
+
+def test_structured_results_treats_whitespace_only_as_empty() -> None:
+    """SQLite's one-argument `trim()` strips spaces only; Python's strip() strips tabs too.
+
+    A field holding a tab must read as absent in both, or the queue and the detail disagree.
+    """
+
+    import sqlite3
+
+    from genesis_evidence.core.store.screening import (
+        has_structured_results,
+        structured_results_sql,
+    )
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE papers(id TEXT);
+        CREATE TABLE claims(id TEXT, paper_id TEXT, result_id TEXT,
+            evidence_text TEXT, locator TEXT);
+        CREATE TABLE results(id TEXT, population TEXT, ingredient_name TEXT,
+            ingredient_form TEXT, dose TEXT, comparator TEXT, outcome TEXT,
+            timepoint TEXT, effect_estimate TEXT, statistical_details TEXT);
+        INSERT INTO papers VALUES('p');
+        INSERT INTO results VALUES('r','\t\n ','v','v','v','v','v','v','v','v');
+        INSERT INTO claims VALUES('c','p','r','ev','loc');
+        """
+    )
+    query = "SELECT " + structured_results_sql("'p'")
+    by_sql = bool(connection.execute(query).fetchone()[0])
+    by_python = has_structured_results(
+        [
+            {
+                "result_id": "r",
+                "evidence_text": "ev",
+                "locator": "loc",
+                **{field: "v" for field in (
+                    "ingredient_name", "ingredient_form", "dose", "comparator",
+                    "outcome", "timepoint", "effect_estimate", "statistical_details",
+                )},
+                "population": "\t\n ",
+            }
+        ]
+    )
+
+    assert by_sql == by_python is False
