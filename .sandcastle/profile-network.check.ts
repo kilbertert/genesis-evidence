@@ -68,10 +68,14 @@ for (const profile of [...LOOPBACK_PROFILES, "claude", "claude-stepfun", undefin
 // green while the relay profile silently lost host networking — the wiring gap
 // this check exists to close. Read the source rather than importing it, so the
 // check stays free of the Sandcastle dependency.
+//
+// The match is **line-anchored** (`^\s*\.\.\.`) and NOT a bare `includes()`: a
+// commented-out `// ...sandboxNetworkOptions(profile),` must not satisfy it, or
+// the check would pass for exactly the edit it is meant to catch.
 const profileSource = readFileSync(join(import.meta.dirname, "profile.ts"), "utf8");
 assert(
-  profileSource.includes("sandboxNetworkOptions(profile)"),
-  "profile.ts must spread sandboxNetworkOptions(profile) into its docker() call",
+  /^\s*\.\.\.sandboxNetworkOptions\(profile\),?\s*$/m.test(profileSource),
+  "profile.ts must spread sandboxNetworkOptions(profile) as a live statement in its docker() call",
 );
 assert(
   !/LOOPBACK_PROFILES/.test(profileSource),
