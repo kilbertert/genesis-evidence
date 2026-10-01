@@ -16,6 +16,11 @@ from ...literature.ai_extraction import CheckedPaperExtraction
 from ...literature.models import PaperRecord, SourceName
 from .database import Database
 from .retirement import retire_cards_for_paper
+from .screening import (
+    not_excluded_sql,
+    paper_used_by_profile_sql,
+    profiled_papers_sql,
+)
 
 SEARCH_STREAMS = {
     "effect",
@@ -385,15 +390,7 @@ class PaperStore:
             if row["run_status"] != "completed" or row["topic_status"] != "locked":
                 raise ValueError("screening requires a completed run for a locked topic")
             if connection.execute(
-                """
-                SELECT 1
-                FROM evidence_profile_results epr
-                JOIN results r ON r.id = epr.result_id
-                JOIN claims c ON c.result_id = r.id
-                JOIN evidence_profiles ep ON ep.id = epr.profile_id
-                WHERE ep.topic_id = ? AND c.paper_id = ?
-                LIMIT 1
-                """,
+                paper_used_by_profile_sql(),
                 (row["topic_id"], paper_id),
             ).fetchone():
                 raise ValueError(
@@ -511,15 +508,7 @@ class PaperStore:
             if row["title_abstract_decision"] != "included":
                 raise ValueError("full-text retrieval requires title/abstract inclusion")
             if connection.execute(
-                """
-                SELECT 1
-                FROM evidence_profile_results epr
-                JOIN results r ON r.id = epr.result_id
-                JOIN claims c ON c.result_id = r.id
-                JOIN evidence_profiles ep ON ep.id = epr.profile_id
-                WHERE ep.topic_id = ? AND c.paper_id = ?
-                LIMIT 1
-                """,
+                paper_used_by_profile_sql(),
                 (row["topic_id"], paper_id),
             ).fetchone():
                 raise ValueError(
@@ -596,14 +585,7 @@ class PaperStore:
             profiled_papers = {
                 str(row["paper_id"])
                 for row in connection.execute(
-                    """
-                    SELECT DISTINCT c.paper_id
-                    FROM evidence_profile_results epr
-                    JOIN evidence_profiles ep ON ep.id = epr.profile_id
-                    JOIN results r ON r.id = epr.result_id
-                    JOIN claims c ON c.result_id = r.id
-                    WHERE ep.topic_id = ?
-                    """,
+                    profiled_papers_sql(),
                     (topic_id,),
                 ).fetchall()
             }
@@ -897,7 +879,7 @@ class PaperStore:
     ) -> int:
         with self.database.transaction() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT job.id, job.paper_id, job.error_class, job.error_message
                 FROM paper_extraction_jobs job
                 WHERE job.status IN ('failed', 'queued')
@@ -916,8 +898,8 @@ class PaperStore:
                         JOIN collection_runs related_run ON related_run.id = cp.run_id
                         WHERE cp.paper_id = job.paper_id
                             AND (? IS NULL OR related_run.topic_id = ?)
-                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
-                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                            AND {not_excluded_sql('cp.title_abstract_decision')}
+                            AND {not_excluded_sql('cp.full_text_decision')}
                     )
                 """,
                 (topic_id, topic_id, topic_id, topic_id),
@@ -957,7 +939,7 @@ class PaperStore:
 
         with self.database.transaction() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT job.id, job.paper_id
                 FROM paper_extraction_jobs job
                 WHERE job.status = 'failed' AND job.error_class = 'ScreeningExcluded'
@@ -972,8 +954,8 @@ class PaperStore:
                         WHERE cp.run_id = job.collection_run_id
                             AND cp.paper_id = job.paper_id
                             AND (? IS NULL OR cr.topic_id = ?)
-                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
-                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                            AND {not_excluded_sql('cp.title_abstract_decision')}
+                            AND {not_excluded_sql('cp.full_text_decision')}
                     )
                 """,
                 (topic_id, topic_id),
@@ -1142,7 +1124,7 @@ class PaperStore:
     def claim_next_extraction_job(self, *, topic_id: str | None = None) -> dict[str, object] | None:
         with self.database.transaction() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT * FROM paper_extraction_jobs
                 WHERE status = 'queued'
                     AND (? IS NULL OR EXISTS (
@@ -1168,8 +1150,8 @@ class PaperStore:
                         JOIN collection_runs eligible_run ON eligible_run.id = cp.run_id
                         WHERE cp.paper_id = paper_extraction_jobs.paper_id
                             AND (? IS NULL OR eligible_run.topic_id = ?)
-                            AND COALESCE(cp.title_abstract_decision, 'included') <> 'excluded'
-                            AND COALESCE(cp.full_text_decision, 'included') <> 'excluded'
+                            AND {not_excluded_sql('cp.title_abstract_decision')}
+                            AND {not_excluded_sql('cp.full_text_decision')}
                     ))
                 ORDER BY CASE WHEN EXISTS (
                     SELECT 1 FROM collection_runs run
