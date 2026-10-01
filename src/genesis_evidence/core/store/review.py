@@ -27,6 +27,12 @@ from ...review.scope import (
 )
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
+from .card_evidence import (
+    CARD_CLAIM_TYPE,
+    EXCLUDED_STUDY_DESIGNS,
+    UNRESOLVED_RISK_LEVELS,
+    sql_values,
+)
 from .database import Database
 from .retirement import (
     PUBLISHED_STATUSES,
@@ -505,19 +511,17 @@ class ReviewStore:
                     "only verified formal publications can support a patient-visible profile"
                 )
             if any(
-                row["corrected_study_design"]
-                in {"animal_study", "in_vitro_study", "case_series", "case_report"}
-                for row in rows
+                row["corrected_study_design"] in EXCLUDED_STUDY_DESIGNS for row in rows
             ):
                 raise ValueError(
                     "mechanism and case-report results cannot support a patient-visible card"
                 )
-            if any(row["candidate_claim_type"] != "intervention_effect" for row in rows):
+            if any(row["candidate_claim_type"] != CARD_CLAIM_TYPE for row in rows):
                 raise ValueError(
                     "only direct intervention-effect results can support a patient-visible card"
                 )
             if profile["certainty"] in {"high", "moderate"} and any(
-                json.loads(row["risk_of_bias_json"])["overall"] in {"high", "critical", "uncertain"}
+                json.loads(row["risk_of_bias_json"])["overall"] in UNRESOLVED_RISK_LEVELS
                 for row in rows
             ):
                 raise ValueError(
@@ -531,7 +535,7 @@ class ReviewStore:
                 estimate_target=str(profile["estimate_target"]),
             )
             eligible = connection.execute(
-                """
+                f"""
                 SELECT c.id, c.status, cr.decision,
                     c.extraction_id,
                     r.population, r.baseline_nutrient_status, r.ingredient_name,
@@ -544,9 +548,9 @@ class ReviewStore:
                 WHERE p.integrity_status = 'clear'
                     AND p.publication_status = 'formal'
                     AND pa.status = 'internally_admitted'
-                    AND c.candidate_claim_type = 'intervention_effect'
+                    AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
                     AND COALESCE(cr.corrected_study_design, c.candidate_study_design) NOT IN (
-                        'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                        {sql_values(EXCLUDED_STUDY_DESIGNS)}
                     )
                     AND EXISTS (
                         SELECT 1 FROM json_each(pa.condition_codes_json) WHERE value = ?
@@ -1045,7 +1049,7 @@ class ReviewStore:
                     candidates.append({**base, "status": "waiting", "reason": str(exc)})
                     continue
                 rows = connection.execute(
-                    """
+                    f"""
                     SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
                         c.extraction_id,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
@@ -1060,9 +1064,9 @@ class ReviewStore:
                     WHERE cr.decision = 'approved' AND cr.condition_code = ?
                         AND p.integrity_status = 'clear' AND p.publication_status = 'formal'
                         AND pa.status = 'internally_admitted'
-                        AND c.candidate_claim_type = 'intervention_effect'
+                        AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
                         AND cr.corrected_study_design NOT IN (
-                            'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                            {sql_values(EXCLUDED_STUDY_DESIGNS)}
                         )
                         AND c.extraction_id = (
                             SELECT latest.id FROM paper_extractions latest
@@ -1235,9 +1239,9 @@ class ReviewStore:
                                 AND p.integrity_status = 'clear'
                                 AND p.publication_status = 'formal'
                                 AND pa.status = 'internally_admitted'
-                                AND c.candidate_claim_type = 'intervention_effect'
+                                AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
                                 AND cr.corrected_study_design NOT IN (
-                                    'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                                    {sql_values(EXCLUDED_STUDY_DESIGNS)}
                                 )
                                 AND run.topic_id IN ({_placeholders(topic_ids)})
                             """,
@@ -1461,7 +1465,7 @@ class ReviewStore:
             raise ValueError("knowledge card has no governed evidence topic")
         _require_complete_topic(connection, card["topic_id"], card["condition_code"])
         evidence = connection.execute(
-            """
+            f"""
             SELECT count(*) AS total,
                 sum(CASE WHEN cr.decision <> 'approved'
                     OR p.integrity_status <> 'clear'
@@ -1470,9 +1474,9 @@ class ReviewStore:
                     OR p.doi IS NULL OR trim(p.doi) = ''
                     OR ft.paper_id IS NULL OR ft.processed_at IS NULL
                     OR trim(cc.evidence_text) = '' OR trim(cc.locator) = ''
-                    OR c.candidate_claim_type <> 'intervention_effect'
+                    OR c.candidate_claim_type <> '{CARD_CLAIM_TYPE}'
                     OR cr.corrected_study_design IN (
-                        'animal_study', 'in_vitro_study', 'case_series', 'case_report'
+                        {sql_values(EXCLUDED_STUDY_DESIGNS)}
                     )
                     OR cr.condition_code <> ? THEN 1 ELSE 0 END) AS invalid
             FROM card_claims cc
@@ -1510,13 +1514,13 @@ class ReviewStore:
             raise ValueError("knowledge card has ineligible evidence")
         if card["grade"] == "low":
             high_risk = connection.execute(
-                """
+                f"""
                 SELECT 1
                 FROM card_claims cc
                 JOIN claim_reviews cr ON cr.claim_id = cc.claim_id
                 WHERE cc.card_id = ?
                     AND json_extract(cr.risk_of_bias_json, '$.overall')
-                        IN ('high', 'critical', 'uncertain')
+                        IN ({sql_values(UNRESOLVED_RISK_LEVELS)})
                 LIMIT 1
                 """,
                 (card_id,),
