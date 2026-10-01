@@ -278,3 +278,70 @@ def test_an_open_collection_keeps_a_paper_non_terminal(tmp_path) -> None:
 
     queued, detailed, terminal = _states(database, paper_id)
     assert (queued, detailed, terminal) == ("blocked", "blocked", None)
+
+
+def test_exclusion_outranks_not_retrieved_for_a_mixed_paper(tmp_path) -> None:
+    """A screening exclusion is the paper's terminal decision, even beside a not-retrieved run.
+
+    The retrieval branch used to run first and permit other collections to be title-excluded,
+    so a paper with both a not-retrieved run and an excluded run reported `not_retrieved`
+    while `auto_review_paper` rejected it as `excluded` — two terminal decisions for one
+    paper.
+    """
+
+    import uuid
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Mixed terminal', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/mixed')",
+            (paper_id, paper_id),
+        )
+    not_retrieved_run = store.start_collection(topic_id=topic_id, source="test", query="nr")
+    store.add_to_collection(not_retrieved_run, paper_id, position=1)
+    store.finish_collection(not_retrieved_run, status="completed", detail={})
+    store.screen_collection_paper(
+        not_retrieved_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    store.record_full_text_retrieval(
+        not_retrieved_run,
+        paper_id,
+        status="not_retrieved",
+        reason="no legally retrievable copy",
+        reviewer="reviewer-1",
+    )
+    excluded_run = store.start_collection(topic_id=topic_id, source="test", query="ex")
+    store.add_to_collection(excluded_run, paper_id, position=1)
+    store.finish_collection(excluded_run, status="completed", detail={})
+    store.screen_collection_paper(
+        excluded_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+
+    _, detailed, terminal = _states(database, paper_id)
+    assert terminal == "excluded"
+
+    result = EvidenceReviewService(ReviewStore(database), store).auto_review_paper(
+        paper_id, requested_by="authenticated-reviewer"
+    )
+    assert result["decision"] == "excluded", "the reviewer and the ledger must name one decision"
+    _assert_parity(database, paper_id)
