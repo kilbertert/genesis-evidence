@@ -12,7 +12,17 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 const profiles = {
   claude: undefined,
   "claude-stepfun": process.env.AFK_STEPFUN_SETTINGS ?? join(homedir(), "cliproxyapi/settings.stepfun.json"),
+  // Local relay (`cli-proxy-api` on 127.0.0.1:8317), reached with a host-network
+  // sandbox. The settings file points ANTHROPIC_BASE_URL at the relay's loopback
+  // address, so the container **must** share the host network namespace —
+  // a default-bridge container cannot reach the host's 127.0.0.1 (measured).
+  "claude-deepseek": process.env.AFK_DEEPSEEK_SETTINGS ?? join(homedir(), "cliproxyapi/settings.deepseek.json"),
 } as const;
+
+//: Profiles whose settings file targets a **host-loopback** endpoint. They are the
+//: only ones that need `--network host`; everything else talks to a public HTTPS
+//: origin over the default bridge.
+const LOOPBACK_PROFILES = new Set<string>(["claude-deepseek"]);
 
 export function claudeProfile(
   profile = process.env.AFK_PROFILE,
@@ -46,9 +56,12 @@ export function claudeProfile(
         ...(profile ? { AFK_PROFILE: profile } : {}),
         ...(agentToken ? { GH_TOKEN: agentToken } : {}),
       },
-      // Every remaining profile reaches a public HTTPS origin over the default
-      // bridge. Host networking existed for a relay bound to the host loopback,
-      // which a sandbox cannot reach; no current profile has that dependency.
+      // Host networking is required only by profiles whose endpoint is the
+      // host-loopback relay: a default-bridge container cannot reach the
+      // host's 127.0.0.1 (measured: `curl 127.0.0.1:8317` from the bridge fails,
+      // `--network host` reaches it). Every other profile talks to a public
+      // HTTPS origin and stays on the default bridge.
+      ...(profile && LOOPBACK_PROFILES.has(profile) ? { network: "host" as const } : {}),
       ...(settingsPath
         ? { mounts: [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }] }
         : {}),
