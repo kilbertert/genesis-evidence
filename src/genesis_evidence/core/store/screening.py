@@ -145,6 +145,33 @@ def screening_conflict_sql(
     )
 
 
+def terminal_exclusion(collections: list[dict[str, object]]) -> bool:
+    """True when every collection for a paper was excluded, with nothing left to suggest.
+
+    The paper is then terminal: no full text will be acquired and no claim can be built, so
+    the autonomous reviewer rejects it. Defined once because the reviewer acts on it and the
+    workbench must *show* it — before this they were two ad-hoc predicates and the workbench
+    showed nothing at all, leaving a terminally closed paper reading as "blocked" forever.
+
+    **Every** collection counts, including one on a run still in progress: an open run can
+    still reach a different conclusion, so a paper with one is not terminal. That is what
+    keeps a half-finished collection from being reported as a finished paper.
+    """
+
+    if not collections:
+        return False
+    for collection in collections:
+        excluded = (
+            collection.get("title_abstract_decision") == EXCLUDED
+            or collection.get("full_text_decision") == EXCLUDED
+        )
+        if not excluded:
+            return False
+        if (collection.get("screening_suggestion") or {}).get("stage"):
+            return False
+    return True
+
+
 def run_conclusion(
     full_text_decision: object, title_abstract_decision: object
 ) -> tuple[object, object] | None:

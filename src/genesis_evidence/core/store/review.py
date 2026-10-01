@@ -45,6 +45,7 @@ from .screening import (
     excluded_any_stage_sql,
     included_sql,
     screening_conflict_sql,
+    terminal_exclusion,
 )
 
 
@@ -825,6 +826,28 @@ class ReviewStore:
                                             <> 'not_retrieved')
                                 )
                         ) THEN 'completed'
+                        WHEN pe.id IS NULL AND EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                        ) AND NOT EXISTS (
+                            -- Any collection that is still open, or settled but not excluded,
+                            -- keeps the paper non-terminal — an in-progress run can still
+                            -- reach a different conclusion.
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND (
+                                    cr.status <> 'completed' OR et.status <> 'locked'
+                                    OR (
+                                        COALESCE(cp.title_abstract_decision, '') <> 'excluded'
+                                        AND COALESCE(cp.full_text_decision, '') <> 'excluded'
+                                    )
+                                )
+                        ) THEN 'completed'
                         WHEN pe.id IS NULL THEN 'blocked'
                         WHEN p.integrity_status <> 'clear' THEN 'blocked'
                         WHEN NOT EXISTS (
@@ -899,7 +922,8 @@ class ReviewStore:
                     et.condition_code AS topic_condition_code, et.picots_json,
                     et.eligible_study_designs_json, et.exclusion_reasons_json,
                     cr.id AS run_id, cr.source, cr.search_stream,
-                    cr.status AS run_status, cp.title_abstract_decision,
+                    cr.status AS run_status, et.status AS topic_status,
+                    cp.title_abstract_decision,
                     cp.title_abstract_reviewer, cp.title_abstract_reviewed_at,
                     cp.full_text_retrieval_status, cp.full_text_retrieval_reason,
                     cp.full_text_retrieval_reviewer, cp.full_text_retrieval_recorded_at,
@@ -2034,10 +2058,19 @@ def _review_guidance(
     retrieval_records = [
         item for item in collections if item.get("full_text_retrieval_status") == "not_retrieved"
     ]
-    retrieval_terminal = bool(retrieval_records) and all(
-        item.get("title_abstract_decision") == "excluded"
-        or item.get("full_text_retrieval_status") == "not_retrieved"
-        for item in collections
+    # A screening exclusion outranks "full text was never obtained": when a paper was
+    # excluded, that is its terminal decision, and `auto_review_paper` rejects it as
+    # excluded. Without this guard a paper with one excluded run and one not-retrieved run
+    # reported `not_retrieved` here while the reviewer called it `excluded`.
+    screening_terminal = terminal_exclusion(collections)
+    retrieval_terminal = (
+        not screening_terminal
+        and bool(retrieval_records)
+        and all(
+            item.get("title_abstract_decision") == "excluded"
+            or item.get("full_text_retrieval_status") == "not_retrieved"
+            for item in collections
+        )
     )
     if retrieval_terminal and extraction is None:
         reasons = "；".join(
@@ -2081,6 +2114,62 @@ def _review_guidance(
                     "label": "论文准入与知识卡",
                     "status": "not_applicable",
                     "detail": "论文保持未准入状态，也不作为科学排除记录。",
+                },
+            ],
+            "blockers": [],
+            "issues": [],
+            "admission_suggestion": {
+                "condition_codes": [],
+                "study_design": "uncertain",
+                "publication_role": "primary",
+                "consistency_resolution": "",
+            },
+        }
+    # Terminal at screening: every collection excluded, nothing left to suggest. The
+    # autonomous reviewer rejects the paper here, so the ledger must say so — otherwise a
+    # paper it has already terminated keeps reading as `blocked` forever. Mirrors the
+    # `not_retrieved` terminal above and shares one predicate with the reviewer.
+    if terminal_exclusion(collections) and extraction is None:
+        exclusion_reasons = "；".join(
+            str(item.get("primary_exclusion_reason") or "未记录原因") for item in collections
+        )
+        return {
+            "state": "completed",
+            "terminal_decision": "excluded",
+            "next_action": "所有关联主题均已排除；该论文不作为证据来源，也不进入抽取队列。",
+            "checks": [
+                {
+                    "id": "identity_integrity",
+                    "label": "论文题录与来源",
+                    "status": "pass",
+                    "detail": (
+                        f"已记录 {source_count} 个来源；"
+                        f"完整性状态为 {paper.get('integrity_status')}。"
+                    ),
+                },
+                {
+                    "id": "topic_screening",
+                    "label": "版本化主题与全文获取",
+                    "status": "pass",
+                    "detail": f"全部关联主题已排除：{exclusion_reasons}",
+                },
+                {
+                    "id": "dual_ai",
+                    "label": "两次独立同模型抽取与差异",
+                    "status": "not_applicable",
+                    "detail": "论文已被筛选排除，不进行全文抽取。",
+                },
+                {
+                    "id": "structured_results",
+                    "label": "Result、Claim 与原文定位",
+                    "status": "not_applicable",
+                    "detail": "论文已被筛选排除，不生成 Result 或 Claim。",
+                },
+                {
+                    "id": "executing_actor",
+                    "label": "论文准入与知识卡",
+                    "status": "not_applicable",
+                    "detail": "论文不进入内部证据库。",
                 },
             ],
             "blockers": [],

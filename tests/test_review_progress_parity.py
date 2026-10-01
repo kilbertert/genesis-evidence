@@ -134,27 +134,54 @@ def test_parity_when_a_screening_exclusion_rejects_the_paper(tmp_path) -> None:
     _assert_parity(database, paper_id)
 
 
-def test_extraction_without_claims_diverges_today(tmp_path) -> None:
-    """A known divergence, pinned so it cannot grow unnoticed.
+def test_parity_for_a_terminal_screening_exclusion(tmp_path) -> None:
+    """A paper excluded at screening and closed by the reviewer reads `completed` in both.
 
-    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
-    to `ready_for_automation` while `_review_guidance`'s structured-results check reports
-    `blocked`. The queue projection has no equivalent of that check.
-
-    The gate above did not catch this because no fixture produced a claimless extraction —
-    the state has to be built by deleting the claims. Filed as its own defect; this test
-    records the current behaviour rather than asserting the gap is correct, so closing the
-    defect means updating this test deliberately.
+    Before #210 it read `blocked` with `terminal_decision=None` forever: the reviewer acted
+    on the exclusion but neither projection showed the paper was finished. The queue CASE
+    and the guidance branch now share one predicate.
     """
+
+    import uuid
 
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
-    paper_id, _ = _review_case(database)
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
     with database.transaction() as connection:
-        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Excluded at screening', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/excluded')",
+            (paper_id, paper_id),
+        )
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="excluded")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
 
-    queued, detailed, _ = _states(database, paper_id)
-    assert (queued, detailed) == ("ready_for_automation", "blocked")
+    _assert_parity(database, paper_id)
+    queued, detailed, terminal = _states(database, paper_id)
+    assert (queued, detailed, terminal) == ("completed", "completed", "excluded")
+
+    result = EvidenceReviewService(ReviewStore(database), store).auto_review_paper(
+        paper_id, requested_by="authenticated-reviewer"
+    )
+    assert result["decision"] == "excluded"
+    # Still terminal, still agreeing, after the reviewer acted.
+    _assert_parity(database, paper_id)
 
 
 def test_parity_after_a_named_reviewer_rejects_the_paper(tmp_path) -> None:
@@ -181,4 +208,140 @@ def test_parity_after_autonomous_review_completes_the_flow(tmp_path) -> None:
     service = EvidenceReviewService(ReviewStore(database), PaperStore(database))
     service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
+    _assert_parity(database, paper_id)
+
+
+def test_extraction_without_claims_diverges_today(tmp_path) -> None:
+    """A known divergence (#211), pinned so it cannot grow unnoticed or be lost.
+
+    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
+    to `ready_for_automation` while `_review_guidance` reports `blocked` — and
+    `auto_review_paper` itself answers `attention_required`. The queue projection lacks the
+    structured-results check.
+
+    The fixtures above never produced a claimless extraction (the state has to be built by
+    deleting the claims), so the parity gate passed on every state it covered and the
+    conclusion "they agree" was over-generalised. This records the current behaviour rather
+    than asserting the gap is correct, so closing #211 means updating this test deliberately.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("ready_for_automation", "blocked")
+
+
+def test_an_open_collection_keeps_a_paper_non_terminal(tmp_path) -> None:
+    """A run still in progress means the paper is not finished, in both projections.
+
+    Before this, the queue's exclusion branch looked only at completed locked runs, so a
+    paper with one excluded completed run and one undecided running run read `completed`
+    while the detail stayed `blocked`.
+    """
+
+    import uuid
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Open collection', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/open')",
+            (paper_id, paper_id),
+        )
+    excluded_run = store.start_collection(topic_id=topic_id, source="test", query="done")
+    store.add_to_collection(excluded_run, paper_id, position=1)
+    store.finish_collection(excluded_run, status="completed", detail={})
+    store.screen_collection_paper(
+        excluded_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+    # A second run that has not finished: it can still reach a different conclusion.
+    open_run = store.start_collection(topic_id=topic_id, source="test", query="open")
+    store.add_to_collection(open_run, paper_id, position=1)
+
+    queued, detailed, terminal = _states(database, paper_id)
+    assert (queued, detailed, terminal) == ("blocked", "blocked", None)
+
+
+def test_exclusion_outranks_not_retrieved_for_a_mixed_paper(tmp_path) -> None:
+    """A screening exclusion is the paper's terminal decision, even beside a not-retrieved run.
+
+    The retrieval branch used to run first and permit other collections to be title-excluded,
+    so a paper with both a not-retrieved run and an excluded run reported `not_retrieved`
+    while `auto_review_paper` rejected it as `excluded` — two terminal decisions for one
+    paper.
+    """
+
+    import uuid
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Mixed terminal', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/mixed')",
+            (paper_id, paper_id),
+        )
+    not_retrieved_run = store.start_collection(topic_id=topic_id, source="test", query="nr")
+    store.add_to_collection(not_retrieved_run, paper_id, position=1)
+    store.finish_collection(not_retrieved_run, status="completed", detail={})
+    store.screen_collection_paper(
+        not_retrieved_run,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    store.record_full_text_retrieval(
+        not_retrieved_run,
+        paper_id,
+        status="not_retrieved",
+        reason="no legally retrievable copy",
+        reviewer="reviewer-1",
+    )
+    excluded_run = store.start_collection(topic_id=topic_id, source="test", query="ex")
+    store.add_to_collection(excluded_run, paper_id, position=1)
+    store.finish_collection(excluded_run, status="completed", detail={})
+    store.screen_collection_paper(
+        excluded_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+
+    _, detailed, terminal = _states(database, paper_id)
+    assert terminal == "excluded"
+
+    result = EvidenceReviewService(ReviewStore(database), store).auto_review_paper(
+        paper_id, requested_by="authenticated-reviewer"
+    )
+    assert result["decision"] == "excluded", "the reviewer and the ledger must name one decision"
     _assert_parity(database, paper_id)
