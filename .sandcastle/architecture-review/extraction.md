@@ -9,8 +9,8 @@ End your response with a single `<output>` block, exactly as specified in the pr
 <output>
 {
   "status": "proposed",
-  "title": "PRD title (matches the issue you created)",
-  "body": "The PRD body you published.",
+  "title": "PRD title (the workflow creates the issue from this)",
+  "body": "The full PRD body (written here; the workflow publishes it).",
   "oneLineSummary": "One-line description of the deepening opportunity.",
   "candidatesConsidered": ["candidate 1", "candidate 2"]
 }
