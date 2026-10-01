@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, type AgentProvider, type SandboxProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { networkFor } from "./profile-network.js";
 
 // Endpoints are supplied as host settings files mounted read-only into the
 // sandbox, never baked into the image. A baked key lands in an image layer
@@ -18,11 +19,6 @@ const profiles = {
   // a default-bridge container cannot reach the host's 127.0.0.1 (measured).
   "claude-deepseek": process.env.AFK_DEEPSEEK_SETTINGS ?? join(homedir(), "cliproxyapi/settings.deepseek.json"),
 } as const;
-
-//: Profiles whose settings file targets a **host-loopback** endpoint. They are the
-//: only ones that need `--network host`; everything else talks to a public HTTPS
-//: origin over the default bridge.
-const LOOPBACK_PROFILES = new Set<string>(["claude-deepseek"]);
 
 export function claudeProfile(
   profile = process.env.AFK_PROFILE,
@@ -60,8 +56,12 @@ export function claudeProfile(
       // host-loopback relay: a default-bridge container cannot reach the
       // host's 127.0.0.1 (measured: `curl 127.0.0.1:8317` from the bridge fails,
       // `--network host` reaches it). Every other profile talks to a public
-      // HTTPS origin and stays on the default bridge.
-      ...(profile && LOOPBACK_PROFILES.has(profile) ? { network: "host" as const } : {}),
+      // HTTPS origin and stays on the default bridge. The decision lives in
+      // `profile-network.ts` so `profile-network.check.ts` can assert it.
+      ...(() => {
+        const network = networkFor(profile);
+        return network ? { network } : {};
+      })(),
       ...(settingsPath
         ? { mounts: [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }] }
         : {}),

@@ -61,11 +61,11 @@ Missing delivery credentials produce `agent:blocked`; there is no non-triggering
 
 ## Providers
 
-The configured Sandcastle profile is server-global: `claude` or
-`claude-stepfun`. Set `AFK_PROFILE` for local runs or the repository variable
-for Actions; no project-side credential is needed.
+The configured Sandcastle profile is server-global: `claude`, `claude-stepfun`,
+or `claude-deepseek`. Set `AFK_PROFILE` for local runs or the repository
+variable for Actions; no project-side credential is needed.
 
-Both are one settings file the host owns, mounted read-only into the sandbox:
+Each is one settings file the host owns, mounted read-only into the sandbox:
 
 - `claude` talks to the Anthropic API with whatever credential the host shell
   already exports.
@@ -74,6 +74,21 @@ Both are one settings file the host owns, mounted read-only into the sandbox:
   `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` plus the three
   `ANTHROPIC_DEFAULT_*_MODEL` entries. Override the path with
   `AFK_STEPFUN_SETTINGS` when the file lives elsewhere.
+- `claude-deepseek` points Claude Code at the **local relay**
+  (`cli-proxy-api`, `127.0.0.1:8317`) through
+  `~/cliproxyapi/settings.deepseek.json`. Override the path with
+  `AFK_DEEPSEEK_SETTINGS`. The relay's `deepseek-latest` alias is a **pool**
+  (commandcode primary, Cline overflow), so one upstream's rate limit does not
+  take the profile down.
+
+> ⚠️ **`claude-deepseek` runs the sandbox with `--network host`.** The relay
+> binds host **loopback**, which a default-bridge container cannot reach
+> (measured: bridge cannot connect; host network reaches it). The cost is real
+> and deliberate: a host-network sandbox **loses Docker's bridge isolation** and
+> can reach other host-loopback services. Only profiles whose endpoint is
+> host-loopback need this; `claude` and `claude-stepfun` talk to public HTTPS
+> origins and stay on the default bridge. If the relay is ever reached by a
+> non-loopback address, drop the profile from `LOOPBACK_PROFILES`.
 
 Because the endpoint is mounted rather than baked, rotating the token is an
 edit to that host file plus a container restart — there is no image rebuild,
