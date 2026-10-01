@@ -1137,10 +1137,8 @@ class PaperStore:
                         JOIN collection_runs other_run ON other_run.id = other_item.run_id
                         WHERE other_item.paper_id = paper_extraction_jobs.paper_id
                             AND other_run.topic_id <> ?
-                            AND COALESCE(other_item.title_abstract_decision, 'included')
-                                <> 'excluded'
-                            AND COALESCE(other_item.full_text_decision, 'included')
-                                <> 'excluded'
+                            AND {not_excluded_sql('other_item.title_abstract_decision')}
+                            AND {not_excluded_sql('other_item.full_text_decision')}
                     ))
                     AND (NOT EXISTS (
                         SELECT 1 FROM collection_papers cp
