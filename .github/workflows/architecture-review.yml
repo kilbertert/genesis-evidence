@@ -133,6 +133,20 @@ jobs:
           # the old text hid: "likely crashed" pointed readers at agent bugs while
           # the real cause (an upstream `429 no credit`) sat in the job log. Say
           # the outcome plainly and do not guess at a cause.
+          #
+          # `skipped` is NOT the agent failing — the step never started. That
+          # happens when an earlier step (checkout, `npm ci`) failed, and this
+          # step runs anyway because `if: always()`. Reporting it as "the agent
+          # exited skipped" sends readers hunting an agent bug that never ran.
+          if [ "${REVIEW_OUTCOME}" = "skipped" ]; then
+            {
+              echo "**❌ Run failed before the review started** — the review agent step was"
+              echo "skipped, so an **earlier** step (checkout, dependency install) is the"
+              echo "one that failed. Look above this step's log for it."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           if [ "${REVIEW_OUTCOME}" != "success" ]; then
             {
               echo "**❌ Run failed** — the review agent exited \`${REVIEW_OUTCOME}\` before emitting a result."
