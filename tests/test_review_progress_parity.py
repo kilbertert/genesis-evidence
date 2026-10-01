@@ -134,27 +134,54 @@ def test_parity_when_a_screening_exclusion_rejects_the_paper(tmp_path) -> None:
     _assert_parity(database, paper_id)
 
 
-def test_extraction_without_claims_diverges_today(tmp_path) -> None:
-    """A known divergence, pinned so it cannot grow unnoticed.
+def test_parity_for_a_terminal_screening_exclusion(tmp_path) -> None:
+    """A paper excluded at screening and closed by the reviewer reads `completed` in both.
 
-    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
-    to `ready_for_automation` while `_review_guidance`'s structured-results check reports
-    `blocked`. The queue projection has no equivalent of that check.
-
-    The gate above did not catch this because no fixture produced a claimless extraction —
-    the state has to be built by deleting the claims. Filed as its own defect; this test
-    records the current behaviour rather than asserting the gap is correct, so closing the
-    defect means updating this test deliberately.
+    Before #210 it read `blocked` with `terminal_decision=None` forever: the reviewer acted
+    on the exclusion but neither projection showed the paper was finished. The queue CASE
+    and the guidance branch now share one predicate.
     """
+
+    import uuid
 
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
-    paper_id, _ = _review_case(database)
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
     with database.transaction() as connection:
-        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Excluded at screening', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/excluded')",
+            (paper_id, paper_id),
+        )
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="excluded")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
 
-    queued, detailed, _ = _states(database, paper_id)
-    assert (queued, detailed) == ("ready_for_automation", "blocked")
+    _assert_parity(database, paper_id)
+    queued, detailed, terminal = _states(database, paper_id)
+    assert (queued, detailed, terminal) == ("completed", "completed", "excluded")
+
+    result = EvidenceReviewService(ReviewStore(database), store).auto_review_paper(
+        paper_id, requested_by="authenticated-reviewer"
+    )
+    assert result["decision"] == "excluded"
+    # Still terminal, still agreeing, after the reviewer acted.
+    _assert_parity(database, paper_id)
 
 
 def test_parity_after_a_named_reviewer_rejects_the_paper(tmp_path) -> None:

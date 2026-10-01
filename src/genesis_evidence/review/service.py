@@ -16,6 +16,7 @@ from ..core.source_excerpt import (
 )
 from ..core.store import ObjectStore, PaperStore, ReviewStore
 from ..core.store.review import _source_based_consistency_resolution
+from ..core.store.screening import terminal_exclusion
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 from ..literature.jats import JatsParseError, JatsParser
 
@@ -164,19 +165,8 @@ class EvidenceReviewService:
             raise ValueError("paper not found")
         if self.papers_store is None:
             raise RuntimeError("autonomous review requires PaperStore")
-        terminal_exclusion = (
-            bool(item["collections"])
-            and all(
-                collection.get("title_abstract_decision") == "excluded"
-                or collection.get("full_text_decision") == "excluded"
-                for collection in item["collections"]
-            )
-            and not any(
-                (collection.get("screening_suggestion") or {}).get("stage")
-                for collection in item["collections"]
-            )
-        )
-        if terminal_exclusion:
+        terminal_exclusion_reached = terminal_exclusion(item["collections"])
+        if terminal_exclusion_reached:
             admission = item.get("admission") or {}
             self.reject_paper(
                 paper_id,

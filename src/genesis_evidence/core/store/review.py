@@ -45,6 +45,7 @@ from .screening import (
     excluded_any_stage_sql,
     included_sql,
     screening_conflict_sql,
+    terminal_exclusion,
 )
 
 
@@ -824,6 +825,21 @@ class ReviewStore:
                                         COALESCE(cp.full_text_retrieval_status, 'pending')
                                             <> 'not_retrieved')
                                 )
+                        ) THEN 'completed'
+                        WHEN pe.id IS NULL AND EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM collection_papers cp
+                            JOIN collection_runs cr ON cr.id = cp.run_id
+                            JOIN evidence_topics et ON et.id = cr.topic_id
+                            WHERE cp.paper_id = p.id
+                                AND cr.status = 'completed' AND et.status = 'locked'
+                                AND COALESCE(cp.title_abstract_decision, '') <> 'excluded'
+                                AND COALESCE(cp.full_text_decision, '') <> 'excluded'
                         ) THEN 'completed'
                         WHEN pe.id IS NULL THEN 'blocked'
                         WHEN p.integrity_status <> 'clear' THEN 'blocked'
@@ -2081,6 +2097,62 @@ def _review_guidance(
                     "label": "论文准入与知识卡",
                     "status": "not_applicable",
                     "detail": "论文保持未准入状态，也不作为科学排除记录。",
+                },
+            ],
+            "blockers": [],
+            "issues": [],
+            "admission_suggestion": {
+                "condition_codes": [],
+                "study_design": "uncertain",
+                "publication_role": "primary",
+                "consistency_resolution": "",
+            },
+        }
+    # Terminal at screening: every collection excluded, nothing left to suggest. The
+    # autonomous reviewer rejects the paper here, so the ledger must say so — otherwise a
+    # paper it has already terminated keeps reading as `blocked` forever. Mirrors the
+    # `not_retrieved` terminal above and shares one predicate with the reviewer.
+    if terminal_exclusion(collections) and extraction is None:
+        exclusion_reasons = "；".join(
+            str(item.get("primary_exclusion_reason") or "未记录原因") for item in collections
+        )
+        return {
+            "state": "completed",
+            "terminal_decision": "excluded",
+            "next_action": "所有关联主题均已排除；该论文不作为证据来源，也不进入抽取队列。",
+            "checks": [
+                {
+                    "id": "identity_integrity",
+                    "label": "论文题录与来源",
+                    "status": "pass",
+                    "detail": (
+                        f"已记录 {source_count} 个来源；"
+                        f"完整性状态为 {paper.get('integrity_status')}。"
+                    ),
+                },
+                {
+                    "id": "topic_screening",
+                    "label": "版本化主题与全文获取",
+                    "status": "pass",
+                    "detail": f"全部关联主题已排除：{exclusion_reasons}",
+                },
+                {
+                    "id": "dual_ai",
+                    "label": "两次独立同模型抽取与差异",
+                    "status": "not_applicable",
+                    "detail": "论文已被筛选排除，不进行全文抽取。",
+                },
+                {
+                    "id": "structured_results",
+                    "label": "Result、Claim 与原文定位",
+                    "status": "not_applicable",
+                    "detail": "论文已被筛选排除，不生成 Result 或 Claim。",
+                },
+                {
+                    "id": "executing_actor",
+                    "label": "论文准入与知识卡",
+                    "status": "not_applicable",
+                    "detail": "论文不进入内部证据库。",
                 },
             ],
             "blockers": [],
