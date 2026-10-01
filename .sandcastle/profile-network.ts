@@ -21,3 +21,16 @@ export const LOOPBACK_PROFILES: ReadonlySet<string> = new Set<string>(["claude-d
 export function networkFor(profile: string | undefined): "host" | undefined {
   return profile && LOOPBACK_PROFILES.has(profile) ? "host" : undefined;
 }
+
+/**
+ * The network-related slice of `docker()` options for a profile.
+ *
+ * `claudeProfile` spreads exactly this into its `docker({...})` call, so the
+ * check can assert the **options the provider actually receives** — not just the
+ * helper's return value. This is the seam Devin Review flagged: testing
+ * `networkFor` alone would stay green even if `claudeProfile` stopped using it.
+ */
+export function sandboxNetworkOptions(profile: string | undefined): { network?: "host" } {
+  const network = networkFor(profile);
+  return network ? { network } : {};
+}

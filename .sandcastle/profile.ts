@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, type AgentProvider, type SandboxProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { networkFor } from "./profile-network.js";
+import { sandboxNetworkOptions } from "./profile-network.js";
 
 // Endpoints are supplied as host settings files mounted read-only into the
 // sandbox, never baked into the image. A baked key lands in an image layer
@@ -56,12 +56,11 @@ export function claudeProfile(
       // host-loopback relay: a default-bridge container cannot reach the
       // host's 127.0.0.1 (measured: `curl 127.0.0.1:8317` from the bridge fails,
       // `--network host` reaches it). Every other profile talks to a public
-      // HTTPS origin and stays on the default bridge. The decision lives in
-      // `profile-network.ts` so `profile-network.check.ts` can assert it.
-      ...(() => {
-        const network = networkFor(profile);
-        return network ? { network } : {};
-      })(),
+      // HTTPS origin and stays on the default bridge. The options come from
+      // `profile-network.ts` so `profile-network.check.ts` asserts the exact
+      // object this call splats — the helper's return value alone would leave a
+      // broken wiring green.
+      ...sandboxNetworkOptions(profile),
       ...(settingsPath
         ? { mounts: [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }] }
         : {}),
