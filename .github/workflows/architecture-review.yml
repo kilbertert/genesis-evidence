@@ -81,6 +81,7 @@ jobs:
         run: npm ci
 
       - name: Run architecture-review.ts
+        id: review
         env:
           AFK_PROFILE: ${{ vars.AFK_PROFILE || 'claude-stepfun' }}
           OUTPUT_DIR: ${{ runner.temp }}
@@ -120,15 +121,39 @@ jobs:
         if: always()
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
         run: |
-          if [ ! -f "$OUTPUT_FILE" ]; then
-            echo "No output file produced — agent likely crashed before emitting a result."
-            exit 0
-          fi
-          status=$(jq -r '.status' "$OUTPUT_FILE")
+          set -euo pipefail
           {
             echo "## Architecture review"
             echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The agent step failing is the case that matters most, and it is the one
+          # the old text hid: "likely crashed" pointed readers at agent bugs while
+          # the real cause (an upstream `429 no credit`) sat in the job log. Say
+          # the outcome plainly and do not guess at a cause.
+          if [ "${REVIEW_OUTCOME}" != "success" ]; then
+            {
+              echo "**❌ Run failed** — the review agent exited \`${REVIEW_OUTCOME}\` before emitting a result."
+              echo ""
+              echo "The reason is in this step's log, above; the summary will not guess at it."
+              echo "Common causes: provider quota/rate limit, an unreachable model endpoint,"
+              echo "a malformed \`<output>\` block."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ ! -f "$OUTPUT_FILE" ]; then
+            {
+              echo "**❌ No output produced** — the agent reported success but wrote no"
+              echo "\`$OUTPUT_FILE\`. Treat as a failure: the run published nothing."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          status=$(jq -r '.status' "$OUTPUT_FILE")
+          {
             if [ "$status" = "proposed" ]; then
               issue_url="${{ steps.publish.outputs.issue_url }}"
               title=$(jq -r '.title' "$OUTPUT_FILE")
@@ -144,5 +169,7 @@ jobs:
               echo "**Skipped — no fresh candidates today.**"
               echo ""
               echo "$reason"
+            else
+              echo "**❌ Unexpected status \`$status\`** in the output file — expected \`proposed\` or \`skipped\`."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
