@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore
+from genesis_evidence.core.store.papers import PaperRetracted
 from genesis_evidence.literature.ai_extraction import (
     CheckedPaperExtraction,
     ConsistencyReport,
@@ -1235,3 +1236,81 @@ def test_collection_without_completed_integrity_check_preserves_existing_status(
     with database.connect() as connection:
         status = connection.execute("SELECT integrity_status FROM papers").fetchone()[0]
     assert status == "clear"
+
+
+def test_acquisition_seam_refuses_a_retracted_paper_without_caller_help(tmp_path) -> None:
+    """The retraction gate lives at the seam, so a new acquisition path cannot skip it.
+
+    Both current callers check retraction before downloading, for a cheaper refusal and
+    their own audit event. This exercises the seam directly, with no caller-side check, to
+    pin that the backstop is real — before it existed, this call would have downloaded,
+    parsed, stored, and enqueued a retracted paper.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/retracted")
+    store.update_integrity(paper_id, "retracted", detail={"reason": "retraction notice"})
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    # Raised, not None: a caller must be able to tell a retraction from a rights refusal,
+    # or it records the wrong reason in the retrieval ledger.
+    with pytest.raises(PaperRetracted):
+        service._ingest_candidate(None, paper_id, _record().full_text_candidates[0])
+
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
+
+
+def test_storing_full_text_rechecks_retraction_committed_during_download(tmp_path) -> None:
+    """The retraction boundary is the write transaction, not an earlier read.
+
+    The seam reads integrity before the download. A retraction committed while the bytes
+    are in flight is invisible to that read, so the store must recheck inside the same
+    transaction that makes the full text durable.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/race")
+    stored = ObjectStore(tmp_path / "objects").put(b"<article/>", suffix="xml")
+
+    # Stand in for the interleaving: the caller's earlier read saw a clear paper.
+    store.update_integrity(paper_id, "retracted", detail={"reason": "withdrawn mid-flight"})
+
+    with pytest.raises(PaperRetracted):
+        store.save_full_text(
+            paper_id,
+            stored,
+            media_type="application/xml",
+            rights_status="redistributable",
+        )
+
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+
+
+def test_enqueue_rechecks_retraction(tmp_path) -> None:
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/queue")
+    stored = ObjectStore(tmp_path / "objects").put(b"<article/>", suffix="xml")
+    store.save_full_text(
+        paper_id, stored, media_type="application/xml", rights_status="redistributable"
+    )
+    store.update_integrity(paper_id, "retracted", detail={"reason": "withdrawn"})
+
+    with pytest.raises(PaperRetracted):
+        store.enqueue_extraction(paper_id, collection_run_id=None)
+
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
