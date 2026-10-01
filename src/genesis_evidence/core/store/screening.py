@@ -153,7 +153,9 @@ def terminal_exclusion(collections: list[dict[str, object]]) -> bool:
     workbench must *show* it — before this they were two ad-hoc predicates and the workbench
     showed nothing at all, leaving a terminally closed paper reading as "blocked" forever.
 
-    A pending screening suggestion means a stage is still open, so it is not terminal.
+    **Every** collection counts, including one on a run still in progress: an open run can
+    still reach a different conclusion, so a paper with one is not terminal. That is what
+    keeps a half-finished collection from being reported as a finished paper.
     """
 
     if not collections:

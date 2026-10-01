@@ -209,3 +209,72 @@ def test_parity_after_autonomous_review_completes_the_flow(tmp_path) -> None:
     service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
 
     _assert_parity(database, paper_id)
+
+
+def test_extraction_without_claims_diverges_today(tmp_path) -> None:
+    """A known divergence (#211), pinned so it cannot grow unnoticed or be lost.
+
+    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
+    to `ready_for_automation` while `_review_guidance` reports `blocked` — and
+    `auto_review_paper` itself answers `attention_required`. The queue projection lacks the
+    structured-results check.
+
+    The fixtures above never produced a claimless extraction (the state has to be built by
+    deleting the claims), so the parity gate passed on every state it covered and the
+    conclusion "they agree" was over-generalised. This records the current behaviour rather
+    than asserting the gap is correct, so closing #211 means updating this test deliberately.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("ready_for_automation", "blocked")
+
+
+def test_an_open_collection_keeps_a_paper_non_terminal(tmp_path) -> None:
+    """A run still in progress means the paper is not finished, in both projections.
+
+    Before this, the queue's exclusion branch looked only at completed locked runs, so a
+    paper with one excluded completed run and one undecided running run read `completed`
+    while the detail stayed `blocked`.
+    """
+
+    import uuid
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    topic_id = _topic(store)
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO papers(id, title, publication_status, integrity_status, created_at) "
+            "VALUES (?, 'Open collection', 'formal', 'clear', 'now')",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_sources(paper_id, source, source_id, source_url) "
+            "VALUES (?, 'test', ?, 'https://example.test/open')",
+            (paper_id, paper_id),
+        )
+    excluded_run = store.start_collection(topic_id=topic_id, source="test", query="done")
+    store.add_to_collection(excluded_run, paper_id, position=1)
+    store.finish_collection(excluded_run, status="completed", detail={})
+    store.screen_collection_paper(
+        excluded_run,
+        paper_id,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+    # A second run that has not finished: it can still reach a different conclusion.
+    open_run = store.start_collection(topic_id=topic_id, source="test", query="open")
+    store.add_to_collection(open_run, paper_id, position=1)
+
+    queued, detailed, terminal = _states(database, paper_id)
+    assert (queued, detailed, terminal) == ("blocked", "blocked", None)

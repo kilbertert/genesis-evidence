@@ -833,13 +833,20 @@ class ReviewStore:
                             WHERE cp.paper_id = p.id
                                 AND cr.status = 'completed' AND et.status = 'locked'
                         ) AND NOT EXISTS (
+                            -- Any collection that is still open, or settled but not excluded,
+                            -- keeps the paper non-terminal — an in-progress run can still
+                            -- reach a different conclusion.
                             SELECT 1 FROM collection_papers cp
                             JOIN collection_runs cr ON cr.id = cp.run_id
                             JOIN evidence_topics et ON et.id = cr.topic_id
                             WHERE cp.paper_id = p.id
-                                AND cr.status = 'completed' AND et.status = 'locked'
-                                AND COALESCE(cp.title_abstract_decision, '') <> 'excluded'
-                                AND COALESCE(cp.full_text_decision, '') <> 'excluded'
+                                AND (
+                                    cr.status <> 'completed' OR et.status <> 'locked'
+                                    OR (
+                                        COALESCE(cp.title_abstract_decision, '') <> 'excluded'
+                                        AND COALESCE(cp.full_text_decision, '') <> 'excluded'
+                                    )
+                                )
                         ) THEN 'completed'
                         WHEN pe.id IS NULL THEN 'blocked'
                         WHEN p.integrity_status <> 'clear' THEN 'blocked'
@@ -915,7 +922,8 @@ class ReviewStore:
                     et.condition_code AS topic_condition_code, et.picots_json,
                     et.eligible_study_designs_json, et.exclusion_reasons_json,
                     cr.id AS run_id, cr.source, cr.search_stream,
-                    cr.status AS run_status, cp.title_abstract_decision,
+                    cr.status AS run_status, et.status AS topic_status,
+                    cp.title_abstract_decision,
                     cp.title_abstract_reviewer, cp.title_abstract_reviewed_at,
                     cp.full_text_retrieval_status, cp.full_text_retrieval_reason,
                     cp.full_text_retrieval_reviewer, cp.full_text_retrieval_recorded_at,
@@ -2050,10 +2058,19 @@ def _review_guidance(
     retrieval_records = [
         item for item in collections if item.get("full_text_retrieval_status") == "not_retrieved"
     ]
-    retrieval_terminal = bool(retrieval_records) and all(
-        item.get("title_abstract_decision") == "excluded"
-        or item.get("full_text_retrieval_status") == "not_retrieved"
-        for item in collections
+    # A screening exclusion outranks "full text was never obtained": when a paper was
+    # excluded, that is its terminal decision, and `auto_review_paper` rejects it as
+    # excluded. Without this guard a paper with one excluded run and one not-retrieved run
+    # reported `not_retrieved` here while the reviewer called it `excluded`.
+    screening_terminal = terminal_exclusion(collections)
+    retrieval_terminal = (
+        not screening_terminal
+        and bool(retrieval_records)
+        and all(
+            item.get("title_abstract_decision") == "excluded"
+            or item.get("full_text_retrieval_status") == "not_retrieved"
+            for item in collections
+        )
     )
     if retrieval_terminal and extraction is None:
         reasons = "；".join(
