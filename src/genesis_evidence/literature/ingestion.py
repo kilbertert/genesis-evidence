@@ -268,6 +268,12 @@ class LiteratureIngestionService:
         *,
         extraction_run_id: str | None = None,
     ) -> str | None:
+        # The retraction gate belongs to the acquisition seam, not to its callers: this is
+        # the only place a candidate becomes full text, so a refusal here cannot be
+        # bypassed by a new acquisition path. Callers still check it early to avoid a
+        # pointless download and to record their own audit event; this is the backstop.
+        if self._store.integrity_status(paper_id) == IntegrityStatus.RETRACTED.value:
+            return None
         if candidate.format != FullTextFormat.JATS_XML:
             return None
         artifact = self._downloader.download(candidate)

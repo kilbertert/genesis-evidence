@@ -1004,6 +1004,19 @@ class PaperStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def integrity_status(self, paper_id: str) -> str:
+        """Return the stored integrity status, or ``unknown`` when the paper has none.
+
+        Readers that must refuse to process a retracted paper ask here rather than each
+        re-querying the column, so a new acquisition path cannot forget the gate.
+        """
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+        return str(row["integrity_status"] or "unknown") if row is not None else "unknown"
+
     def update_integrity(self, paper_id: str, status: str, *, detail: dict[str, object]) -> None:
         if status not in {
             "clear",

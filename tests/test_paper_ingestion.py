@@ -1235,3 +1235,32 @@ def test_collection_without_completed_integrity_check_preserves_existing_status(
     with database.connect() as connection:
         status = connection.execute("SELECT integrity_status FROM papers").fetchone()[0]
     assert status == "clear"
+
+
+def test_acquisition_seam_refuses_a_retracted_paper_without_caller_help(tmp_path) -> None:
+    """The retraction gate lives at the seam, so a new acquisition path cannot skip it.
+
+    Both current callers check retraction before downloading, for a cheaper refusal and
+    their own audit event. This exercises the seam directly, with no caller-side check, to
+    pin that the backstop is real — before it existed, this call would have downloaded,
+    parsed, stored, and enqueued a retracted paper.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    paper_id = store.upsert_paper(_record(), source_url="https://example.test/retracted")
+    store.update_integrity(paper_id, "retracted", detail={"reason": "retraction notice"})
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FakeIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    job_id = service._ingest_candidate(None, paper_id, _record().full_text_candidates[0])
+
+    assert job_id is None, "a retracted paper must not reach full-text storage"
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
