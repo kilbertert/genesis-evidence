@@ -25,6 +25,7 @@ from ...review.scope import (
     _synthesis_dimensions,
     _topic_outcome_components,  # noqa: F401
 )
+from ..consistency import is_source_based
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
 from .card_evidence import (
@@ -2331,10 +2332,11 @@ def _review_guidance(
 
 
 def _source_based_consistency_resolution(admission: object) -> bool:
+    """Deprecated shim: the rule now lives in :mod:`core.consistency`."""
+
     if not isinstance(admission, dict):
         return False
-    resolution = str(admission.get("consistency_resolution") or "").strip()
-    return bool(resolution) and not resolution.startswith("AI consistency adjudication (")
+    return is_source_based(admission.get("consistency_resolution"))
 
 
 def _critical_issue(
