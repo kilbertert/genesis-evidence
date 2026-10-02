@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.consistency import NEEDS_REVIEW, is_source_based
 from ..core.source_excerpt import (
     Excerpt,
     attest_segments,
@@ -15,7 +16,6 @@ from ..core.source_excerpt import (
     segments_from_document,
 )
 from ..core.store import ObjectStore, PaperStore, ReviewStore
-from ..core.store.review import _source_based_consistency_resolution
 from ..core.store.screening import terminal_exclusion
 from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 from ..literature.jats import JatsParseError, JatsParser
@@ -418,11 +418,11 @@ class EvidenceReviewService:
             )
         admission = item.get("admission") or {}
         consistency_resolution = admission.get("consistency_resolution")
-        resolution_is_source_based = _source_based_consistency_resolution(admission)
+        resolution_is_source_based = is_source_based(admission.get("consistency_resolution"))
         automatically_adjudicated = False
         source_adjudicated = False
         source_rejected_claim_ids: set[str] = set()
-        if (item.get("consistency") or {}).get("verdict") == "needs_review":
+        if (item.get("consistency") or {}).get("verdict") == NEEDS_REVIEW:
             material_issues = [
                 issue for issue in guidance["issues"] if issue.get("priority") == "must_resolve"
             ]
