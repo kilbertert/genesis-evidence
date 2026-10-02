@@ -185,3 +185,88 @@ def run_conclusion(
         return None
     return (title_abstract_decision, full_text_decision)
 
+
+# --- the structured-results check (one owner) -------------------------------------------
+#
+# "Has this paper produced checkable structured evidence?" is asked by the review detail and
+# must be answered the same way by the queue projection, which runs it in SQL. A paper with
+# an extraction but no claims is not `ready_for_automation`: there is nothing to automate
+# over, and `auto_review_paper` answers `attention_required`. Before this the queue fell
+# through to `ready_for_automation` while the detail said `blocked` (#211).
+
+RESULT_FIELDS: tuple[str, ...] = (
+    "population",
+    "ingredient_name",
+    "ingredient_form",
+    "dose",
+    "comparator",
+    "outcome",
+    "timepoint",
+    "effect_estimate",
+    "statistical_details",
+)
+
+# Carried by the claim row itself rather than by its result.
+CLAIM_FIELDS: tuple[str, ...] = ("result_id", "evidence_text", "locator")
+
+# The whitespace a field may consist of and still count as empty. Spelled out because the
+# two implementations must agree *exactly*: SQLite's `trim()` knows only the characters you
+# hand it, while Python's `str.strip()` strips every character Unicode calls whitespace —
+# including U+00A0 and friends that SQL has no compact way to name. Pinning both to this one
+# set is what keeps them from disagreeing on a field holding a non-breaking space.
+EMPTY_WHITESPACE = (" ", "\t", "\n", "\r", "\x0b", "\x0c")
+
+
+def structured_results_sql(paper_id_expression: str) -> str:
+    """SQL predicate true when a paper has claims and **none** of them is under-populated.
+
+    Self-contained: it joins its own `claims`/`results`, so the caller only supplies the
+    expression identifying the paper.
+
+    "None incomplete", not "one complete": a paper with one good claim and one missing its
+    dose is not checkable evidence, and the Python side requires every claim. Phrasing it as
+    ``EXISTS (complete claim)`` accepted exactly that mixed case.
+    """
+
+    trim_characters = " || ".join(f"char({ord(character)})" for character in EMPTY_WHITESPACE)
+
+    def present(alias: str, field: str) -> str:
+        # coalesce: a missing result row leaves the field NULL, and `NULL <> ''` is NULL,
+        # not true — which would let an incomplete claim escape the NOT.
+        return f"trim(coalesce({alias}.{field}, ''), {trim_characters}) <> ''"
+
+    # A claim whose result row is missing is incomplete too, hence the LEFT JOIN.
+    required = [present("sc", field) for field in CLAIM_FIELDS] + [
+        present("sr", field) for field in RESULT_FIELDS
+    ]
+    return (
+        f"(EXISTS (SELECT 1 FROM claims sc WHERE sc.paper_id = {paper_id_expression})"
+        " AND NOT EXISTS (SELECT 1 FROM claims sc"
+        " LEFT JOIN results sr ON sr.id = sc.result_id"
+        f" WHERE sc.paper_id = {paper_id_expression}"
+        f" AND NOT ({' AND '.join(required)})))"
+    )
+
+
+def has_structured_results(claims: list[dict[str, object]]) -> bool:
+    """The Python form: at least one claim, every one carrying all required fields.
+
+    Mirrors :func:`structured_results_sql`. The detail loads each claim with its result's
+    fields flattened onto the same dict, so one lookup covers both groups.
+
+    Strips only :data:`EMPTY_WHITESPACE`, not whatever ``str.strip()`` happens to consider
+    whitespace — otherwise a lone non-breaking space would read as empty here and as content
+    in SQL.
+    """
+
+    if not claims:
+        return False
+    strippable = "".join(EMPTY_WHITESPACE)
+    return all(
+        all(
+            str(claim.get(field) or "").strip(strippable)
+            for field in (*CLAIM_FIELDS, *RESULT_FIELDS)
+        )
+        for claim in claims
+    )
+

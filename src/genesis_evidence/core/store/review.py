@@ -43,8 +43,10 @@ from .retirement import (
 )
 from .screening import (
     excluded_any_stage_sql,
+    has_structured_results,
     included_sql,
     screening_conflict_sql,
+    structured_results_sql,
     terminal_exclusion,
 )
 
@@ -788,7 +790,7 @@ class ReviewStore:
     def list_review_queue(self) -> list[dict[str, object]]:
         with self.database.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.doi, p.pmid, p.pmcid, p.year,
                     p.integrity_status, p.study_design_candidate,
                     EXISTS(SELECT 1 FROM full_texts ft WHERE ft.paper_id = p.id)
@@ -858,6 +860,13 @@ class ReviewStore:
                                 AND cr.status = 'completed' AND et.status = 'locked'
                         ) THEN 'blocked'
                         WHEN pa.status = 'rejected' THEN 'blocked'
+                        -- No checkable structured evidence: there is nothing to automate
+                        -- over, and the detail reports `blocked` for the same reason. Must
+                        -- match `has_structured_results`, which the detail uses (#211), and
+                        -- must sit before the admission branch — an admitted paper whose
+                        -- claims are gone is blocked, not completed.
+                        WHEN pe.id IS NOT NULL AND NOT {structured_results_sql("p.id")}
+                            THEN 'blocked'
                         WHEN pa.status = 'internally_admitted' AND NOT EXISTS (
                             SELECT 1 FROM claims pending
                             WHERE pending.paper_id = p.id AND pending.status = 'candidate'
@@ -2192,23 +2201,7 @@ def _review_guidance(
     )
     included = [item for item in collections if item.get("full_text_decision") == "included"]
     all_excluded = bool(collections) and not incomplete_screening and not included
-    result_fields = (
-        "result_id",
-        "evidence_text",
-        "locator",
-        "population",
-        "ingredient_name",
-        "ingredient_form",
-        "dose",
-        "comparator",
-        "outcome",
-        "timepoint",
-        "effect_estimate",
-        "statistical_details",
-    )
-    structured_results = bool(claims) and all(
-        all(str(claim.get(field) or "").strip() for field in result_fields) for claim in claims
-    )
+    structured_results = has_structured_results(claims)
     issues = [
         {
             **issue,

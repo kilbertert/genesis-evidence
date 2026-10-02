@@ -211,18 +211,13 @@ def test_parity_after_autonomous_review_completes_the_flow(tmp_path) -> None:
     _assert_parity(database, paper_id)
 
 
-def test_extraction_without_claims_diverges_today(tmp_path) -> None:
-    """A known divergence (#211), pinned so it cannot grow unnoticed or be lost.
+def test_parity_for_an_extraction_without_claims(tmp_path) -> None:
+    """A claimless extraction is `blocked` in both projections (#211).
 
-    With an extraction on record but zero claims, `list_review_queue`'s CASE falls through
-    to `ready_for_automation` while `_review_guidance` reports `blocked` — and
-    `auto_review_paper` itself answers `attention_required`. The queue projection lacks the
-    structured-results check.
-
-    The fixtures above never produced a claimless extraction (the state has to be built by
-    deleting the claims), so the parity gate passed on every state it covered and the
-    conclusion "they agree" was over-generalised. This records the current behaviour rather
-    than asserting the gap is correct, so closing #211 means updating this test deliberately.
+    Before, the queue's CASE fell through to `ready_for_automation` while the detail said
+    `blocked` and `auto_review_paper` answered `attention_required` — the queue advertised
+    work that the detail knew could not proceed. The queue now applies the same
+    structured-results check the detail does.
     """
 
     database = Database(tmp_path / "evidence.sqlite3")
@@ -231,8 +226,27 @@ def test_extraction_without_claims_diverges_today(tmp_path) -> None:
     with database.transaction() as connection:
         connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
 
+    _assert_parity(database, paper_id)
     queued, detailed, _ = _states(database, paper_id)
-    assert (queued, detailed) == ("ready_for_automation", "blocked")
+    assert (queued, detailed) == ("blocked", "blocked")
+
+
+def test_parity_for_an_incomplete_structured_result(tmp_path) -> None:
+    """An empty required field blocks both projections, not just the detail."""
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, claim_id = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE results SET population = '' WHERE id = "
+            "(SELECT result_id FROM claims WHERE id = ?)",
+            (claim_id,),
+        )
+
+    _assert_parity(database, paper_id)
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("blocked", "blocked")
 
 
 def test_an_open_collection_keeps_a_paper_non_terminal(tmp_path) -> None:
@@ -345,3 +359,26 @@ def test_exclusion_outranks_not_retrieved_for_a_mixed_paper(tmp_path) -> None:
     )
     assert result["decision"] == "excluded", "the reviewer and the ledger must name one decision"
     _assert_parity(database, paper_id)
+
+
+def test_parity_for_an_admitted_paper_whose_claims_are_gone(tmp_path) -> None:
+    """Admission does not outrank the structured-results check.
+
+    The admission branch returned `completed` for an `internally_admitted` paper before the
+    structured-results gate was consulted, so a paper admitted earlier and now carrying no
+    claims read done in the queue while the detail reported it blocked.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    paper_id, _ = _review_case(database)
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE paper_admissions SET status = 'internally_admitted' WHERE paper_id = ?",
+            (paper_id,),
+        )
+        connection.execute("DELETE FROM claims WHERE paper_id = ?", (paper_id,))
+
+    _assert_parity(database, paper_id)
+    queued, detailed, _ = _states(database, paper_id)
+    assert (queued, detailed) == ("blocked", "blocked")
