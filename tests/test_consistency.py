@@ -86,21 +86,18 @@ def test_every_declared_name_has_a_production_consumer() -> None:
     production site still spelled the literal, so a rename would have changed nothing.
     """
 
-    import genesis_evidence.core.consistency as owner
-
-    declared = {
-        name: value
-        for name, value in vars(owner).items()
-        if name.isupper() and not name.startswith("_") and isinstance(value, str)
-    }
-    assert declared, "the owner declares no named values"
-
     root = Path(__file__).resolve().parents[1] / "src" / "genesis_evidence"
     sources = "\n".join(
         path.read_text() for path in root.rglob("*.py") if path.name != "consistency.py"
     )
-    for name, value in declared.items():
-        assert name in sources or value in sources, f"{name} has no production consumer"
+    # The *name*, in Python — not the value. Matching the value is satisfied by the schema's
+    # copy of the literal, which is exactly how an orphaned constant slipped through before.
+    #
+    # The exported verdict vocabulary only. `AUTOMATIC_RESOLUTION_PREFIX` is an internal
+    # needle this module's own predicate reads; demanding an external consumer for it would
+    # be asking for a pointless one.
+    for name in ("CONSISTENT", "NEEDS_REVIEW"):
+        assert name in sources, f"{name} is declared but no Python module consumes it"
 
 
 def test_no_production_module_spells_the_verdict_inline() -> None:
