@@ -273,9 +273,12 @@ def test_structured_results_sql_and_python_agree_on_every_matrix() -> None:
 
 
 def test_structured_results_treats_whitespace_only_as_empty() -> None:
-    """SQLite's one-argument `trim()` strips spaces only; Python's strip() strips tabs too.
+    """Both forms must use the same explicit whitespace set.
 
-    A field holding a tab must read as absent in both, or the queue and the detail disagree.
+    SQLite's `trim()` knows only the characters it is handed; Python's `str.strip()` strips
+    everything Unicode calls whitespace. Left to their defaults the two disagree — on a tab
+    (SQL: content, Python: empty) and on a non-breaking space (SQL: content, Python: empty).
+    `EMPTY_WHITESPACE` pins both.
     """
 
     import sqlite3
@@ -317,3 +320,56 @@ def test_structured_results_treats_whitespace_only_as_empty() -> None:
     )
 
     assert by_sql == by_python is False
+
+
+def test_structured_results_agrees_on_unicode_whitespace() -> None:
+    """A lone non-breaking space is content in both forms, by the shared explicit policy.
+
+    Python's `str.strip()` would strip U+00A0 and SQL's `trim()` cannot name it, so the two
+    default behaviours disagree. Pinning both to `EMPTY_WHITESPACE` makes the char content
+    on both sides rather than leaving the answer to each runtime's idea of whitespace.
+    """
+
+    import sqlite3
+
+    from genesis_evidence.core.store.screening import (
+        RESULT_FIELDS,
+        has_structured_results,
+        structured_results_sql,
+    )
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE papers(id TEXT);
+        CREATE TABLE claims(id TEXT, paper_id TEXT, result_id TEXT,
+            evidence_text TEXT, locator TEXT);
+        CREATE TABLE results(id TEXT, population TEXT, ingredient_name TEXT,
+            ingredient_form TEXT, dose TEXT, comparator TEXT, outcome TEXT,
+            timepoint TEXT, effect_estimate TEXT, statistical_details TEXT);
+        INSERT INTO papers VALUES('p');
+        """
+    )
+    query = "SELECT " + structured_results_sql("'p'")
+
+    for character in (" ", " "):
+        connection.execute("DELETE FROM claims")
+        connection.execute("DELETE FROM results")
+        connection.execute(
+            "INSERT INTO results VALUES('r'," + ",".join(["?"] * 9) + ")",
+            (character, *["v"] * 8),
+        )
+        connection.execute("INSERT INTO claims VALUES('c','p','r','ev','loc')")
+        by_sql = bool(connection.execute(query).fetchone()[0])
+        by_python = has_structured_results(
+            [
+                {
+                    "result_id": "r",
+                    "evidence_text": "ev",
+                    "locator": "loc",
+                    "population": character,
+                    **{field: "v" for field in RESULT_FIELDS if field != "population"},
+                }
+            ]
+        )
+        assert by_sql == by_python, f"disagree on U+{ord(character):04X}"

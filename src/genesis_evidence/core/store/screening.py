@@ -209,6 +209,13 @@ RESULT_FIELDS: tuple[str, ...] = (
 # Carried by the claim row itself rather than by its result.
 CLAIM_FIELDS: tuple[str, ...] = ("result_id", "evidence_text", "locator")
 
+# The whitespace a field may consist of and still count as empty. Spelled out because the
+# two implementations must agree *exactly*: SQLite's `trim()` knows only the characters you
+# hand it, while Python's `str.strip()` strips every character Unicode calls whitespace —
+# including U+00A0 and friends that SQL has no compact way to name. Pinning both to this one
+# set is what keeps them from disagreeing on a field holding a non-breaking space.
+EMPTY_WHITESPACE = (" ", "\t", "\n", "\r", "\x0b", "\x0c")
+
 
 def structured_results_sql(paper_id_expression: str) -> str:
     """SQL predicate true when a paper has claims and **none** of them is under-populated.
@@ -219,19 +226,14 @@ def structured_results_sql(paper_id_expression: str) -> str:
     "None incomplete", not "one complete": a paper with one good claim and one missing its
     dose is not checkable evidence, and the Python side requires every claim. Phrasing it as
     ``EXISTS (complete claim)`` accepted exactly that mixed case.
-
-    Emptiness is "no character other than whitespace". SQLite's one-argument ``trim()``
-    strips **spaces only**, so it must not stand in for Python's ``str.strip()`` — a field
-    holding a tab would read as present here and absent in Python.
     """
+
+    trim_characters = " || ".join(f"char({ord(character)})" for character in EMPTY_WHITESPACE)
 
     def present(alias: str, field: str) -> str:
         # coalesce: a missing result row leaves the field NULL, and `NULL <> ''` is NULL,
         # not true — which would let an incomplete claim escape the NOT.
-        return (
-            f"trim(coalesce({alias}.{field}, ''), "
-            "' ' || char(9) || char(10) || char(13)) <> ''"
-        )
+        return f"trim(coalesce({alias}.{field}, ''), {trim_characters}) <> ''"
 
     # A claim whose result row is missing is incomplete too, hence the LEFT JOIN.
     required = [present("sc", field) for field in CLAIM_FIELDS] + [
@@ -251,12 +253,20 @@ def has_structured_results(claims: list[dict[str, object]]) -> bool:
 
     Mirrors :func:`structured_results_sql`. The detail loads each claim with its result's
     fields flattened onto the same dict, so one lookup covers both groups.
+
+    Strips only :data:`EMPTY_WHITESPACE`, not whatever ``str.strip()`` happens to consider
+    whitespace — otherwise a lone non-breaking space would read as empty here and as content
+    in SQL.
     """
 
     if not claims:
         return False
+    strippable = "".join(EMPTY_WHITESPACE)
     return all(
-        all(str(claim.get(field) or "").strip() for field in (*CLAIM_FIELDS, *RESULT_FIELDS))
+        all(
+            str(claim.get(field) or "").strip(strippable)
+            for field in (*CLAIM_FIELDS, *RESULT_FIELDS)
+        )
         for claim in claims
     )
 
