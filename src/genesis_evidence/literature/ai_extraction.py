@@ -14,6 +14,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.conditions import CONDITION_BY_CODE, CONDITIONS
+from ..core.consistency import CONSISTENT, NEEDS_REVIEW, Verdict
 from ..core.source_excerpt import Excerpt, attest
 from .models import PaperRecord
 
@@ -168,14 +169,14 @@ class ConsistencyIssue(BaseModel):
 class ConsistencyReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    verdict: Literal["consistent", "needs_review"]
+    verdict: Verdict
     issues: list[ConsistencyIssue] = Field(max_length=200)
 
     @model_validator(mode="after")
     def verdict_matches_issues(self) -> ConsistencyReport:
-        if self.verdict == "consistent" and self.issues:
+        if self.verdict == CONSISTENT and self.issues:
             raise ValueError("consistent verdict cannot contain issues")
-        if self.verdict == "needs_review" and not self.issues:
+        if self.verdict == NEEDS_REVIEW and not self.issues:
             raise ValueError("needs_review verdict requires at least one issue")
         return self
 
@@ -331,10 +332,10 @@ class ArkPaperAnalyzer:
                 ) from correction_error
         if (
             extraction.model_dump(mode="json") != second_extraction.model_dump(mode="json")
-            and consistency.verdict == "consistent"
+            and consistency.verdict == CONSISTENT
         ):
             consistency = ConsistencyReport(
-                verdict="needs_review",
+                verdict=NEEDS_REVIEW,
                 issues=[
                     ConsistencyIssue(
                         field="dual_extraction",

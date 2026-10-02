@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..core.consistency import is_source_based
+from ..core.consistency import NEEDS_REVIEW, is_source_based
 from ..core.source_excerpt import (
     Excerpt,
     attest_segments,
@@ -422,7 +422,7 @@ class EvidenceReviewService:
         automatically_adjudicated = False
         source_adjudicated = False
         source_rejected_claim_ids: set[str] = set()
-        if (item.get("consistency") or {}).get("verdict") == "needs_review":
+        if (item.get("consistency") or {}).get("verdict") == NEEDS_REVIEW:
             material_issues = [
                 issue for issue in guidance["issues"] if issue.get("priority") == "must_resolve"
             ]

@@ -25,7 +25,7 @@ from ...review.scope import (
     _synthesis_dimensions,
     _topic_outcome_components,  # noqa: F401
 )
-from ..consistency import is_source_based
+from ..consistency import NEEDS_REVIEW, is_source_based
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
 from .card_evidence import (
@@ -96,7 +96,7 @@ class ReviewStore:
             ).fetchone()
             if extraction is None:
                 raise ValueError("paper has no AI extraction")
-            if extraction["consistency_status"] == "needs_review":
+            if extraction["consistency_status"] == NEEDS_REVIEW:
                 if not differences_confirmed:
                     raise ValueError(
                         "AI extraction differences require executing-actor verification"
@@ -2213,7 +2213,7 @@ def _review_guidance(
     ]
     unresolved_consistency = (consistency or {}).get(
         "verdict"
-    ) == "needs_review" and not _source_based_consistency_resolution(admission)
+    ) == NEEDS_REVIEW and not _source_based_consistency_resolution(admission)
     material_issues = [issue for issue in issues if issue["priority"] == "must_resolve"]
     pending_claims = [claim for claim in claims if claim.get("status") == "candidate"]
     checks = [

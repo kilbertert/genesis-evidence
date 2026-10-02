@@ -7,6 +7,8 @@ blocker without a human signature, so it gets one home and one truth table.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from genesis_evidence.core.consistency import (
@@ -75,3 +77,41 @@ def test_the_prefix_matches_the_producer_it_names() -> None:
         "the automatic-resolution producer no longer writes this prefix; provenance would "
         "flip for every stored adjudication"
     )
+
+
+def test_every_declared_name_has_a_production_consumer() -> None:
+    """A constant nothing reads is a claim of ownership the code does not honour.
+
+    The first version of this module declared `CONSISTENT`/`NEEDS_REVIEW` while every
+    production site still spelled the literal, so a rename would have changed nothing.
+    """
+
+    import genesis_evidence.core.consistency as owner
+
+    declared = {
+        name: value
+        for name, value in vars(owner).items()
+        if name.isupper() and not name.startswith("_") and isinstance(value, str)
+    }
+    assert declared, "the owner declares no named values"
+
+    root = Path(__file__).resolve().parents[1] / "src" / "genesis_evidence"
+    sources = "\n".join(
+        path.read_text() for path in root.rglob("*.py") if path.name != "consistency.py"
+    )
+    for name, value in declared.items():
+        assert name in sources or value in sources, f"{name} has no production consumer"
+
+
+def test_no_production_module_spells_the_verdict_inline() -> None:
+    """The verdict literals live in the owner; a copy is the drift this module prevents."""
+
+    root = Path(__file__).resolve().parents[1] / "src" / "genesis_evidence"
+    allowed = {"core/consistency.py", "core/store/schema.py"}
+    for path in root.rglob("*.py"):
+        relative = str(path.relative_to(root))
+        if relative in allowed:
+            continue
+        source = path.read_text()
+        assert '"needs_review"' not in source, f"{relative} spells the verdict inline"
+        assert '"consistent"' not in source, f"{relative} spells the verdict inline"
