@@ -17,7 +17,9 @@ statement, which is why it must only ever be handed the tuples defined in this m
 from __future__ import annotations
 
 # Study designs that describe mechanism or an individual case rather than an effect
-# estimate a patient-facing claim could rest on.
+# estimate a patient-facing claim could rest on. The design *vocabulary* is owned by
+# `core.methodology`; this is the eligibility criterion over it, and
+# `tests/test_methodology.py` asserts every design named here is a real one.
 EXCLUDED_STUDY_DESIGNS: tuple[str, ...] = (
     "animal_study",
     "in_vitro_study",

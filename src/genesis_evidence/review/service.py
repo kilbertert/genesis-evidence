@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.consistency import NEEDS_REVIEW, is_source_based
+from ..core.methodology import StudyDesign, permits_causal_inference
 from ..core.source_excerpt import (
     Excerpt,
     attest_segments,
@@ -17,31 +18,9 @@ from ..core.source_excerpt import (
 )
 from ..core.store import ObjectStore, PaperStore, ReviewStore
 from ..core.store.screening import terminal_exclusion
-from ..literature.ai_extraction import OBSERVATIONAL_DESIGNS
 from ..literature.jats import JatsParseError, JatsParser
 
 AUTONOMOUS_REVIEW_POLICY_VERSION = "literature-review-ai/1.5"
-
-StudyDesign = Literal[
-    "randomized_controlled_trial",
-    "systematic_review_meta_analysis",
-    "cohort_study",
-    "case_control_study",
-    "cross_sectional_study",
-    "controlled_feeding_metabolic_study",
-    "bioavailability_pharmacokinetic_study",
-    "biomarker_validation_study",
-    "non_randomized_controlled_study",
-    "natural_experiment",
-    "ecological_study",
-    "animal_study",
-    "in_vitro_study",
-    "case_series",
-    "case_report",
-    "guideline",
-    "other",
-    "uncertain",
-]
 
 PublicationRole = Literal[
     "primary",
@@ -119,7 +98,7 @@ class ClaimReviewInput(BaseModel):
             raise ValueError("approved claims require executing-actor source verification")
         if (
             self.decision == "approved"
-            and self.corrected_study_design in OBSERVATIONAL_DESIGNS
+            and not permits_causal_inference(self.corrected_study_design)
             and self.inference == "causal"
         ):
             raise ValueError("observational claims cannot be approved as causal")
@@ -994,7 +973,7 @@ def _automatic_claim_review(
     if design == "uncertain":
         return None
     inference = str(suggestion.get("inference") or "descriptive")
-    if design in OBSERVATIONAL_DESIGNS and inference == "causal":
+    if not permits_causal_inference(design) and inference == "causal":
         inference = "associational"
     risk = dict(suggestion.get("risk_of_bias") or {})
     reported_limitations = str(risk.get("rationale") or "").casefold()

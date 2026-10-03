@@ -15,20 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ..core.conditions import CONDITION_BY_CODE, CONDITIONS
 from ..core.consistency import CONSISTENT, NEEDS_REVIEW, Verdict
+from ..core.methodology import STUDY_DESIGNS, permits_causal_inference
 from ..core.source_excerpt import Excerpt, attest
 from .models import PaperRecord
 
 DEFAULT_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
 DEFAULT_ARK_MODEL = "deepseek-v4-flash-ga-260731"
 API_KEY_FIELDS = {"apikey", "api_key", "api-key"}
-OBSERVATIONAL_DESIGNS = {
-    "cohort_study",
-    "case_control_study",
-    "cross_sectional_study",
-    "case_series",
-    "case_report",
-    "ecological_study",
-}
 
 
 class PaperAnalysisError(RuntimeError):
@@ -111,26 +104,7 @@ class PaperExtraction(BaseModel):
 
     summary: str = Field(min_length=1, max_length=3000)
     research_question: str = Field(min_length=1, max_length=1500)
-    study_design: Literal[
-        "randomized_controlled_trial",
-        "systematic_review_meta_analysis",
-        "cohort_study",
-        "case_control_study",
-        "cross_sectional_study",
-        "controlled_feeding_metabolic_study",
-        "bioavailability_pharmacokinetic_study",
-        "biomarker_validation_study",
-        "non_randomized_controlled_study",
-        "natural_experiment",
-        "ecological_study",
-        "animal_study",
-        "in_vitro_study",
-        "case_series",
-        "case_report",
-        "guideline",
-        "other",
-        "uncertain",
-    ]
+    study_design: Literal[*STUDY_DESIGNS]
     population: list[str] = Field(max_length=30)
     countries_and_centers: str = Field(min_length=1, max_length=1500)
     recruitment_period: str = Field(min_length=1, max_length=500)
@@ -150,7 +124,7 @@ class PaperExtraction(BaseModel):
 
     @model_validator(mode="after")
     def observational_claims_must_remain_associational(self) -> PaperExtraction:
-        if self.study_design in OBSERVATIONAL_DESIGNS and any(
+        if not permits_causal_inference(self.study_design) and any(
             claim.inference == "causal" for claim in self.claims
         ):
             raise ValueError("observational studies cannot produce causal claims")
