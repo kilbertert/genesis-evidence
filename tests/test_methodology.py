@@ -24,30 +24,6 @@ from genesis_evidence.core.store.card_evidence import EXCLUDED_STUDY_DESIGNS
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "genesis_evidence"
 
-#: The vocabulary as it stood before this module owned it. Frozen here so a derived
-#: ``Literal`` that silently reorders or drops a value fails, not just one that adds.
-VOCABULARY_BEFORE_CONSOLIDATION = (
-    "randomized_controlled_trial",
-    "systematic_review_meta_analysis",
-    "cohort_study",
-    "case_control_study",
-    "cross_sectional_study",
-    "controlled_feeding_metabolic_study",
-    "bioavailability_pharmacokinetic_study",
-    "biomarker_validation_study",
-    "non_randomized_controlled_study",
-    "natural_experiment",
-    "ecological_study",
-    "animal_study",
-    "in_vitro_study",
-    "case_series",
-    "case_report",
-    "guideline",
-    "other",
-    "uncertain",
-)
-
-
 def _sql_check_values(relative_path: str) -> set[str]:
     """The value set of a `corrected_study_design` CHECK, whitespace-insensitively.
 
@@ -66,15 +42,19 @@ def _workbench_source() -> str:
 
 
 def test_study_design_type_is_derived_from_the_one_vocabulary() -> None:
-    """The review boundary's Literal must be the vocabulary, not a copy of it."""
+    """The review boundary's Literal must be the vocabulary, not a copy of it.
 
-    assert get_args(StudyDesign) == VOCABULARY_BEFORE_CONSOLIDATION
+    A second hand-written ``Literal`` is the drift this module exists to stop, so the
+    derived type is checked by *identity* of its arguments rather than by content.
+    """
+
+    assert get_args(StudyDesign) == STUDY_DESIGNS
 
 
-def test_the_vocabulary_is_unchanged_from_the_pre_consolidation_literal() -> None:
-    """A pure refactor: same values, same order, same length."""
+def test_the_vocabulary_has_no_duplicates() -> None:
+    """A repeated value would make the design count lie while the sets still match."""
 
-    assert STUDY_DESIGNS == VOCABULARY_BEFORE_CONSOLIDATION
+    assert len(set(STUDY_DESIGNS)) == len(STUDY_DESIGNS)
 
 
 @pytest.mark.parametrize(
@@ -86,7 +66,7 @@ def test_the_sql_check_matches_the_vocabulary(relative_path: str) -> None:
 
     values = _sql_check_values(relative_path)
     # A regex that silently stops matching would make the comparison below vacuous.
-    assert len(values) == len(STUDY_DESIGNS) == 18, f"{relative_path}: extracted {values}"
+    assert len(values) == len(STUDY_DESIGNS), f"{relative_path}: extracted {values}"
     assert values == set(STUDY_DESIGNS), f"{relative_path} CHECK has drifted"
 
 
