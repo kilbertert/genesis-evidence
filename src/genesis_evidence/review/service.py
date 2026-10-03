@@ -9,7 +9,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.consistency import NEEDS_REVIEW, is_source_based
-from ..core.methodology import StudyDesign, permits_causal_inference
+from ..core.methodology import (
+    RANDOMIZED_DESIGNS,
+    RiskOfBiasTool,
+    StudyDesign,
+    is_single_primary_capped,
+    permits_causal_inference,
+    permitted_risk_of_bias_tools,
+)
 from ..core.source_excerpt import (
     Excerpt,
     attest_segments,
@@ -38,16 +45,7 @@ PublicationRole = Literal[
 class RiskOfBiasInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tool: Literal[
-        "rob2",
-        "robins_i",
-        "robis",
-        "amstar2",
-        "diagnostic_accuracy",
-        "exposure_study",
-        "safety_signal",
-        "other",
-    ]
+    tool: RiskOfBiasTool
     overall: Literal["low", "some_concerns", "high", "critical", "uncertain"]
     rationale: str = Field(min_length=1, max_length=4000)
 
@@ -103,23 +101,7 @@ class ClaimReviewInput(BaseModel):
         ):
             raise ValueError("observational claims cannot be approved as causal")
         if self.decision == "approved" and self.risk_of_bias:
-            allowed_tools = {
-                "randomized_controlled_trial": {"rob2"},
-                "systematic_review_meta_analysis": {"robis", "amstar2"},
-                "non_randomized_controlled_study": {"robins_i"},
-                "natural_experiment": {"robins_i"},
-                "biomarker_validation_study": {"diagnostic_accuracy"},
-                "bioavailability_pharmacokinetic_study": {"other"},
-                "controlled_feeding_metabolic_study": {"rob2", "other"},
-                "cohort_study": {"exposure_study"},
-                "case_control_study": {"exposure_study"},
-                "cross_sectional_study": {"exposure_study"},
-                "ecological_study": {"exposure_study"},
-                "case_series": {"safety_signal"},
-                "case_report": {"safety_signal"},
-                "animal_study": {"other"},
-                "in_vitro_study": {"other"},
-            }.get(self.corrected_study_design)
+            allowed_tools = permitted_risk_of_bias_tools(self.corrected_study_design)
             if allowed_tools and self.risk_of_bias.tool not in allowed_tools:
                 raise ValueError("risk-of-bias tool does not match the reviewed study design")
         return self
@@ -1173,12 +1155,7 @@ def _automatic_profile(
     claims = group["claims"]
     dimensions = group["dimensions"]
     designs = {str(claim["corrected_study_design"]) for claim in claims}
-    randomized = {
-        "randomized_controlled_trial",
-        "systematic_review_meta_analysis",
-        "controlled_feeding_metabolic_study",
-    }
-    score = 3 if designs <= randomized else 1
+    score = 3 if designs <= RANDOMIZED_DESIGNS else 1
     risk_overall = {str(claim["risk_of_bias"]["overall"]) for claim in claims}
     risk_domain = (
         "very_serious"
@@ -1232,7 +1209,7 @@ def _automatic_profile(
             if value in downgrade
         ),
     )
-    single_primary_study = study_count == 1 and "systematic_review_meta_analysis" not in designs
+    single_primary_study = is_single_primary_capped(study_count, designs)
     score = min(score, 1 if single_primary_study else 2)
     certainty = {0: "very_low", 1: "low", 2: "moderate"}[score]
     target = (

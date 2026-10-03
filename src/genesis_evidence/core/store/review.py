@@ -26,6 +26,7 @@ from ...review.scope import (
     _topic_outcome_components,  # noqa: F401
 )
 from ..consistency import NEEDS_REVIEW, is_source_based
+from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
 from .card_evidence import (
@@ -1734,19 +1735,6 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
     return topic
 
 
-_RISK_OF_BIAS_TOOL = {
-    "randomized_controlled_trial": "rob2",
-    "systematic_review_meta_analysis": "robis",
-    "non_randomized_controlled_study": "robins_i",
-    "natural_experiment": "robins_i",
-    "biomarker_validation_study": "diagnostic_accuracy",
-    "cohort_study": "exposure_study",
-    "case_control_study": "exposure_study",
-    "cross_sectional_study": "exposure_study",
-    "ecological_study": "exposure_study",
-    "case_series": "safety_signal",
-    "case_report": "safety_signal",
-}
 
 
 def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
@@ -2009,7 +1997,7 @@ def _claim_dict(
         )
     )
     limitations = [str(value) for value in extraction.get("limitations", []) if str(value).strip()]
-    tool = _RISK_OF_BIAS_TOOL.get(design, "other")
+    tool = risk_of_bias_tool_for(design)
     condition_code = matching_conditions[0] if len(matching_conditions) == 1 else ""
     suggested_decision = (
         "approved" if condition_code else ("rejected" if not matching_conditions else "")

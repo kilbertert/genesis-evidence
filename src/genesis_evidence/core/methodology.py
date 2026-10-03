@@ -38,6 +38,7 @@ all three layers may depend on it without an import cycle — the discipline
 
 from __future__ import annotations
 
+from collections.abc import Container, Mapping
 from typing import Literal
 
 #: The one Python study-design vocabulary. Ordered as the original literal was, so
@@ -90,3 +91,109 @@ def permits_causal_inference(design: str) -> bool:
     """
 
     return design not in OBSERVATIONAL_DESIGNS
+
+
+#: The risk-of-bias instruments an appraisal may name. The review boundary's tool
+#: type is derived from this, so a new instrument is one edit.
+RISK_OF_BIAS_TOOLS: tuple[str, ...] = (
+    "rob2",
+    "robins_i",
+    "robis",
+    "amstar2",
+    "diagnostic_accuracy",
+    "exposure_study",
+    "safety_signal",
+    "other",
+)
+
+RiskOfBiasTool = Literal[*RISK_OF_BIAS_TOOLS]
+
+#: Which instrument appraises each design. This was two tables: the review gate
+#: enforced (design, tool) compatibility from one, and the review *suggestion* was
+#: seeded from another with a different shape. The pair still exists — a design permits
+#: a set, and the suggestion proposes one member — but both now read this table, so a
+#: design cannot be seeded with an instrument its own gate rejects.
+#:
+#: A design absent here has **no compatibility rule**: the gate accepts any instrument,
+#: which is the behaviour the gate already had for those designs.
+_PERMITTED_RISK_OF_BIAS_TOOLS: Mapping[str, frozenset[str]] = {
+    "randomized_controlled_trial": frozenset({"rob2"}),
+    "systematic_review_meta_analysis": frozenset({"robis", "amstar2"}),
+    "non_randomized_controlled_study": frozenset({"robins_i"}),
+    "natural_experiment": frozenset({"robins_i"}),
+    "biomarker_validation_study": frozenset({"diagnostic_accuracy"}),
+    "bioavailability_pharmacokinetic_study": frozenset({"other"}),
+    "controlled_feeding_metabolic_study": frozenset({"rob2", "other"}),
+    "cohort_study": frozenset({"exposure_study"}),
+    "case_control_study": frozenset({"exposure_study"}),
+    "cross_sectional_study": frozenset({"exposure_study"}),
+    "ecological_study": frozenset({"exposure_study"}),
+    "case_series": frozenset({"safety_signal"}),
+    "case_report": frozenset({"safety_signal"}),
+    "animal_study": frozenset({"other"}),
+    "in_vitro_study": frozenset({"other"}),
+}
+
+#: The instrument the review *suggestion* proposes. Every design is a key, so the
+#: default is declared rather than fallen into: the previous code used a
+#: ``dict.get(design, "other")`` whose probe happens to be permitted for every design
+#: it caught, an invariant nothing enforced until now.
+DEFAULT_RISK_OF_BIAS_TOOL: Mapping[str, str] = {
+    **{design: "other" for design in STUDY_DESIGNS},
+    "randomized_controlled_trial": "rob2",
+    "systematic_review_meta_analysis": "robis",
+    "non_randomized_controlled_study": "robins_i",
+    "natural_experiment": "robins_i",
+    "biomarker_validation_study": "diagnostic_accuracy",
+    "cohort_study": "exposure_study",
+    "case_control_study": "exposure_study",
+    "cross_sectional_study": "exposure_study",
+    "ecological_study": "exposure_study",
+    "case_series": "safety_signal",
+    "case_report": "safety_signal",
+}
+
+#: Designs that assign the exposure, so a synthesis of them starts at the top tier.
+RANDOMIZED_DESIGNS: frozenset[str] = frozenset(
+    {
+        "randomized_controlled_trial",
+        "systematic_review_meta_analysis",
+        "controlled_feeding_metabolic_study",
+    }
+)
+
+#: Designs that already synthesise several studies, so a single one of them is not a
+#: single-study synthesis and its certainty is not capped on that ground.
+SYNTHESIS_DESIGNS: frozenset[str] = frozenset({"systematic_review_meta_analysis"})
+
+
+def permitted_risk_of_bias_tools(design: str) -> frozenset[str] | None:
+    """The instruments a review may pick for a design, or ``None`` for no rule.
+
+    ``None`` means the gate imposes no compatibility constraint, which is how every
+    design outside the table already behaved. Callers must test for it rather than
+    treating it as the empty set.
+    """
+
+    return _PERMITTED_RISK_OF_BIAS_TOOLS.get(design)
+
+
+def risk_of_bias_tool_for(design: str) -> str:
+    """The instrument to propose for a design.
+
+    The one place a fallback survives, for a design outside the vocabulary (e.g. the
+    extractor's own ``"uncertain"`` probe reaching an unpopulated path).
+    """
+
+    return DEFAULT_RISK_OF_BIAS_TOOL.get(design, "other")
+
+
+def is_single_primary_capped(study_count: int, designs: Container[str]) -> bool:
+    """Whether a synthesis is capped at low certainty for resting on one primary study.
+
+    Takes the paper count and the design set separately: ``study_count == 1`` counts
+    papers while ``len(designs) == 1`` counts distinct designs, and one paper of one
+    design is not the same case as one paper that synthesises others.
+    """
+
+    return study_count == 1 and not (set(designs) & SYNTHESIS_DESIGNS)
