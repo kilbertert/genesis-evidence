@@ -60,6 +60,10 @@ def test_no_module_restates_the_design_vocabulary_in_a_literal() -> None:
     today. The bar is deliberately low: a copy that has *already* drifted is the case
     content-equality checks cannot see either.
 
+    Names are matched in either quote style. The repository prefers double quotes, but
+    the linter does not enforce it, so a single-quoted copy is a real spelling and must
+    not be the way past the guard.
+
     This is a source-level scan, not a proof. A copy expressed as a bare list, a set, or
     a mapping would evade it — but those shapes carry other meanings here
     (``card_evidence.EXCLUDED_STUDY_DESIGNS`` and the design→instrument maps are
@@ -69,7 +73,11 @@ def test_no_module_restates_the_design_vocabulary_in_a_literal() -> None:
     offenders: list[str] = []
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
         for match in re.finditer(r"Literal\[([^\]]*)\]", path.read_text()):
-            hits = [design for design in STUDY_DESIGNS if f'"{design}"' in match.group(1)]
+            hits = [
+                design
+                for design in STUDY_DESIGNS
+                if re.search(rf"['\"]{re.escape(design)}['\"]", match.group(1))
+            ]
             if len(hits) >= 3:
                 offenders.append(f"{path.relative_to(SOURCE_ROOT)}: {len(hits)} design names")
     assert not offenders, "study-design vocabulary restated as a Literal: " + "; ".join(offenders)
