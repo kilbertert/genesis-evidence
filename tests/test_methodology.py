@@ -42,13 +42,37 @@ def _workbench_source() -> str:
 
 
 def test_study_design_type_is_derived_from_the_one_vocabulary() -> None:
-    """The review boundary's Literal must be the vocabulary, not a copy of it.
+    """The derived type must be the vocabulary's own arguments, not a lookalike.
 
-    A second hand-written ``Literal`` is the drift this module exists to stop, so the
-    derived type is checked by *identity* of its arguments rather than by content.
+    This states the relation, but it cannot *detect* a second hand-written ``Literal``
+    that happens to hold the same values — only the restatement scan below can, because
+    equality of contents is exactly what such a copy would satisfy.
     """
 
     assert get_args(StudyDesign) == STUDY_DESIGNS
+
+
+def test_no_module_restates_the_design_vocabulary_in_a_literal() -> None:
+    """The scan that actually catches a re-declared vocabulary.
+
+    ``Literal[...]`` is the shape every restatement of the design vocabulary took, so a
+    span holding several design names is a second copy regardless of whether it matches
+    today. The bar is deliberately low: a copy that has *already* drifted is the case
+    content-equality checks cannot see either.
+
+    This is a source-level scan, not a proof. A copy expressed as a bare list, a set, or
+    a mapping would evade it — but those shapes carry other meanings here
+    (``card_evidence.EXCLUDED_STUDY_DESIGNS`` and the design→instrument maps are
+    criteria and tables, not the vocabulary), so they are not restatements to forbid.
+    """
+
+    offenders: list[str] = []
+    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+        for match in re.finditer(r"Literal\[([^\]]*)\]", path.read_text()):
+            hits = [design for design in STUDY_DESIGNS if f'"{design}"' in match.group(1)]
+            if len(hits) >= 3:
+                offenders.append(f"{path.relative_to(SOURCE_ROOT)}: {len(hits)} design names")
+    assert not offenders, "study-design vocabulary restated as a Literal: " + "; ".join(offenders)
 
 
 def test_the_vocabulary_has_no_duplicates() -> None:
