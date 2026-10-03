@@ -138,19 +138,31 @@ _PERMITTED_RISK_OF_BIAS_TOOLS: Mapping[str, frozenset[str]] = {
 #: default is declared rather than fallen into: the previous code used a
 #: ``dict.get(design, "other")`` whose probe happens to be permitted for every design
 #: it caught, an invariant nothing enforced until now.
+#:
+#: The entries are written out one by one **on purpose**. Deriving the ``"other"``
+#: entries from :data:`STUDY_DESIGNS` would be shorter and would silently keep working
+#: as the vocabulary grows — which is exactly the failure this table exists to end.
+#: Spelling them out makes a new design fail
+#: ``tests/test_methodology_appraisal.py`` until someone decides what appraises it.
 DEFAULT_RISK_OF_BIAS_TOOL: Mapping[str, str] = {
-    **{design: "other" for design in STUDY_DESIGNS},
     "randomized_controlled_trial": "rob2",
     "systematic_review_meta_analysis": "robis",
-    "non_randomized_controlled_study": "robins_i",
-    "natural_experiment": "robins_i",
-    "biomarker_validation_study": "diagnostic_accuracy",
     "cohort_study": "exposure_study",
     "case_control_study": "exposure_study",
     "cross_sectional_study": "exposure_study",
+    "controlled_feeding_metabolic_study": "other",
+    "bioavailability_pharmacokinetic_study": "other",
+    "biomarker_validation_study": "diagnostic_accuracy",
+    "non_randomized_controlled_study": "robins_i",
+    "natural_experiment": "robins_i",
     "ecological_study": "exposure_study",
+    "animal_study": "other",
+    "in_vitro_study": "other",
     "case_series": "safety_signal",
     "case_report": "safety_signal",
+    "guideline": "other",
+    "other": "other",
+    "uncertain": "other",
 }
 
 #: Designs that assign the exposure, so a synthesis of them starts at the top tier.
