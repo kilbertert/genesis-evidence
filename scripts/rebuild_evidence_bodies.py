@@ -203,7 +203,14 @@ def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
         if len(cards) < 2:
             continue
         tokens = {token for _, token in cards}
-        (several if len(tokens) > 1 else duplicates).append(list(key))
+        # The two conditions are independent, not exclusive: a scope can carry
+        # two cards for one component *and* a card for another. Classifying by
+        # "does it have several components" alone would report that scope as the
+        # expected presentation case and hide the duplicate inside it.
+        if len(tokens) > 1:
+            several.append(list(key))
+        if len(tokens) < len(cards):
+            duplicates.append(list(key))
 
     report = {
         "applied": write,
