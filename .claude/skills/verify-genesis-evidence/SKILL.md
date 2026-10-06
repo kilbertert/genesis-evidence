@@ -69,8 +69,22 @@ T=$(mktemp -d)
 set -a; source var/review.env; set +a          # real key, real model endpoints
 export GENESIS_EVIDENCE_DATABASE="$T/evidence.sqlite3"   # ← throwaway
 export GENESIS_EVIDENCE_OBJECTS="$T/objects"
-PYTHONPATH=src uv run genesis-evidence-review
+
+# Create the schema FIRST. The two services differ here:
+#   * review/api.py  calls Database.initialize() on startup — a missing database
+#     is fine, it makes one.
+#   * portal/api.py  does NOT. It refuses to start with
+#     "evidence database must be initialized before starting the API".
+uv run python -c "
+from genesis_evidence.core.store.database import Database
+Database('$T/evidence.sqlite3').initialize()"
+
+PYTHONPATH=src uv run genesis-evidence-review   # or genesis-evidence-api
 ```
+
+**Run the schema step unconditionally, for either service.** It is idempotent, and
+the asymmetry above is invisible if you only ever start `review` — which is how
+this gap shipped in the first place.
 
 `GENESIS_EVIDENCE_REVIEW_PORT` (default 8126) selects the port;
 `GENESIS_EVIDENCE_REVIEW_HOST` the bind address. Both come from `var/review.env`.
@@ -174,11 +188,12 @@ Proof standards:
 
 ## Known limits
 
-- **The review workbench has no seeded fixtures of its own.** An empty throwaway DB
-  renders empty queues and an empty coverage matrix — that is a *correct* render of
-  an empty database, not a verified feature. Proving admission/claim/card flows
+- **An empty database is not the same as an absent one, and neither is a verified
+  feature.** `Database.initialize()` creates the schema (and seeds `conditions`) but
+  no papers, cards or coverage — so every queue renders empty. That is a *correct*
+  render of an initialized-but-empty database. Proving admission/claim/card flows
   needs data; the repo's `tests/test_review_api.py` shows how to create it through
-  the API.
+  the API. Do not report "the page rendered" as "the feature works".
 - `/api/review/*` reads and writes real review state. Point it at an isolated DB
   **always**; the helper does this for you.
 - The paper-extraction path calls an external model (`PAPER_AI_*`). Those calls are
