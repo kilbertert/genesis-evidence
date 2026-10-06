@@ -140,7 +140,7 @@ const robTools = ['rob2','robins_i','robis','amstar2','diagnostic_accuracy','exp
 const publicationRoles = ['primary','protocol','statistical_analysis_plan','follow_up','subgroup','combined_report','correction','retraction','other'];
 const stageNames = {extraction_a:'AI-A 通读抽取',extraction_b:'AI-B 独立抽取（同一模型）',consistency:'独立抽取差异检查',saved:'结果已保存'};
 const reviewStates = {blocked:'证据闸门阻塞',ready_for_automation:'等待 AI 执行',completed:'论文级审核完成'};
-let conditions = [], topics = [], selectedPaper = null, current = null, refreshTimer = null, paperRequest = 0, currentView = 'review', diseasePapers = [];
+let conditions = [], topics = [], selectedPaper = null, current = null, refreshTimer = null, paperRequest = 0, currentView = 'review', diseasePapers = [], cardTransitions = {};
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: {'Content-Type':'application/json','Authorization':`Bearer ${$('key').value}`,...(options.headers || {})} });
@@ -178,11 +178,12 @@ async function loadAll(authenticate = false) {
         $('reviewer').textContent = '未认证'; sessionStorage.removeItem('reviewKey'); throw error;
       }
     }
-    const [nextConditions, nextTopics, papers, jobs, cards, coverage, diseasePapersData] = await Promise.all([
+    const [nextConditions, nextTopics, papers, jobs, cards, coverage, diseasePapersData, transitions] = await Promise.all([
       api('/api/review/conditions'), api('/api/review/topics'), api('/api/review/papers'),
       api('/api/review/extraction-jobs'), api('/api/review/cards'), api('/api/review/coverage-matrix'),
-      api('/api/review/disease-papers')
+      api('/api/review/disease-papers'), api('/api/review/card-transitions')
     ]);
+    cardTransitions = transitions;
     conditions = nextConditions; topics = nextTopics; diseasePapers = diseasePapersData;
     renderCoverage(coverage);
     if (currentView === 'disease') renderDiseaseLibrary();
@@ -335,7 +336,7 @@ function renderCoverage(rows) {
   const covered = rows.filter(row => ['published', 'published_context'].includes(row.coverage_status)).length;
   $('coverage').innerHTML = `<div class="review-summary"><div><h2>疾病框架覆盖矩阵</h2><p class="muted">${covered} / ${rows.length} 个指标范围已发布患者可见知识卡。</p></div></div><div class="table-wrap"><table class="coverage-table"><thead><tr><th>健康问题</th><th>指标范围</th><th>证据进度</th><th>状态</th><th>下一步</th></tr></thead><tbody>${rows.map(row => { const backlog = row.screening_backlog || {}; return `<tr><td><strong>${esc(row.condition_name)}</strong><br><span class="muted">${esc(row.condition_code)}</span></td><td>${esc(row.metric_label || '症状/问题级')}<br><span class="muted">${esc(row.metric_code || row.scope_key)}</span></td><td>主题 ${esc(row.locked_topic_count)} · 全文 ${esc(row.full_text_included_count)} · Claim ${esc(row.approved_claim_count)} · Profile ${esc(row.evidence_profile_count)}<br><span class="muted">待筛：题录 ${esc(backlog.title_abstract || 0)} · 获取 ${esc(backlog.retrieval || 0)} · 全文 ${esc(backlog.full_text || 0)}</span></td><td class="status">${esc(statusNames[row.coverage_status] || row.coverage_status)}${row.published_card ? `<br><span class="muted">v${esc(row.published_card.version)} · ${esc(row.published_card.grade)}</span>` : ''}</td><td>${esc(row.next_action)}</td></tr>`; }).join('')}</tbody></table></div>`;
 }
-function nextActions(card) { return ({draft:['in_review','rejected'],in_review:['approved','rejected'],approved:['published','rejected']}[card.status] || []); }
+function nextActions(card) { return cardTransitions[card.status] || []; }
 
 $('key').value = sessionStorage.getItem('reviewKey') || '';
 $('connect').onclick = event => runAction(event.currentTarget, '正在验证密钥并加载工作台…', '工作台已连接。', () => loadAll(true));

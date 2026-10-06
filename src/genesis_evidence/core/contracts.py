@@ -8,7 +8,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CardStatus = Literal["draft", "in_review", "approved", "published", "rejected", "stale"]
+# Derived from the one vocabulary (#221); `core.card_lifecycle` owns the statuses.
+from .card_lifecycle import ACTION_THRESHOLD_GRADES, CardStatus
+
 CardContentLayer = Literal["context_only"]
 ActionStatus = Literal["not_available"]
 EvidenceStrength = Literal["high", "moderate", "low", "very_low", "mixed"]
@@ -45,7 +47,7 @@ def card_capabilities(grade: str) -> dict[str, str]:
         "action_status": "not_available",
         "action_message": (
             "证据确定性已达到行动建议门槛，但当前知识卡尚未包含经审核的具体行动内容。"
-            if grade in {"moderate", "high"}
+            if grade in ACTION_THRESHOLD_GRADES
             else "当前证据确定性尚未达到具体行动建议门槛。"
         ),
     }

@@ -16,9 +16,14 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 
+from ..card_lifecycle import NON_TERMINAL_STATUSES
+
 # Propagation: a claim or a paper changed, so every card citing it leaves the pool —
-# including cards a patient can currently see.
-RETIREABLE_STATUSES: tuple[str, ...] = ("draft", "in_review", "approved", "published")
+# including cards a patient can currently see. This is exactly the non-terminal
+# set: a card already `rejected` or `stale` has left the pool and is not retired
+# again. Deriving it means a status added to the vocabulary is retireable without
+# a second edit here.
+RETIREABLE_STATUSES: tuple[str, ...] = tuple(sorted(NON_TERMINAL_STATUSES))
 
 # Draft-time supersession: a new card at the same condition + scope replaces the
 # non-terminal predecessors. A published card is NOT retired here — it leaves the pool when

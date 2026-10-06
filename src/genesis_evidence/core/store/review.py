@@ -25,6 +25,7 @@ from ...review.scope import (
     _synthesis_dimensions,
     _topic_outcome_components,  # noqa: F401
 )
+from ..card_lifecycle import CARD_STATUSES, can_transition, is_patient_visible
 from ..components import pool_token
 from ..consistency import NEEDS_REVIEW, is_source_based
 from ..methodology import risk_of_bias_tool_for
@@ -750,11 +751,6 @@ class ReviewStore:
         return card_id
 
     def transition_card(self, card_id: str, *, reviewer: str, target: str) -> None:
-        allowed = {
-            "draft": {"in_review", "rejected"},
-            "in_review": {"approved", "rejected"},
-            "approved": {"published", "rejected"},
-        }
         with self.database.transaction() as connection:
             card = connection.execute(
                 "SELECT kc.*, ep.scope_key, ep.component_token FROM knowledge_cards kc "
@@ -764,11 +760,11 @@ class ReviewStore:
             ).fetchone()
             if card is None:
                 raise ValueError("knowledge card not found")
-            if target not in allowed.get(str(card["status"]), set()):
+            if not can_transition(str(card["status"]), target):
                 raise ValueError(f"invalid card transition: {card['status']} -> {target}")
             if target == "published":
                 self._require_publishable(connection, card_id)
-                if card["grade"] not in {"high", "moderate", "low"}:
+                if not is_patient_visible(str(target), str(card["grade"])):
                     raise ValueError(
                         "patient-visible context cards require low, moderate, or high certainty"
                     )
@@ -1363,7 +1359,7 @@ class ReviewStore:
                     ).fetchall()
                     card_counts = {
                         status: sum(row["status"] == status for row in card_rows)
-                        for status in ("draft", "in_review", "approved", "published", "stale")
+                        for status in CARD_STATUSES
                     }
                     published = next(
                         (row for row in card_rows if row["status"] == "published"), None

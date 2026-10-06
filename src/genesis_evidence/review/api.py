@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..core.card_lifecycle import CARD_TRANSITIONS, CardStatus
 from ..core.store import Database, ObjectStore, PaperStore, ReviewStore
 from .service import (
     AUTONOMOUS_REVIEW_POLICY_VERSION,
@@ -77,7 +78,9 @@ class CardDraftRequest(BaseModel):
 class CardTransitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target: str
+    # Narrowed to the one vocabulary (#221), so the HTTP boundary rejects a
+    # target the store would reject rather than passing a bare string through.
+    target: CardStatus
 
 
 def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> FastAPI:
@@ -329,6 +332,12 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
     @app.get("/api/review/disease-papers", dependencies=[Depends(principal)])
     def disease_papers() -> list[dict[str, object]]:
         return store.list_disease_papers()
+
+    @app.get("/api/review/card-transitions", dependencies=[Depends(principal)])
+    def card_transitions() -> dict[str, list[str]]:
+        # The workbench's buttons come from here, so the page cannot offer a
+        # transition the store would refuse (#221).
+        return {status: list(targets) for status, targets in CARD_TRANSITIONS.items()}
 
     @app.post("/api/review/cards")
     def create_card(
