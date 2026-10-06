@@ -3,6 +3,15 @@
 Read `GLOSSARY.md`, `docs/`, and relevant ADRs before changing code. Preserve
 the product safety boundary and run the documented Python checks.
 
+When a change alters behavior a reviewer or a patient-facing consumer can
+observe, the documented Python checks are not enough on their own: use the
+`verify-genesis-evidence` skill to drive the real service and capture evidence
+before declaring the work done.
+
+**Never point a verification run at `var/genesis-evidence.sqlite3`** — that is
+the working database. The skill's helper creates a throwaway database for you;
+see `CLAUDE.md` ("Verification") for the standard.
+
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
 

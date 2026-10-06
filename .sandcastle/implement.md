@@ -15,6 +15,14 @@ Requirements:
    behavior you change.
 3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
+
+This repo HAS a project verification skill, `.claude/skills/verify-genesis-evidence`.
+If your change alters behavior a reviewer or a patient-facing consumer can
+observe, run that skill and capture its evidence before committing. Tests are not
+a substitute: it drives the real service against a throwaway database. **Never
+point it at `var/genesis-evidence.sqlite3`.** Its evidence is usually gitignored,
+so put what you rely on somewhere the commit carries. If you cannot run it, say
+so and why in the commit body; do not report it as done.
 4. Run `node .sandcastle/policy-check.mjs commit` before committing.
 5. Inspect `git diff --check` and the changed-file list before committing.
 6. Commit the completed work with a Conventional Commit message.
