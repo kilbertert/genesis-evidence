@@ -36,20 +36,35 @@ class ExcludedIntervention:
     """A recorded result whose name understates the intervention studied."""
 
     ingredient_name: str
-    form_marker: str
+    form_signature: str
     reason: str
 
 
 #: Recorded result-level exclusions. Each is a case where the intervention name
-#: resolves to one component but the recorded form shows the study administered
-#: something additional, so the result must not pool as that component alone.
+#: resolves to one component but the recorded form shows the study studied
+#: something else or something additional, so the result must not pool as that
+#: component alone.
+#:
+#: The signature is a **phrase naming the recorded case**, never a single word.
+#: A single word like "iron" would also match "Iron-free oral vitamin D
+#: supplement" and drop valid evidence — the opposite failure, and a worse one,
+#: because it is silent.
 EXCLUDED_INTERVENTIONS: tuple[ExcludedIntervention, ...] = (
     ExcludedIntervention(
         ingredient_name="Vitamin D",
-        form_marker="iron",
+        form_signature="iron and vitamin d fortified",
         reason=(
             "the recorded form is an iron-and-vitamin-D fortified milk, so the "
             "study administered iron as well as vitamin D"
+        ),
+    ),
+    ExcludedIntervention(
+        ingredient_name="EVOO",
+        form_signature="mediterranean diet",
+        reason=(
+            "the recorded form places the olive oil within a Mediterranean-diet "
+            "trial, so the study's intervention is a dietary pattern rather than "
+            "an olive-oil exposure"
         ),
     ),
 )
@@ -68,7 +83,7 @@ def is_component_poolable(ingredient_name: str, ingredient_form: str) -> bool:
     for excluded in EXCLUDED_INTERVENTIONS:
         if _normalize(excluded.ingredient_name) != name:
             continue
-        if _normalize(excluded.form_marker) in form:
+        if _normalize(excluded.form_signature) in form:
             return False
     return True
 
@@ -79,11 +94,16 @@ def demo() -> None:
     assert not is_component_poolable(
         "Vitamin D", "Iron and vitamin D fortified flavored skim milk (500 mL)"
     )
-    assert not is_component_poolable("Vitamin D", "IRON-fortified milk")
+    assert not is_component_poolable("Vitamin D", "IRON AND VITAMIN D FORTIFIED MILK")
     # The same name with an ordinary form still pools.
     assert is_component_poolable("Vitamin D", "Oral supplement")
     assert is_component_poolable("Vitamin D", "未报告")
     assert is_component_poolable("Vitamin D", "")
+    # A form that names the absence of iron is not the fortified milk.
+    assert is_component_poolable("Vitamin D", "Iron-free oral vitamin D supplement")
+    # The dietary-pattern EVOO case, and an ordinary EVOO result beside it.
+    assert not is_component_poolable("EVOO", "EVOO within Mediterranean Diet")
+    assert is_component_poolable("EVOO", "EVOO as the principal fat")
     # Another component is untouched by the vitamin-D exclusion.
     assert is_component_poolable("Olive oil", "Olive oil gel capsules")
     print(f"excluded_interventions={len(EXCLUDED_INTERVENTIONS)} ok")
