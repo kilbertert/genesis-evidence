@@ -118,9 +118,43 @@ def main() -> int:
     base = f"http://127.0.0.1:{port}"
 
     sandbox = Path(tempfile.mkdtemp(prefix=f"genesis-verify-{args.service}-"))
-    env["GENESIS_EVIDENCE_DATABASE"] = str(sandbox / "evidence.sqlite3")
+    database_path = sandbox / "evidence.sqlite3"
+    env["GENESIS_EVIDENCE_DATABASE"] = str(database_path)
     env["GENESIS_EVIDENCE_OBJECTS"] = str(sandbox / "objects")
     env["PYTHONPATH"] = f"{repo / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+
+    # Schema first, always. The review service initializes the database itself
+    # (`review/api.py` calls `Database.initialize()`), but the portal API does
+    # NOT: it refuses to start with
+    #     "evidence database must be initialized before starting the API"
+    # That asymmetry is invisible if you only ever run --service review, which is
+    # exactly how this gap got shipped. Initialize here so both services come up.
+    # Idempotent: the review service calls it on every startup.
+    try:
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "python",
+                "-c",
+                "import sys; from genesis_evidence.core.store.database import Database;"
+                " Database(sys.argv[1]).initialize()",
+                str(database_path),
+            ],
+            cwd=repo,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        print("  schema: initialized")
+    except subprocess.CalledProcessError as exc:
+        print(
+            "error: could not initialize the schema\n" + (exc.stderr or "")[-800:],
+            file=sys.stderr,
+        )
+        return 1
 
     print(f"sandbox: {sandbox}")
     print(f"service: {spec['entrypoint']} -> {base}")
