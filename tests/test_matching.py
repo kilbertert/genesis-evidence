@@ -48,8 +48,15 @@ def _card(card_id: str, *, scope_key: str, grade: str = "moderate") -> dict[str,
 def _adapter(cards: dict[tuple[str, str], dict[str, object]]) -> CardAdapter:
     return CardAdapter(
         condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-        lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key)),
+        lookup=lambda condition_code, scope_key: _at(cards, condition_code, scope_key),
     )
+
+
+def _at(cards, condition_code, scope_key):
+    """The adapter answers with every card at a scope; fixtures hold one."""
+
+    card = cards.get((condition_code, scope_key))
+    return () if card is None else (card,)
 
 
 def _entry(
@@ -107,7 +114,7 @@ def test_strict_resolver_rejects_non_metric_scopes() -> None:
     cards = {("COND_PREDIABETES", "anything-else"): _card("c1", scope_key="anything-else")}
     adapter = CardAdapter(
         condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-        lookup=lambda condition_code, scope_key: cards.get((condition_code, "anything-else")),
+        lookup=lambda condition_code, scope_key: _at(cards, condition_code, "anything-else"),
     )
 
     def produce(fc, condition, card, entry, scope_key):

@@ -664,13 +664,14 @@ def test_evidence_api_keeps_versioned_response_contract_private(tmp_path) -> Non
     }
 
 
-def test_two_components_in_one_scope_do_not_mix_patient_citations(tmp_path) -> None:
+def test_two_components_in_one_scope_serve_both_cards_without_mixing_sources(tmp_path) -> None:
     """ADR 0007: one scope may carry one card per component.
 
-    Keying patient answers by (condition, scope) is what `core.contracts`
-    requires of a visible card, so a scope carrying two components has no single
-    answer. It must serve nothing rather than one component's conclusion with the
-    other component's citations attached — the defect this pins.
+    Those are two independently reviewed answers to the same observation, not two
+    versions of one answer, so the patient is shown both — and each keeps its own
+    body and its own citations. The failure this pins is the one that motivated
+    keeping them apart: a single card chosen by sort order, carrying the other
+    component's sources.
     """
 
     database, client = _client(tmp_path)
@@ -712,18 +713,22 @@ def test_two_components_in_one_scope_do_not_mix_patient_citations(tmp_path) -> N
         ],
         confirmed=True,
     )
-    response = client.post(
-        "/api/evidence/matches", json=adapted.request.model_dump()
-    )
+    response = client.post("/api/evidence/matches", json=adapted.request.model_dump())
     assert response.status_code == 200, response.json()
-    body = response.json()
 
-    evidence = body["findings"][0]["evidence_items"] if body["findings"] else []
-    served = [item["card"]["id"] for item in evidence]
-    assert served == [], (
-        "an ambiguous (condition, scope) must serve no card, "
-        f"but served {served}"
-    )
+    items = [
+        item
+        for finding in response.json()["findings"]
+        for item in finding["evidence_items"]
+    ]
+    served = sorted(item["card"]["id"] for item in items)
+    assert served == ["card-a", "card-b"], "both component cards must be served"
+
+    # Each item carries exactly its own card's source, never the sibling's.
+    by_card = {item["card"]["id"]: item for item in items}
+    for card_id, own_paper in (("card-a", "paper-a"), ("card-b", "paper-b")):
+        papers = {source["paper_id"] for source in by_card[card_id]["card"]["sources"]}
+        assert papers == {own_paper}, f"{card_id} carries another card's sources: {papers}"
 
 
 def test_a_single_component_scope_still_serves_its_card(tmp_path) -> None:
