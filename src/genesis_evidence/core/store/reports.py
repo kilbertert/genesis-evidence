@@ -21,6 +21,7 @@ from ...reports.extraction import (
     ReportExtractionUnavailable,
     ReportFile,
 )
+from ..card_lifecycle import patient_visible_sql
 from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
@@ -444,10 +445,10 @@ class ReportStore:
             ).fetchall()
             cards: dict[str, dict[str, object]] = {}
             for row in connection.execute(
-                """
+                f"""
                 SELECT id, condition_code, version, grade, published_at
                 FROM knowledge_cards
-                WHERE status = 'published' AND grade IN ('high', 'moderate', 'low')
+                WHERE {patient_visible_sql("knowledge_cards")}
                 ORDER BY published_at DESC, version DESC
                 """
             ).fetchall():
@@ -583,12 +584,12 @@ class ReportStore:
             if assessment is None:
                 raise ValueError("report has not been assessed")
             findings = connection.execute(
-                """
+                f"""
                 SELECT af.*, c.name AS condition_name, c.recheck_direction,
                     kc.patient_visible_body, kc.grade
                 FROM assessment_findings af
                 JOIN knowledge_cards kc ON kc.id = af.card_id
-                    AND kc.status = 'published' AND kc.grade IN ('high', 'moderate', 'low')
+                    AND {patient_visible_sql("kc")}
                 JOIN conditions c ON c.code = af.condition_code
                 WHERE af.assessment_id = ? ORDER BY af.sort_position
                 """,
@@ -622,7 +623,7 @@ class ReportStore:
 
         with self.database.transaction() as connection:
             card_rows = connection.execute(
-                """
+                f"""
                 SELECT kc.id, kc.condition_code, kc.version, kc.grade,
                     kc.published_at, kc.evidence_profile_id, ep.scope_key,
                     kc.patient_visible_body,
@@ -633,7 +634,7 @@ class ReportStore:
                 LEFT JOIN card_claims cc ON cc.card_id = kc.id
                 LEFT JOIN claims cl ON cl.id = cc.claim_id
                 LEFT JOIN papers p ON p.id = cl.paper_id
-                WHERE kc.status = 'published' AND kc.grade IN ('high', 'moderate', 'low')
+                WHERE {patient_visible_sql("kc")}
                 ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall()

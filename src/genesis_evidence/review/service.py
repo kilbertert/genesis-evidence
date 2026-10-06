@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.card_lifecycle import AUTONOMOUS_REVIEW_PATH, can_transition, is_patient_visible
 from ..core.components import pooled_by_label
 from ..core.consistency import NEEDS_REVIEW, is_source_based
 from ..core.methodology import (
@@ -710,12 +711,17 @@ class EvidenceReviewService:
                             patient_body=patient_body,
                             profile=profile,
                         )
-                    if card_status == "draft":
-                        self.transition_card(card_id, reviewer=actor, target="in_review")
-                        card_status = "in_review"
-                    if card_status == "in_review":
-                        self.transition_card(card_id, reviewer=actor, target="approved")
-                        card_status = "approved"
+                    # Walk the graph the module declares rather than restating
+                    # its path here (#221): the reviewer moves a card one legal
+                    # step at a time until it reaches `approved`, and which steps
+                    # are legal is not this method's knowledge.
+                    for target in AUTONOMOUS_REVIEW_PATH:
+                        if card_status == "approved":
+                            break
+                        if not can_transition(card_status, target):
+                            continue
+                        self.transition_card(card_id, reviewer=actor, target=target)
+                        card_status = target
                 except (ValueError, sqlite3.IntegrityError) as exc:
                     detail = {
                         "topic_id": candidate["id"],
@@ -734,7 +740,7 @@ class EvidenceReviewService:
                     results.append(detail)
                     continue
                 status = card_status
-                if card_status == "approved" and profile.certainty in {"high", "moderate", "low"}:
+                if card_status == "approved" and is_patient_visible("published", profile.certainty):
                     try:
                         self.transition_card(card_id, reviewer=actor, target="published")
                         status = "published"

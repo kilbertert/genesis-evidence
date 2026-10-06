@@ -6,6 +6,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from ..card_lifecycle import patient_visible_sql
 from ..contracts import EvidenceMatchObservation, card_capabilities
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
@@ -180,7 +181,7 @@ class EvidenceStore:
 
 def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
     rows = connection.execute(
-        """
+        f"""
         SELECT kc.id, kc.condition_code, kc.version, kc.grade, kc.published_at,
             kc.evidence_profile_id, ep.scope_key, kc.patient_visible_body,
             cc.claim_id, cc.evidence_text AS card_evidence, cc.locator,
@@ -190,7 +191,7 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
         LEFT JOIN card_claims cc ON cc.card_id = kc.id
         LEFT JOIN claims cl ON cl.id = cc.claim_id
         LEFT JOIN papers p ON p.id = cl.paper_id
-        WHERE kc.status = 'published' AND kc.grade IN ('high', 'moderate', 'low')
+        WHERE {patient_visible_sql("kc")}
         ORDER BY kc.published_at DESC, kc.version DESC
         """
     ).fetchall()
