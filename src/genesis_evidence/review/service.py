@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.components import pooled_by_label
 from ..core.consistency import NEEDS_REVIEW, is_source_based
 from ..core.methodology import (
     RANDOMIZED_DESIGNS,
@@ -1252,10 +1253,18 @@ def _automatic_profile(
             else "不同结果对上述研究关系的支持并不一致。"
         )
     )
+    # ADR 0007: a body pools exactly one component, so what it names must be that
+    # component. `_synthesis_dimensions` fills ingredient_name from the locked
+    # topic, whose phrasing is a class ("dietary oils and solid fats"); left in
+    # place it would describe a coconut-oil pool as the whole class it came from.
+    pooled_label = pooled_by_label(str(group.get("component_token") or ""))
+    named_exposure = pooled_label or str(dimensions["ingredient_name"])
+    studied_exposure = (
+        f"{named_exposure}（{dimensions['ingredient_form']}，{dimensions['dose']}）"
+    )
     patient_body = (
         f"关于{candidate['condition_name']}，截至{candidate['evidence_cutoff_date']}的已审核研究"
-        f"在{dimensions['population']}中评估了{dimensions['ingredient_name']}"
-        f"（{dimensions['ingredient_form']}，{dimensions['dose']}）与"
+        f"在{dimensions['population']}中评估了{studied_exposure}与"
         f"{dimensions['outcome']}的关系，比较条件为{dimensions['comparator']}，"
         f"观察时间为{dimensions['timepoint']}。{conclusion}当前证据确定性为{certainty_label}，"
         "适用范围以所列研究人群和条件为限。"

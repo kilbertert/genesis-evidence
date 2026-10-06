@@ -209,6 +209,21 @@ def pool_token(intervention_name: str) -> str:
     return form.pooled_by if form else ""
 
 
+def pooled_by_label(token: str) -> str:
+    """The display name for a pooling identity, or "" if it is not catalogued.
+
+    A body that pools one component must name that component in what a patient
+    reads. Taking the label from the locked topic instead would describe a
+    coconut-oil pool as "dietary oils and solid fats" — the topic's class
+    phrase — which is exactly the over-claim this axis removes.
+    """
+
+    for form in COMPONENT_FORMS.values():
+        if form.pooled_by == token:
+            return form.label
+    return ""
+
+
 def demo() -> None:
     """Smallest runnable check for the logic that must not silently widen."""
 

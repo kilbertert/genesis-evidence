@@ -627,10 +627,10 @@ class ReviewStore:
                 f"""
                 SELECT kc.id, kc.status FROM knowledge_cards kc
                 JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
-                WHERE kc.condition_code = ? AND ep.scope_key = ?
+                WHERE kc.condition_code = ? AND ep.scope_key = ? AND ep.component_token = ?
                     AND kc.status IN ({_in(len(SUPERSEDABLE_STATUSES))})
                 """,
-                (condition_code, scope_key, *SUPERSEDABLE_STATUSES),
+                (condition_code, scope_key, component_token, *SUPERSEDABLE_STATUSES),
             ).fetchall()
             if predecessors:
                 connection.execute(
@@ -756,7 +756,7 @@ class ReviewStore:
         }
         with self.database.transaction() as connection:
             card = connection.execute(
-                "SELECT kc.*, ep.scope_key FROM knowledge_cards kc "
+                "SELECT kc.*, ep.scope_key, ep.component_token FROM knowledge_cards kc "
                 "JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id "
                 "WHERE kc.id = ?",
                 (card_id,),
@@ -777,10 +777,17 @@ class ReviewStore:
                     WHERE condition_code = ? AND status IN ({_in(len(PUBLISHED_STATUSES))})
                         AND id <> ?
                         AND evidence_profile_id IN (
-                            SELECT id FROM evidence_profiles WHERE scope_key = ?
+                            SELECT id FROM evidence_profiles
+                            WHERE scope_key = ? AND component_token = ?
                         )
                     """,
-                    (card["condition_code"], *PUBLISHED_STATUSES, card_id, card["scope_key"]),
+                    (
+                        card["condition_code"],
+                        *PUBLISHED_STATUSES,
+                        card_id,
+                        card["scope_key"],
+                        str(card["component_token"] or ""),
+                    ),
                 )
             connection.execute(
                 """
