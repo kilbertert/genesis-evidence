@@ -191,8 +191,19 @@ def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
     # ends with no card, or it ends with several and the reader refuses to pick.
     # Grouping the second case under "serving" would overstate the result.
     servable = sorted(key for key, cards in after.items() if len(cards) == 1)
-    ambiguous = sorted(key for key, cards in after.items() if len(cards) > 1)
     dark = sorted(key for key in before if key not in after)
+    # Two cards at one scope are only "several components" when their components
+    # actually differ. Counting cards would label a scope with two cards for the
+    # *same* component as a presentation question, when it is a duplicate
+    # publication — a different problem that deserves its own line rather than
+    # being folded into the one that is expected.
+    several: list[list[str]] = []
+    duplicates: list[list[str]] = []
+    for key, cards in sorted(after.items()):
+        if len(cards) < 2:
+            continue
+        tokens = {token for _, token in cards}
+        (several if len(tokens) > 1 else duplicates).append(list(key))
 
     report = {
         "applied": write,
@@ -208,7 +219,8 @@ def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
         "retired_cards": retired,
         "scopes_serving_one_card": [list(key) for key in servable],
         "scopes_serving_before_no_card_after": [list(key) for key in dark],
-        "scopes_with_several_components": [list(key) for key in ambiguous],
+        "scopes_with_several_components": several,
+        "scopes_with_duplicate_cards_for_one_component": duplicates,
     }
     return report, failures
 
