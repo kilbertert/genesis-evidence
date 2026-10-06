@@ -29,7 +29,7 @@ chemical form: its §1 states that "首期知识库应以'成分'为核心，而
 Neither axis was ever recorded as a decision. The code was built condition-first
 from its first commit; the plan was filed as an input fixture during the
 2026-08-17 baseline audit and has not been referenced by a requirement since.
-`CONTEXT.md` says the plan of record is PRD #103 / #159, and neither PRD
+`GLOSSARY.md` says the plan of record is PRD #103 / #159, and neither PRD
 addresses the grouping axis. So the repository has been running on an axis that
 no record chose, and the plan's axis was never formally declined — it simply
 was not built.

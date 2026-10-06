@@ -1,6 +1,6 @@
 # Genesis Evidence agent instructions
 
-Read `CONTEXT.md`, `docs/`, and relevant ADRs before changing code. Preserve
+Read `GLOSSARY.md`, `docs/`, and relevant ADRs before changing code. Preserve
 the product safety boundary and run the documented Python checks.
 
 <!-- afk-bootstrap:managed:start -->
