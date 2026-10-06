@@ -148,6 +148,7 @@ EXPECTED_POOLING_IDENTITIES = {
     "大麦嫩叶（barley green）": "barley_grass",
     "麦芽酚铁": "iron:ferric_maltol",
     "Coconut oil": "coconut_oil",
+    "EVOO": "olive_oil:extra_virgin",
     "Olive oil": "olive_oil",
     "Prunes (Prunus domestica)": "prunes",
     "硫酸亚铁": "iron:ferrous_sulfate",
@@ -170,7 +171,6 @@ EXPECTED_POOLING_IDENTITIES = {
 EXPECTED_UNRESOLVED_REASONS = {
     "钙和维生素D": "multi-component supplement",
     "Vitamin D": "name spans a supplement and a fortified milk",
-    "EVOO": "name spans olive oil and a Mediterranean-diet context",
     "膳食盐": "name overstates a salt-reduction education programme",
     "Fiber supplementation": "class, not a substance",
     "必需氨基酸": "class, not a substance",
@@ -216,15 +216,20 @@ def test_named_forms_of_one_vitamin_are_separate_identities() -> None:
 
 
 def test_a_name_too_coarse_to_be_a_component_fails_closed() -> None:
-    """The three names whose own evidence showed they span substances or contexts.
+    """Names whose own evidence showed the name does not denote one substance.
 
-    Each was removed from the catalog after reading the `ingredient_form` text of
-    the rows sharing that name — the only use that column has here.
+    Both were removed from the catalog after reading the `ingredient_form` text
+    of the rows sharing that name — the only use that column has here. The test
+    is whether the *name* denotes one substance, not whether every row is clean:
+    `EVOO` stays (it names extra-virgin olive oil; one row used it loosely),
+    while these two do not.
     """
 
     for too_coarse, why in (
-        ("Vitamin D", "spans a supplement and an iron-and-vitamin-D fortified milk"),
-        ("EVOO", "spans olive oil and a Mediterranean-diet context"),
+        ("Vitamin D", "names a family, not one substance"),
         ("膳食盐", "names a salt-reduction education programme"),
     ):
         assert resolve_component(too_coarse) is None, f"{too_coarse} {why}"
+    # The contrast that keeps this judgement honest: a name that IS one
+    # substance stays, even though a row of its evidence is imprecise.
+    assert resolve_component("EVOO") is not None

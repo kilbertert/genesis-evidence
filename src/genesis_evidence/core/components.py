@@ -45,18 +45,24 @@ result.
 **What the form field is good for is catching names that are too coarse to be a
 component.** Because it *does* describe what was administered, reading it across
 the rows that share one name shows when one name spans more than one substance —
-and that is how `Vitamin D`, `EVOO` and `膳食盐` were removed from this catalog:
+and that is how `Vitamin D` and `膳食盐` were removed from this catalog:
 
 - `Vitamin D` — a pure supplement, an unreported form, and an
   iron-and-vitamin-D fortified milk: a family, not a substance.
-- `EVOO` — dietary contexts, one of them a Mediterranean-diet trial:
-  name and substance disagree.
 - `膳食盐` — a salt-reduction *education* programme, no supplement or salt
-  named: name and substance disagree.
+  named: the name does not describe what was given.
 
 So the field is not read to derive a form; it is read once, by hand, to decide
-whether a name deserves an entry at all. A name whose rows disagree about what
-was administered does not get one.
+whether a name deserves an entry at all.
+
+**The test is whether the *name* denotes one substance, not whether every row
+carrying it is clean.** `EVOO` stays in the catalog next to `Vitamin D`'s removal
+for exactly that reason: "EVOO" names one substance (extra-virgin olive oil) even
+though one of its rows records a Mediterranean-diet context, whereas "Vitamin D"
+names a family (D2, D3, calcidiol) with no single substance behind it. A name
+that a *study* used loosely is a data-quality problem for that study, not a
+reason to dissolve an identity that is otherwise precise. Judging by the
+noisiest row would let one sloppy extraction remove a real component.
 
 The catalog is intentionally small and is expected to grow. Growth must be by
 adding a line for a **newly named, single, determinate component**, not by
@@ -122,10 +128,7 @@ COMPONENT_FORMS: dict[str, ComponentForm] = {
     "碳酸氢钠": ComponentForm("sodium_bicarbonate", SINGLE_FORM, "碳酸氢钠"),
     # --- lipid-relevant oils, by provenance ---
     "olive oil": ComponentForm("olive_oil", SINGLE_FORM, "橄榄油"),
-    # NOTE: "EVOO" is absent. Its recorded forms are diet contexts — "EVOO within
-    # Mediterranean Diet", "as the main fat in diet" — one of which is a
-    # Mediterranean-diet trial rather than an olive-oil exposure. Name and
-    # substance disagree, so it fails closed like "Vitamin D" and "膳食盐".
+    "evoo": ComponentForm("olive_oil", "extra_virgin", "特级初榨橄榄油"),
     "virgin olive oil": ComponentForm("olive_oil", "virgin", "初榨橄榄油"),
     "refined olive oil": ComponentForm("olive_oil", "refined", "精炼橄榄油"),
     "standard olive oil": ComponentForm("olive_oil", SINGLE_FORM, "橄榄油"),
@@ -199,9 +202,8 @@ def demo() -> None:
         # A class is not a component: several substances under one name.
         "必需氨基酸",
         "Fiber supplementation",
-        # Names their own evidence shows to span substances or contexts.
+        # Names that do not denote one substance.
         "Vitamin D",
-        "EVOO",
         "膳食盐",
         "",
     ):
