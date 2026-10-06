@@ -30,6 +30,7 @@ from ..consistency import NEEDS_REVIEW, is_source_based
 from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
+from ..synthesis_eligibility import is_component_poolable
 from .card_evidence import (
     CARD_CLAIM_TYPE,
     EXCLUDED_STUDY_DESIGNS,
@@ -1639,8 +1640,17 @@ def _component_token(row) -> str:
     inserted without running the migration. Empty means the result pools with
     nothing, which is what keeps an unattributable intervention in the evidence
     body but out of every component body.
+
+    The name alone is not always sufficient — a result may name one component
+    while describing an intervention that contains others — so result-level
+    eligibility has the final say here, in one place, so that candidate grouping
+    and the card completeness gate cannot disagree about a row.
     """
 
+    if not is_component_poolable(
+        str(row.get("ingredient_name") or ""), str(row.get("ingredient_form") or "")
+    ):
+        return ""
     return pool_token(str(row.get("ingredient_name") or ""))
 
 
