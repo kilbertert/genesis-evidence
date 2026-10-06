@@ -106,38 +106,42 @@ computed.
    ineligible for component-level synthesis, exactly as the existing design
    already retains high-risk and negative results.
 
-   **Where the pooling decision must land, and why it is not a new label.** The
-   slices must place this decision at **scope eligibility** — in
-   `_profile_scopes` (`review/scope.py:574`) — and *not* add a non-poolable
-   exemption to the profile-completeness gate. `create_card`
-   (`review/store/review.py:595`) requires a profile to contain **every**
-   scope-eligible approved result:
+   **Two decisions currently share one function, and the slices must split them
+   before changing either.** "Does this result belong to the topic?" and "may
+   this result be pooled with that one?" are both answered today by
+   `_profile_scopes` (`review/scope.py:574`), because it is the only scope
+   predicate — so its answer drives everything downstream of scope:
 
-   ```python
-   if {row["id"] for row in eligible} != set(claim_ids):
-       raise ValueError("evidence profile must include every reviewed eligible result")
-   ```
+   - **Membership**, via `list_profile_candidates`
+     (`review/store/review.py:1130`) and the coverage matrix (`:1299`).
+   - **The profile-completeness gate**, via `create_card` (`:595`), which
+     requires a profile to contain **every** scope-eligible approved result:
+     ```python
+     if {row["id"] for row in eligible} != set(claim_ids):
+         raise ValueError("evidence profile must include every reviewed eligible result")
+     ```
+   - **Claim review itself**, via `_claim_dict` (`:1996`), whose
+     `review_suggestion` is `"rejected"` when `_profile_scopes` returns nothing
+     (`:2002`) — and `_automatic_claim_review` follows that suggestion.
 
-   So "approved but non-poolable" is **not representable today** — a profile
-   that omitted such a result would be rejected outright. That completeness rule
-   is in fact the mechanism that *forces* the pooling this record objects to:
-   because every result whose outcome matches a topic is scope-eligible, the
-   profile must contain all of them, including the calcium, vitamin D3 and
-   protein trials. Making a result ineligible for a component scope is therefore
-   the one change needed, and it leaves the completeness gate — a good rule,
-   which prevents a body from silently dropping inconvenient evidence — exactly
-   as it is. Adding a second eligibility path to that gate is the alternative
-   and is worse: two places would then decide what belongs in a body.
+   The third is the trap. Excluding a non-poolable result in `_profile_scopes`
+   as it stands would make the automatic reviewer **reject the claim**, so the
+   result would leave the evidence body that decision 2 requires it to stay in —
+   the opposite of the intent. The slices must therefore introduce a **synthesis
+   eligibility** predicate distinct from **topic membership**: a result can be a
+   member of the topic (reviewable, approvable, retained) while being ineligible
+   for component-level pooling. Only once those are separate may the
+   completeness gate and `_profile_scopes` be touched, and the completeness gate
+   must be left as it is — it is a good rule that stops a body from silently
+   dropping inconvenient evidence, and it is supplied with the *synthesis*
+   eligible set, not a second exception path.
 
    A result remains stored in `results` regardless of pooling, and membership of
-   a synthesised body stays a separate fact in `evidence_profile_results`. The
-   reason a reviewed result is unprofiled is carried by the eligibility
-   decision, not by `results.status` (whose vocabulary is
-   `reviewed` / `rejected` / `not_reported` — a review outcome, not a pooling
-   one). Note that the 43 approved-but-unprofiled results in today's database
-   are *not* an example of the target state: they are unprofiled because no
-   profile was built for their scope at all, not because anything excluded them.
-   The slice must not point at that number as precedent.
+   a synthesised body stays a separate fact in `evidence_profile_results`.
+   Note that the 43 approved-but-unprofiled results in today's database are *not*
+   an example of the target state: they are unprofiled because no profile was
+   built for their scope at all, not because anything excluded them. The slice
+   must not point at that number as precedent.
 
 3. **Certainty is computed over one component and one form.** A GRADE
    assessment that mixes components is not a GRADE assessment of anything, so
