@@ -2785,3 +2785,104 @@ def test_rejecting_reviewed_evidence_stales_a_published_card(tmp_path) -> None:
         review=ClaimReviewInput(decision="rejected"),
     )
     assert ReviewStore(database).list_published_cards("COND_VITAMIN_D_DEFICIENCY") == []
+
+
+def _publish_and_set_component(
+    service, database, paper_id, claim_id, *, version: str, component_token: str
+) -> str:
+    """Draft, approve and publish a card, then record its component identity.
+
+    `create_card` derives a body's component from its own claims, so a test
+    cannot hand it a token that disagrees — and it must not, because that check
+    is what stops one body pooling two components. The token is set afterwards so
+    the test can construct the states the migration actually meets: a card
+    published before the axis carries `''`, and a card published under the axis
+    carries the component its claims resolved to.
+    """
+
+    card_id = service.create_card_draft(
+        topic_id=_complete_topic(database, paper_id),
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        version=version,
+        claim_ids=[claim_id],
+        reviewer="reviewer-1",
+        patient_body="维生素 D 状态与衰弱之间存在研究关联，结果需要结合个人检查理解。",
+        profile=_profile(claim_id),
+    )
+    for target in ("in_review", "approved"):
+        service.transition_card(card_id, reviewer="reviewer-1", target=target)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE evidence_profiles SET component_token = ?
+            WHERE id = (SELECT evidence_profile_id FROM knowledge_cards WHERE id = ?)
+            """,
+            (component_token, card_id),
+        )
+    service.transition_card(card_id, reviewer="reviewer-1", target="published")
+    return card_id
+
+
+def test_a_component_card_supersedes_a_card_pooled_without_one(tmp_path) -> None:
+    """ADR 0007 slice D: the migration that introduces components needs this.
+
+    Every card published before the component axis has an empty
+    `component_token`. Rebuilding the evidence pools produces component cards at
+    the same scope, and without this rule the two would coexist — two cards
+    claiming one (condition, scope), which the patient readers now refuse to
+    serve at all. The empty token means "not pooled by component", so a component
+    card is strictly more precise and must replace it.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+
+    legacy_card = _publish_and_set_component(
+        service, database, paper_id, claim_id, version="1.0.0", component_token=""
+    )
+    component_card = _publish_and_set_component(
+        service, database, paper_id, claim_id, version="1.0.1", component_token="vitamin_d"
+    )
+
+    with database.connect() as connection:
+        statuses = {
+            row["id"]: row["status"]
+            for row in connection.execute("SELECT id, status FROM knowledge_cards").fetchall()
+        }
+    assert statuses[component_card] == "published"
+    assert statuses[legacy_card] == "stale", (
+        "a component card must retire the unpooled card at the same scope"
+    )
+
+
+def test_two_component_cards_at_one_scope_do_not_retire_each_other(tmp_path) -> None:
+    """The control: distinct components are distinct bodies, not revisions.
+
+    They are two answers, not two versions, so neither may displace the other —
+    that is what makes the migration surface a product question instead of
+    silently picking one.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(claim_id, reviewer="reviewer-1", review=_approved_review())
+
+    coconut = _publish_and_set_component(
+        service, database, paper_id, claim_id, version="1.0.0", component_token="coconut_oil"
+    )
+    soybean = _publish_and_set_component(
+        service, database, paper_id, claim_id, version="1.0.1", component_token="soybean_oil"
+    )
+
+    with database.connect() as connection:
+        statuses = {
+            row["id"]: row["status"]
+            for row in connection.execute("SELECT id, status FROM knowledge_cards").fetchall()
+        }
+    assert statuses[coconut] == "published"
+    assert statuses[soybean] == "published", (
+        "a second component is a second body, so both stay published"
+    )
