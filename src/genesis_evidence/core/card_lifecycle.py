@@ -78,6 +78,20 @@ AUTONOMOUS_REVIEW_PATH: tuple[str, ...] = ("draft", "in_review", "approved", "pu
 CardStatus = Literal[*CARD_STATUSES]
 
 
+def patient_visible_sql(column: str) -> str:
+    """The `is_patient_visible` rule as a SQL predicate for `column`.
+
+    Four card-selection queries state the rule in SQL because they must filter in
+    the database, not after fetching. Rendering the predicate from the module
+    keeps those four from being a fifth declaration: `column` is a caller-supplied
+    column name, never a value, and every value interpolated is a literal from
+    this module.
+    """
+
+    grades = ", ".join(f"'{grade}'" for grade in sorted(PATIENT_VISIBLE_GRADES))
+    return f"{column}.status = 'published' AND {column}.grade IN ({grades})"
+
+
 def next_statuses(status: str) -> tuple[str, ...]:
     """The legal targets from `status`, in graph order, empty when it is a sink.
 

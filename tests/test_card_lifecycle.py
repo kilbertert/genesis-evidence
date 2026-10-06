@@ -197,3 +197,69 @@ def test_the_literal_scan_actually_catches_a_restatement() -> None:
     assert not flags('status: Literal["published"]')  # patient card's fixed status
     assert not flags('decision: Literal["approved", "rejected"]')  # claim review
     assert not flags('Literal["uploaded", "extracted", "confirmed"]')  # unrelated set
+
+
+def test_no_module_restates_the_visibility_rule_in_sql() -> None:
+    """The patient-visible predicate is stated in SQL in four places.
+
+    Those queries must filter in the database, so they cannot call the Python
+    predicate — they render it from `patient_visible_sql` instead. A hand-written
+    `status = 'published' AND grade IN (...)` is the copy this forbids.
+    """
+
+    offenders: list[str] = []
+    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+        text = path.read_text()
+        for match in re.finditer(
+            r"grade\s+IN\s*\(([^)]*)\)[^\n]*\n?[^\n]*", text
+        ):
+            window = text[max(0, match.start() - 200) : match.end() + 200]
+            hits = [grade for grade in PATIENT_VISIBLE_GRADES if f"'{grade}'" in match.group(1)]
+            # A card-selection query pairs the grade list with an *equality* on
+            # the published status. The schema's column CHECK bounds the grade
+            # and only *enumerates* status values elsewhere, so it is a different
+            # statement.
+            if (
+                len(hits) > 1
+                and re.search(r"status\s*=\s*'published'", window)
+                and "patient_visible_sql" not in window
+            ):
+                offenders.append(f"{path.relative_to(SOURCE_ROOT)}: {sorted(hits)}")
+    assert not offenders, "visibility rule restated in SQL:\n" + "\n".join(offenders)
+
+
+def test_the_sql_scan_discriminates() -> None:
+    """The guard above must fail on a copy and pass on the rendered form."""
+
+    def flags(text: str) -> bool:
+        for match in re.finditer(r"grade\s+IN\s*\(([^)]*)\)", text):
+            window = text[max(0, match.start() - 200) : match.end() + 200]
+            hits = [
+                grade
+                for grade in PATIENT_VISIBLE_GRADES
+                if f"'{grade}'" in match.group(1)
+            ]
+            if (
+                len(hits) > 1
+                and re.search(r"status\s*=\s*'published'", window)
+                and "patient_visible_sql" not in window
+            ):
+                return True
+        return False
+
+    assert flags("WHERE status = 'published' AND grade IN ('high', 'moderate', 'low')")
+    assert not flags('WHERE {patient_visible_sql("kc")}')
+    # A different grade set is not this rule, and neither is the schema's column
+    # CHECK, which bounds the grade without mentioning a status.
+    assert not flags("grade IN ('very_low', 'low')")
+    assert not flags("grade TEXT CHECK (grade IN ('high', 'moderate', 'low', 'very_low'))")
+
+
+def test_the_rendered_sql_matches_the_predicate() -> None:
+    from genesis_evidence.core.card_lifecycle import patient_visible_sql
+
+    rendered = patient_visible_sql("kc")
+    assert "kc.status = 'published'" in rendered
+    for grade in PATIENT_VISIBLE_GRADES:
+        assert f"'{grade}'" in rendered
+    assert "'very_low'" not in rendered
