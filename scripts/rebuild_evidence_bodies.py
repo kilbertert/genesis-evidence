@@ -197,20 +197,7 @@ def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
     # *same* component as a presentation question, when it is a duplicate
     # publication — a different problem that deserves its own line rather than
     # being folded into the one that is expected.
-    several: list[list[str]] = []
-    duplicates: list[list[str]] = []
-    for key, cards in sorted(after.items()):
-        if len(cards) < 2:
-            continue
-        tokens = {token for _, token in cards}
-        # The two conditions are independent, not exclusive: a scope can carry
-        # two cards for one component *and* a card for another. Classifying by
-        # "does it have several components" alone would report that scope as the
-        # expected presentation case and hide the duplicate inside it.
-        if len(tokens) > 1:
-            several.append(list(key))
-        if len(tokens) < len(cards):
-            duplicates.append(list(key))
+    several, duplicates = classify_scope_anomalies(after)
 
     report = {
         "applied": write,
@@ -230,6 +217,38 @@ def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
         "scopes_with_duplicate_cards_for_one_component": duplicates,
     }
     return report, failures
+
+
+def classify_scope_anomalies(
+    published: dict[tuple[str, str], list[tuple[str, str]]],
+) -> tuple[list[list[str]], list[list[str]]]:
+    """Split scopes that carry several cards into the two different problems.
+
+    Both are reported, and **independently**, because they are not exclusive: a
+    scope can carry two cards for one component *and* a card for another. Judging
+    by component count alone would file such a scope under the expected
+    presentation case and hide the duplicate inside it, which is the defect this
+    split exists to surface.
+
+    - several components: no single answer exists for the scope, so it serves
+      nothing until the product decides how to show more than one. Expected.
+    - duplicate cards for one component: two cards claiming the same component
+      and scope. Not expected, and not a presentation question.
+
+    ``published`` maps a scope key to its ``(card_id, component_token)`` pairs.
+    """
+
+    several: list[list[str]] = []
+    duplicates: list[list[str]] = []
+    for key, cards in sorted(published.items()):
+        if len(cards) < 2:
+            continue
+        tokens = {token for _, token in cards}
+        if len(tokens) > 1:
+            several.append(list(key))
+        if len(tokens) < len(cards):
+            duplicates.append(list(key))
+    return several, duplicates
 
 
 def _outcome_kind(outcome: object) -> tuple[str, str]:
