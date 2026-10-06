@@ -48,8 +48,15 @@ def _card(card_id: str, *, scope_key: str, grade: str = "moderate") -> dict[str,
 def _adapter(cards: dict[tuple[str, str], dict[str, object]]) -> CardAdapter:
     return CardAdapter(
         condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-        lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key)),
+        lookup=lambda condition_code, scope_key: _at(cards, condition_code, scope_key),
     )
+
+
+def _at(cards, condition_code, scope_key):
+    """The adapter answers with every card at a scope; fixtures hold one."""
+
+    card = cards.get((condition_code, scope_key))
+    return () if card is None else (card,)
 
 
 def _entry(
@@ -107,7 +114,7 @@ def test_strict_resolver_rejects_non_metric_scopes() -> None:
     cards = {("COND_PREDIABETES", "anything-else"): _card("c1", scope_key="anything-else")}
     adapter = CardAdapter(
         condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-        lookup=lambda condition_code, scope_key: cards.get((condition_code, "anything-else")),
+        lookup=lambda condition_code, scope_key: _at(cards, condition_code, "anything-else"),
     )
 
     def produce(fc, condition, card, entry, scope_key):
@@ -516,3 +523,24 @@ def test_empty_summary_does_not_fire_when_findings_exist() -> None:
     }
     reply = patient_reply_v3([finding], [], [{"observation_id": "m9", "reason": "invalid_value"}])
     assert "1 个可能相关健康问题" in reply["summary"]
+
+
+def test_a_finding_with_disagreeing_cards_does_not_quote_one_card_s_threshold() -> None:
+    """A mixed finding must not carry one card's action verdict.
+
+    One metric can carry several component cards and they need not share a grade.
+    `evidence_strength` already reports such a finding as `mixed`; the action
+    message has to agree, because telling the patient that the evidence reached
+    an advice threshold would be true of one card and false of the other.
+    """
+
+    from genesis_evidence.core.contracts import card_capabilities_summary
+
+    unanimous = card_capabilities_summary(["low", "low"])
+    mixed = card_capabilities_summary(["low", "moderate"])
+
+    assert unanimous["action_message"] != mixed["action_message"]
+    assert mixed["action_status"] == "not_available"
+    assert mixed["content_layer"] == "context_only"
+    # The mixed wording must not assert that the threshold was reached.
+    assert "已达到行动建议门槛" not in mixed["action_message"]

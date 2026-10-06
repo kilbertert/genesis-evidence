@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Literal
 
@@ -37,6 +38,28 @@ def _validate_bbox(value: list[float] | None, *, upper: float | None, field: str
         raise ValueError(f"{field} coordinates must be finite values{suffix}")
     if value[0] > value[2] or value[1] > value[3]:
         raise ValueError(f"{field} must be ordered as x1,y1,x2,y2")
+
+
+def card_capabilities_summary(grades: Iterable[str]) -> dict[str, str]:
+    """Capabilities for a finding whose cards may disagree about certainty.
+
+    One metric can carry several component cards, and they need not share a
+    grade. `evidence_strength` already reports such a finding as `mixed` rather
+    than collapsing it to one level; the action message has to follow, because
+    quoting one card's threshold verdict would tell the patient that *all* the
+    evidence reached a threshold that only part of it reached — or the reverse.
+    """
+
+    unique = set(grades)
+    if len(unique) == 1:
+        return card_capabilities(next(iter(unique)))
+    return {
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": (
+            "这些证据的确定性并不一致，行动建议需要分别看待，当前不作为统一结论。"
+        ),
+    }
 
 
 def card_capabilities(grade: str) -> dict[str, str]:

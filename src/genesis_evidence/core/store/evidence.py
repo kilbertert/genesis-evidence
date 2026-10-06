@@ -7,7 +7,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from ..card_lifecycle import patient_visible_sql
-from ..contracts import EvidenceMatchObservation
+from ..contracts import (
+    EvidenceMatchObservation,
+    card_capabilities_summary,
+)
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
     CONDITIONS_BY_METRIC,
@@ -50,7 +53,9 @@ class EvidenceStore:
 
             adapter = CardAdapter(
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-                lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key)),
+                lookup=lambda condition_code, scope_key: cards.get(
+                    (condition_code, scope_key), ()
+                ),
             )
             resolver = CardScopeResolver(strict=False)
             entries = [project_observation(observation) for observation in observations]
@@ -87,8 +92,11 @@ class EvidenceStore:
                 append_unique(finding["source_observation_ids"], inp.observation_id)
                 append_unique(finding["source_observations"], source)
                 evidence_items = finding["_evidence_items"]
+                # Keyed by card, not by scope: one scope can carry several
+                # component cards, and keying by scope would keep only the first
+                # and silently drop the rest.
                 evidence_item = evidence_items.setdefault(
-                    scope_key,
+                    str(card["id"]),
                     {
                         "metric_code": inp.metric_code,
                         "metric_label": METRIC_LABELS[inp.metric_code],
@@ -124,11 +132,26 @@ class EvidenceStore:
             for item in findings:
                 evidence_items = sorted(
                     item.pop("_evidence_items").values(),
-                    key=lambda evidence_item: evidence_item["metric_code"],
+                    key=lambda evidence_item: (
+                        evidence_item["metric_code"],
+                        # Several cards can share one metric now, so the metric
+                        # alone is not a total order and the response would
+                        # reshuffle between reads.
+                        str(evidence_item["card"]["id"]),
+                    ),
                 )
                 item["evidence_items"] = evidence_items
                 item["evidence_strength"] = evidence_strength_summary(
                     evidence_item["evidence_strength"] for evidence_item in evidence_items
+                )
+                # The finding's action message must agree with the strength
+                # above. Taking it from whichever card `setdefault` saw first is
+                # how a finding that reports `mixed` strength ends up quoting one
+                # card's threshold verdict for the whole set.
+                item.update(
+                    card_capabilities_summary(
+                        evidence_item["evidence_strength"] for evidence_item in evidence_items
+                    )
                 )
                 item["sorting"] = {
                     "urgency": item["urgency"],

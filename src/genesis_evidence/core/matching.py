@@ -297,7 +297,11 @@ class CardScopeResolver:
 @dataclass(frozen=True, slots=True)
 class CardAdapter:
     condition_codes_for_metric: Callable[[str], Iterable[object]]
-    lookup: Callable[[str, str], dict[str, object] | None]
+    #: Every published card at a (condition, scope). ADR 0007 lets one scope
+    #: carry one card per component, so a lookup answers with all of them: each
+    #: is an independently reviewed answer to the same observation, and the
+    #: patient sees them side by side rather than one chosen arbitrarily.
+    lookup: Callable[[str, str], Iterable[dict[str, object]]]
 
 
 @dataclass
@@ -386,17 +390,17 @@ class EvidenceMatcher:
             missing: list[str] = []
             matched = False
             for condition in adapter.condition_codes_for_metric(inp.metric_code):
-                card = adapter.lookup(condition.code, f"metric:{inp.metric_code}")
-                if card is None:
+                scope_matched = False
+                for card in adapter.lookup(condition.code, f"metric:{inp.metric_code}"):
+                    scope = resolver.scope_key(inp.metric_code, str(card.get("scope_key", "")))
+                    if scope is None:
+                        continue
+                    scope_matched = True
+                    matched = True
+                    result.card_ids.append(str(card["id"]))
+                    produce_finding(result.findings, condition, card, entry, scope)
+                if not scope_matched:
                     missing.append(condition.code)
-                    continue
-                scope = resolver.scope_key(inp.metric_code, str(card.get("scope_key", "")))
-                if scope is None:
-                    missing.append(condition.code)
-                    continue
-                matched = True
-                result.card_ids.append(str(card["id"]))
-                produce_finding(result.findings, condition, card, entry, scope)
             unmatched = collect_unmatched(entry, missing, matched)
             if unmatched is not None:
                 result.unmatched.append(unmatched)

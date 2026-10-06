@@ -449,7 +449,11 @@ class ReportStore:
             # condition alone made `setdefault` keep whichever card sorted first,
             # which served an arbitrary card for a condition that has several —
             # measured on the 2026-10-06 database, nine conditions do.
-            cards: dict[tuple[str, str], dict[str, object]] = {}
+            # This path resolves scope non-strictly, so the matcher asks for the
+            # `metric:<code>` the observation carries; keying by (condition,
+            # scope) is what lands the lookup on the observation's own metric
+            # rather than on whichever card for that condition sorted first.
+            cards: dict[tuple[str, str], list[dict[str, object]]] = {}
             for row in connection.execute(
                 f"""
                 SELECT kc.id, kc.condition_code, kc.version, kc.grade, kc.published_at,
@@ -465,15 +469,15 @@ class ReportStore:
                     continue
                 cards.setdefault(
                     (str(row["condition_code"]), scope_key),
-                    {**dict(row), **card_capabilities(str(row["grade"]))},
-                )
+                    [],
+                ).append({**dict(row), **card_capabilities(str(row["grade"]))})
 
             adapter = CardAdapter(
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC.get(
                     metric_code, ()
                 ),
                 lookup=lambda condition_code, scope_key: cards.get(
-                    (condition_code, scope_key)
+                    (condition_code, scope_key), ()
                 ),
             )
             resolver = CardScopeResolver(strict=False)
@@ -492,8 +496,12 @@ class ReportStore:
             ) -> None:
                 # ponytail: generic reference-range deviations stay level 1/routine until
                 # reviewed metric-specific thresholds are published with the knowledge card.
+                # Keyed by condition AND card: one condition can carry several
+                # component cards, and keying by condition alone would keep the
+                # first and append the same observation again for every other,
+                # so the report's evidence would be both lost and duplicated.
                 finding = findings_by_condition.setdefault(
-                    condition.code,
+                    (condition.code, str(card["id"])),
                     {
                         "condition": condition,
                         "card": card,
@@ -657,7 +665,7 @@ class ReportStore:
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC.get(
                     metric_code, ()
                 ),
-                lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key)),
+                lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key), ()),
             )
             resolver = CardScopeResolver(strict=True)
             entries = [project_observation(observation) for observation in observations]
@@ -671,8 +679,11 @@ class ReportStore:
             ) -> None:
                 inp = entry.input
                 source = entry.source
+                # Keyed by condition AND card, for the same reason as the assess
+                # path: keying by condition alone keeps the first component card
+                # and appends every later card's observation to it again.
                 finding = findings_by_condition.setdefault(
-                    condition.code,
+                    (condition.code, str(card["id"])),
                     {
                         "condition_code": condition.code,
                         "condition_name": condition.name,

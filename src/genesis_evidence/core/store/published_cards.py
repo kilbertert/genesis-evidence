@@ -5,11 +5,11 @@ Both patient-response readers — `EvidenceStore._published_cards` and
 dict, and did so as a byte-identical pair. They differ only in the query that
 produces the rows, so the projection lives here and each reader supplies rows.
 
-The fail-closed rule travels with it: a `(condition_code, scope_key)` is indexed
-only when exactly one card claims it. ADR 0007 lets one scope carry one card per
-component, and how several should be shown is a product decision, so an ambiguous
-scope serves nothing rather than one component's conclusion with another's
-citations attached.
+ADR 0007 lets one scope carry one card per component. Those are several answers,
+not several versions of one answer, so the projection keeps them apart and serves
+all of them; the patient-facing shape already carries a list of items, each with
+its own card body and its own citations, so no card's conclusion is ever shown
+with another card's sources.
 """
 
 from __future__ import annotations
@@ -21,8 +21,14 @@ from ..contracts import card_capabilities
 
 def project_published_cards(
     rows: Iterable[Mapping[str, object]],
-) -> dict[tuple[str, str], dict[str, object]]:
+) -> dict[tuple[str, str], list[dict[str, object]]]:
     """Group joined card rows into patient-visible cards keyed by (condition, scope).
+
+    The value is a list because ADR 0007 lets one scope carry one card per
+    component: several independently reviewed answers to the same observation.
+    They are returned newest-first and all of them are served — choosing one
+    silently is what the earlier fail-closed rule avoided, and it avoided it by
+    serving nothing.
 
     Rows must carry: `id`, `condition_code`, `scope_key`, `version`, `grade`,
     `published_at`, `evidence_profile_id`, `patient_visible_body`, and the source
@@ -69,7 +75,10 @@ def project_published_cards(
             if isinstance(sources, list) and source not in sources:
                 sources.append(source)
     return {
-        key: by_card[next(iter(card_ids))]
+        key: sorted(
+            (by_card[card_id] for card_id in card_ids),
+            key=lambda card: (str(card["published_at"]), str(card["version"])),
+            reverse=True,
+        )
         for key, card_ids in by_scope.items()
-        if len(card_ids) == 1
     }
