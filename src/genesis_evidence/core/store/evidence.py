@@ -7,7 +7,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from ..card_lifecycle import patient_visible_sql
-from ..contracts import EvidenceMatchObservation
+from ..contracts import (
+    EvidenceMatchObservation,
+    card_capabilities_summary,
+)
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
     CONDITIONS_BY_METRIC,
@@ -140,6 +143,15 @@ class EvidenceStore:
                 item["evidence_items"] = evidence_items
                 item["evidence_strength"] = evidence_strength_summary(
                     evidence_item["evidence_strength"] for evidence_item in evidence_items
+                )
+                # The finding's action message must agree with the strength
+                # above. Taking it from whichever card `setdefault` saw first is
+                # how a finding that reports `mixed` strength ends up quoting one
+                # card's threshold verdict for the whole set.
+                item.update(
+                    card_capabilities_summary(
+                        evidence_item["evidence_strength"] for evidence_item in evidence_items
+                    )
                 )
                 item["sorting"] = {
                     "urgency": item["urgency"],
