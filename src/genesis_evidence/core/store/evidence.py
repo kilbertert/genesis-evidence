@@ -148,7 +148,7 @@ class EvidenceStore:
                 "skipped": result.skipped,
                 "message": "" if result_findings else "暂无已审核内容",
             }
-            patient_reply = patient_reply_v3(result_findings, result.unmatched)
+            patient_reply = patient_reply_v3(result_findings, result.unmatched, result.skipped)
             payload["patient_reply"] = patient_reply
             connection.execute(
                 """

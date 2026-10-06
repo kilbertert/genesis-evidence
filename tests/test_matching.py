@@ -441,3 +441,78 @@ def test_skipped_observation_does_not_stop_later_abnormal_matches() -> None:
 
     assert result.abnormal_count == 2
     assert [item["observation_id"] for item in result.unmatched] == ["high", "low"]
+
+
+def test_empty_summary_says_why_when_the_caller_knows() -> None:
+    """The empty case is not one case, and the difference is a safety difference.
+
+    Reproduces the observed defect: a report whose confirmed abnormal indicators were
+    all discarded as unusable produced "当前没有发现可由已发布知识卡支持的异常指标。"
+    — an assurance that the report showed nothing, when it showed three things this
+    service could not use. `within_reference_range` is the *only* reason that makes the
+    old sentence true.
+    """
+
+    unusable = [
+        {"observation_id": "m1", "reason": "invalid_value"},
+        {"observation_id": "m2", "reason": "invalid_value"},
+        {"observation_id": "m3", "reason": "invalid_value"},
+    ]
+    summary = patient_reply_v3([], [], unusable)["summary"]
+    assert "3" in summary
+    assert "无法参与匹配" in summary
+    # The false assurance must be gone.
+    assert "没有发现" not in summary
+
+
+def test_empty_summary_keeps_the_old_wording_without_reasons() -> None:
+    """Backward compatible: a caller that passes no reasons cannot know better."""
+
+    assert patient_reply_v3([], [])["summary"] == "当前没有发现可由已发布知识卡支持的异常指标。"
+    assert patient_reply_v3([], [], [])["summary"] == "当前没有发现可由已发布知识卡支持的异常指标。"
+
+
+def test_empty_summary_is_truthful_for_the_in_range_case() -> None:
+    """Only here is "nothing was found" the accurate statement."""
+
+    reply = patient_reply_v3([], [], [{"observation_id": "m1", "reason": "within_reference_range"}])
+    assert reply["summary"] == "已确认的指标均在参考范围内，没有需要提示的异常。"
+
+
+def test_empty_summary_names_the_out_of_catalog_case_separately() -> None:
+    reply = patient_reply_v3([], [], [{"observation_id": "m1", "reason": "unknown_metric_code"}])
+    expected = "已确认的异常指标不在当前已发布的指标目录内，暂无法给出对应的健康提示。"
+    assert reply["summary"] == expected
+
+
+def test_empty_summary_counts_a_generator_without_consuming_it_to_zero() -> None:
+    """`skipped` is an Iterable; the reason set must not exhaust it before the count."""
+
+    def rows():
+        yield {"observation_id": "m1", "reason": "invalid_value"}
+        yield {"observation_id": "m2", "reason": "invalid_value"}
+
+    assert "2 项" in patient_reply_v3([], [], rows())["summary"]
+
+
+def test_empty_summary_does_not_fire_when_findings_exist() -> None:
+    """A skip list must never override an actual finding."""
+
+    finding = {
+        "condition_code": "COND_PREDIABETES",
+        "condition_name": "糖尿病前期 / 糖代谢异常",
+        "urgency": "routine",
+        "abnormality_severity": 1,
+        "evidence_strength": "moderate",
+        "needs_recheck": True,
+        "department": "内分泌科",
+        "recheck_direction": "复查空腹血糖与糖化血红蛋白",
+        "source_observation_ids": ["m1"],
+        "source_observations": [],
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": "msg",
+        "evidence_items": [],
+    }
+    reply = patient_reply_v3([finding], [], [{"observation_id": "m9", "reason": "invalid_value"}])
+    assert "1 个可能相关健康问题" in reply["summary"]
