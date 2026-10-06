@@ -94,12 +94,14 @@ def test_resolution_is_exact_and_fails_closed() -> None:
 
 
 def test_forms_keep_distinct_pooling_identities() -> None:
-    evoo = resolve_component("EVOO")
-    plain = resolve_component("Olive oil")
-    assert evoo is not None and plain is not None
+    virgin = resolve_component("Virgin olive oil")
+    refined = resolve_component("Refined olive oil")
+    assert virgin is not None and refined is not None
     # A form difference is a real difference: unrefined vs refined is not the
-    # same exposure, so these must not silently pool.
-    assert evoo.pooled_by != plain.pooled_by
+    # same exposure, so these must not silently pool even though both are
+    # olive oil.
+    assert virgin.component_key == refined.component_key == "olive_oil"
+    assert virgin.pooled_by != refined.pooled_by
 
 
 def test_forms_of_one_component_still_share_a_component() -> None:
@@ -148,11 +150,8 @@ EXPECTED_POOLING_IDENTITIES = {
     "Coconut oil": "coconut_oil",
     "Olive oil": "olive_oil",
     "Prunes (Prunus domestica)": "prunes",
-    "EVOO": "olive_oil:extra_virgin",
     "硫酸亚铁": "iron:ferrous_sulfate",
     "特定生物活性胶原蛋白肽（SCP）": "collagen_peptide",
-    "Vitamin D": "vitamin_d",
-    "膳食盐": "sodium_chloride",
     "特定角豆液体浓缩物": "carob",
     "Standard Olive Oil": "olive_oil",
     "Soybean oil": "soybean_oil",
@@ -170,6 +169,9 @@ EXPECTED_POOLING_IDENTITIES = {
 #: reason keeps a future edit from "fixing" one of these by adding it.
 EXPECTED_UNRESOLVED_REASONS = {
     "钙和维生素D": "multi-component supplement",
+    "Vitamin D": "name spans a supplement and a fortified milk",
+    "EVOO": "name spans olive oil and a Mediterranean-diet context",
+    "膳食盐": "name overstates a salt-reduction education programme",
     "Fiber supplementation": "class, not a substance",
     "必需氨基酸": "class, not a substance",
     "抗阻运动": "not a nutrient",
@@ -203,12 +205,26 @@ def test_a_class_name_is_not_poolable() -> None:
     assert not is_poolable("必需氨基酸")
 
 
-def test_an_unnamed_form_is_not_guessed_to_be_a_named_one() -> None:
-    # "Vitamin D" does not say which form; "Cholecalciferol (vitamin D3)" does.
-    # Guessing that the unnamed one is cholecalciferol would be a pool the
-    # evidence does not support, so they stay separate identities.
-    unnamed = resolve_component("Vitamin D")
-    named = resolve_component("Cholecalciferol (vitamin D3)")
-    assert unnamed is not None and named is not None
-    assert unnamed.component_key == named.component_key
-    assert unnamed.pooled_by != named.pooled_by
+def test_named_forms_of_one_vitamin_are_separate_identities() -> None:
+    # D3 and calcidiol are the same component in different forms; a form
+    # difference is a real difference and they must not silently pool.
+    d3 = resolve_component("Cholecalciferol (vitamin D3)")
+    calcidiol = resolve_component("Calcidiol (25(OH)D3)")
+    assert d3 is not None and calcidiol is not None
+    assert d3.component_key == calcidiol.component_key == "vitamin_d"
+    assert d3.pooled_by != calcidiol.pooled_by
+
+
+def test_a_name_too_coarse_to_be_a_component_fails_closed() -> None:
+    """The three names whose own evidence showed they span substances or contexts.
+
+    Each was removed from the catalog after reading the `ingredient_form` text of
+    the rows sharing that name — the only use that column has here.
+    """
+
+    for too_coarse, why in (
+        ("Vitamin D", "spans a supplement and an iron-and-vitamin-D fortified milk"),
+        ("EVOO", "spans olive oil and a Mediterranean-diet context"),
+        ("膳食盐", "names a salt-reduction education programme"),
+    ):
+        assert resolve_component(too_coarse) is None, f"{too_coarse} {why}"

@@ -32,17 +32,31 @@ both say "fiber" may have used different fibres, and pooling them would compute
 a certainty for no single intervention. Only an entry that names one substance
 belongs here.
 
-**`results.ingredient_form` is not a form field and is not read here.** That
-column holds free text — measured on the 2026-10-06 database it carries 680
-distinct values across 672 distinct `ingredient_name` values, and its contents
-are dose descriptions, delivery modes and even questionnaire wording ("750 mL of
-olive oil for the MD group supply", "How much olive oil do you consume per day",
-"口服胶囊"). It cannot discriminate one chemical form from another, so this
-module takes **only the intervention name** and would rather return a coarser
-answer than read a field that does not mean what its name suggests. The
-`form` recorded on a `ComponentForm` is the form **declared by this catalog for
-that exact name** (the form `EVOO` denotes), not a value read back from a
+**`results.ingredient_form` is not a form field, and resolution takes only the
+intervention name.** That column holds free text — measured on the 2026-10-06
+database it carries 680 distinct values across 672 distinct `ingredient_name`
+values, and its contents are dose descriptions, delivery modes and even
+questionnaire wording ("750 mL of olive oil for the MD group supply", "How much
+olive oil do you consume per day", "口服胶囊"). It cannot discriminate one
+chemical form from another. The `form` recorded on a `ComponentForm` is the form
+**this catalog declares for that exact name**, not a value read back from a
 result.
+
+**What the form field is good for is catching names that are too coarse to be a
+component.** Because it *does* describe what was administered, reading it across
+the rows that share one name shows when one name spans more than one substance —
+and that is how `Vitamin D`, `EVOO` and `膳食盐` were removed from this catalog:
+
+- `Vitamin D` — a pure supplement, an unreported form, and an
+  iron-and-vitamin-D fortified milk: a family, not a substance.
+- `EVOO` — dietary contexts, one of them a Mediterranean-diet trial:
+  name and substance disagree.
+- `膳食盐` — a salt-reduction *education* programme, no supplement or salt
+  named: name and substance disagree.
+
+So the field is not read to derive a form; it is read once, by hand, to decide
+whether a name deserves an entry at all. A name whose rows disagree about what
+was administered does not get one.
 
 The catalog is intentionally small and is expected to grow. Growth must be by
 adding a line for a **newly named, single, determinate component**, not by
@@ -91,11 +105,14 @@ def normalize_component_text(value: str) -> str:
 #: Exact normalized source strings that name one component form. Every entry is
 #: a single determinate substance. Anything not listed here does not resolve.
 COMPONENT_FORMS: dict[str, ComponentForm] = {
-    # --- vitamin D, by named form ---
+    # --- vitamin D: only the forms that name one substance ---
     "cholecalciferol (vitamin d3)": ComponentForm("vitamin_d", "cholecalciferol", "维生素 D3"),
     "calcidiol (25(oh)d3)": ComponentForm("vitamin_d", "calcidiol", "25-羟维生素 D3"),
-    # --- vitamin D with no form named: still one substance ---
-    "vitamin d": ComponentForm("vitamin_d", SINGLE_FORM, "维生素 D"),
+    # NOTE: bare "Vitamin D" is deliberately absent. Measured on the 2026-10-06
+    # database it spans a pure vitamin D supplement, an unreported form, and an
+    # *iron-and-vitamin-D fortified milk* — one name over substances that are not
+    # the same exposure. It is a family, not a component, exactly like
+    # "必需氨基酸" above; the named forms below are what may pool.
     # --- iron, by named salt ---
     "硫酸亚铁": ComponentForm("iron", "ferrous_sulfate", "硫酸亚铁"),
     "麦芽酚铁": ComponentForm("iron", "ferric_maltol", "麦芽酚铁"),
@@ -105,7 +122,10 @@ COMPONENT_FORMS: dict[str, ComponentForm] = {
     "碳酸氢钠": ComponentForm("sodium_bicarbonate", SINGLE_FORM, "碳酸氢钠"),
     # --- lipid-relevant oils, by provenance ---
     "olive oil": ComponentForm("olive_oil", SINGLE_FORM, "橄榄油"),
-    "evoo": ComponentForm("olive_oil", "extra_virgin", "特级初榨橄榄油"),
+    # NOTE: "EVOO" is absent. Its recorded forms are diet contexts — "EVOO within
+    # Mediterranean Diet", "as the main fat in diet" — one of which is a
+    # Mediterranean-diet trial rather than an olive-oil exposure. Name and
+    # substance disagree, so it fails closed like "Vitamin D" and "膳食盐".
     "virgin olive oil": ComponentForm("olive_oil", "virgin", "初榨橄榄油"),
     "refined olive oil": ComponentForm("olive_oil", "refined", "精炼橄榄油"),
     "standard olive oil": ComponentForm("olive_oil", SINGLE_FORM, "橄榄油"),
@@ -113,7 +133,9 @@ COMPONENT_FORMS: dict[str, ComponentForm] = {
     "soybean oil": ComponentForm("soybean_oil", SINGLE_FORM, "大豆油"),
     "brazil nut oil": ComponentForm("brazil_nut_oil", SINGLE_FORM, "巴西坚果油"),
     # --- other single substances ---
-    "膳食盐": ComponentForm("sodium_chloride", SINGLE_FORM, "膳食盐"),
+    # NOTE: "膳食盐" is absent — its recorded form is a salt-reduction *education*
+    # programme with no supplement or substitute salt named, so the name
+    # overstates what was administered.
     "大豆异黄酮": ComponentForm("soy_isoflavones", SINGLE_FORM, "大豆异黄酮"),
     # NOTE: "必需氨基酸" and "Fiber supplementation" are deliberately absent.
     # Each names a set of substances, not one substance, so neither can prove
@@ -157,9 +179,12 @@ def demo() -> None:
     """Smallest runnable check for the logic that must not silently widen."""
 
     # A named component resolves, and its form is part of the identity.
-    assert resolve_component("EVOO").pooled_by == "olive_oil:extra_virgin"
+    assert resolve_component("Virgin olive oil").pooled_by == "olive_oil:virgin"
     assert resolve_component("olive oil").pooled_by == "olive_oil"
-    assert resolve_component("EVOO").pooled_by != resolve_component("olive oil").pooled_by
+    assert (
+        resolve_component("Virgin olive oil").pooled_by
+        != resolve_component("Refined olive oil").pooled_by
+    )
     # Normalization is case- and width-insensitive, but not fuzzy.
     assert resolve_component("  OLIVE OIL ").component_key == "olive_oil"
     assert resolve_component("olive oils") is None, "a near miss must not resolve"
@@ -174,6 +199,10 @@ def demo() -> None:
         # A class is not a component: several substances under one name.
         "必需氨基酸",
         "Fiber supplementation",
+        # Names their own evidence shows to span substances or contexts.
+        "Vitamin D",
+        "EVOO",
+        "膳食盐",
         "",
     ):
         assert resolve_component(text) is None, text
