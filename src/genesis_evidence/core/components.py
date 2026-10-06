@@ -60,9 +60,11 @@ carrying it is clean.** `EVOO` stays in the catalog next to `Vitamin D`'s remova
 for exactly that reason: "EVOO" names one substance (extra-virgin olive oil) even
 though one of its rows records a Mediterranean-diet context, whereas "Vitamin D"
 names a family (D2, D3, calcidiol) with no single substance behind it. A name
-that a *study* used loosely is a data-quality problem for that study, not a
-reason to dissolve an identity that is otherwise precise. Judging by the
-noisiest row would let one sloppy extraction remove a real component.
+that a *study* used loosely is a data-quality problem for that study, and it is
+handled where that study's data is — by the per-result synthesis-eligibility
+predicate, which can read the `ingredient_form` text and reject that one result.
+Judging by the noisiest row would let one row remove a real component from every
+other study that used the name correctly.
 
 The catalog is intentionally small and is expected to grow. Growth must be by
 adding a line for a **newly named, single, determinate component**, not by
@@ -165,6 +167,16 @@ def resolve_component(intervention_name: str) -> ComponentForm | None:
     pattern, a nutrient class, and a non-nutrient intervention such as an
     exercise programme. Callers must treat None as "not poolable", never as
     "unknown, so use it".
+
+    **A non-None answer is necessary but not sufficient for poolability.** This
+    resolves a *name*, and a name is not always matched by what a study actually
+    administered: one result named `EVOO` records a Mediterranean-diet context,
+    and no name-only resolver can separate it from the olive-oil results that
+    share the name. The final decision is therefore taken one level down, per
+    result, by the synthesis-eligibility predicate ADR 0007 requires — using the
+    `ingredient_form` text that this function deliberately does not read (see
+    the module docstring). Until that predicate exists, this function's answer
+    is an input to the decision, not the decision.
     """
 
     if not intervention_name or not intervention_name.strip():

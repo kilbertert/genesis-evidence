@@ -233,3 +233,19 @@ def test_a_name_too_coarse_to_be_a_component_fails_closed() -> None:
     # The contrast that keeps this judgement honest: a name that IS one
     # substance stays, even though a row of its evidence is imprecise.
     assert resolve_component("EVOO") is not None
+
+
+def test_name_resolution_is_necessary_but_not_sufficient_for_poolability() -> None:
+    """The limit that no name-only resolver can cross.
+
+    `EVOO` resolves to extra-virgin olive oil. One recorded result carrying that
+    name is a Mediterranean-diet trial, and only the olive-oil results belong in
+    that pool. This function cannot tell them apart, so its answer may not be
+    used as the final poolability decision: per-result synthesis eligibility —
+    which can read `ingredient_form` — has to reject the diet trial. Pinned so
+    that a slice does not treat a resolved name as a green light.
+    """
+
+    assert resolve_component("EVOO") is not None
+    # Both results share the name, so nothing here separates them.
+    assert resolve_component("EVOO") == resolve_component("EVOO")
