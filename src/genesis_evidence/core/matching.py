@@ -109,8 +109,22 @@ def finding_evidence_rank(finding: dict[str, object]) -> int:
 
 
 def patient_reply_v3(
-    findings: list[dict[str, object]], unmatched: list[dict[str, object]]
+    findings: list[dict[str, object]],
+    unmatched: list[dict[str, object]],
+    skipped: Iterable[dict[str, object]] = (),
 ) -> dict[str, object]:
+    """Build the patient-facing envelope, including why nothing was shown.
+
+    ``skipped`` exists because the empty case is not one case. Without it this function
+    can only say "no abnormal indicators were found" whenever a caller discarded the
+    observations upstream — and that is a **false assurance**, not a vague one: the
+    patient is told their report shows nothing when it showed something this service
+    could not use. A caller that passes nothing keeps the previous wording.
+    """
+
+    # Materialize once: this is an Iterable, and both the reason breakdown and the
+    # count below would otherwise consume it.
+    skipped = list(skipped)
     visible_findings = []
     for finding in findings:
         visible = {
@@ -147,7 +161,7 @@ def patient_reply_v3(
     elif unmatched:
         summary = "发现异常指标，但当前没有对应的已审核知识卡。"
     else:
-        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
+        summary = _empty_summary(skipped)
     return {
         "title": "体检报告解读与健康风险提示",
         "summary": summary,
@@ -155,6 +169,27 @@ def patient_reply_v3(
         "unmatched_count": len(unmatched),
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
+
+
+def _empty_summary(skipped: Iterable[dict[str, object]]) -> str:
+    """Say why nothing was shown, when the caller knows.
+
+    Only ``within_reference_range`` among the skip reasons means an abnormal indicator
+    was genuinely absent. Every other reason means the service **could not use** an
+    indicator, and saying "没有发现" there tells the patient their report was clear when
+    it was not — the assurance is the opposite of the truth.
+    """
+
+    # Already materialized by the caller; kept tolerant of an iterable for direct use.
+    items = list(skipped)
+    reasons = {str(item.get("reason", "")) for item in items}
+    if not reasons:
+        return "当前没有发现可由已发布知识卡支持的异常指标。"
+    if reasons == {"within_reference_range"}:
+        return "已确认的指标均在参考范围内，没有需要提示的异常。"
+    if reasons == {"unknown_metric_code"}:
+        return "已确认的异常指标不在当前已发布的指标目录内，暂无法给出对应的健康提示。"
+    return f"已确认的指标中有 {len(items)} 项无法参与匹配，因此本次未生成健康提示。"
 
 
 def patient_reply_v2(
