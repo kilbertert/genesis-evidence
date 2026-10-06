@@ -113,21 +113,26 @@ def normalize_component_text(value: str) -> str:
 #: Exact normalized source strings that name one component form. Every entry is
 #: a single determinate substance. Anything not listed here does not resolve.
 COMPONENT_FORMS: dict[str, ComponentForm] = {
-    # --- vitamin D: only the forms that name one substance ---
+    # --- vitamin D ---
     "cholecalciferol (vitamin d3)": ComponentForm("vitamin_d", "cholecalciferol", "维生素 D3"),
     "calcidiol (25(oh)d3)": ComponentForm("vitamin_d", "calcidiol", "25-羟维生素 D3"),
-    # NOTE: bare "Vitamin D" is deliberately absent. Measured on the 2026-10-06
-    # database it spans a pure vitamin D supplement, an unreported form, and an
-    # *iron-and-vitamin-D fortified milk* — one name over substances that are not
-    # the same exposure. It is a family, not a component, exactly like
-    # "必需氨基酸" above; the named forms below are what may pool.
+    # Bare "Vitamin D" names one nutrient, so it is catalogued even though one of
+    # its rows records an iron-and-vitamin-D fortified milk. Same judgement as
+    # `EVOO`: the name denotes one substance, and the dirty row is handled at
+    # result level rather than by dissolving the identity for every other study.
+    # It pools separately from the named forms, since an unnamed form cannot be
+    # assumed to be a named one.
+    "vitamin d": ComponentForm("vitamin_d", SINGLE_FORM, "维生素 D"),
     # --- iron, by named salt ---
     "硫酸亚铁": ComponentForm("iron", "ferrous_sulfate", "硫酸亚铁"),
     "麦芽酚铁": ComponentForm("iron", "ferric_maltol", "麦芽酚铁"),
-    # --- iron with no form named ---
+    # --- iron with no form named; the same salt under its own aliases ---
     "ferrous sulfate": ComponentForm("iron", "ferrous_sulfate", "硫酸亚铁"),
+    "ferrous sulphate": ComponentForm("iron", "ferrous_sulfate", "硫酸亚铁"),
+    "oral ferrous sulphate": ComponentForm("iron", "ferrous_sulfate", "硫酸亚铁"),
     # --- sodium, by named salt ---
     "碳酸氢钠": ComponentForm("sodium_bicarbonate", SINGLE_FORM, "碳酸氢钠"),
+    "sodium bicarbonate": ComponentForm("sodium_bicarbonate", SINGLE_FORM, "碳酸氢钠"),
     # --- lipid-relevant oils, by provenance ---
     "olive oil": ComponentForm("olive_oil", SINGLE_FORM, "橄榄油"),
     "evoo": ComponentForm("olive_oil", "extra_virgin", "特级初榨橄榄油"),
@@ -190,6 +195,35 @@ def is_poolable(intervention_name: str) -> bool:
     return resolve_component(intervention_name) is not None
 
 
+def pool_token(intervention_name: str) -> str:
+    """The identity a result carries into synthesis, or "" when it has none.
+
+    Stored on the result so the grouping decision is made once, when the
+    result is written, and reads back as a plain column — the same way the
+    existing scope keys are derived once and stored. Empty means "not
+    poolable", and that is what keeps a result out of every component pool
+    while leaving it in the evidence body.
+    """
+
+    form = resolve_component(intervention_name)
+    return form.pooled_by if form else ""
+
+
+def pooled_by_label(token: str) -> str:
+    """The display name for a pooling identity, or "" if it is not catalogued.
+
+    A body that pools one component must name that component in what a patient
+    reads. Taking the label from the locked topic instead would describe a
+    coconut-oil pool as "dietary oils and solid fats" — the topic's class
+    phrase — which is exactly the over-claim this axis removes.
+    """
+
+    for form in COMPONENT_FORMS.values():
+        if form.pooled_by == token:
+            return form.label
+    return ""
+
+
 def demo() -> None:
     """Smallest runnable check for the logic that must not silently widen."""
 
@@ -215,7 +249,6 @@ def demo() -> None:
         "必需氨基酸",
         "Fiber supplementation",
         # Names that do not denote one substance.
-        "Vitamin D",
         "膳食盐",
         "",
     ):

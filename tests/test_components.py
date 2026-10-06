@@ -155,6 +155,7 @@ EXPECTED_POOLING_IDENTITIES = {
     "特定生物活性胶原蛋白肽（SCP）": "collagen_peptide",
     "特定角豆液体浓缩物": "carob",
     "Standard Olive Oil": "olive_oil",
+    "Vitamin D": "vitamin_d",
     "Soybean oil": "soybean_oil",
     "碳酸氢钠": "sodium_bicarbonate",
     "大豆异黄酮": "soy_isoflavones",
@@ -170,7 +171,6 @@ EXPECTED_POOLING_IDENTITIES = {
 #: reason keeps a future edit from "fixing" one of these by adding it.
 EXPECTED_UNRESOLVED_REASONS = {
     "钙和维生素D": "multi-component supplement",
-    "Vitamin D": "name spans a supplement and a fortified milk",
     "膳食盐": "name overstates a salt-reduction education programme",
     "Fiber supplementation": "class, not a substance",
     "必需氨基酸": "class, not a substance",
@@ -226,7 +226,6 @@ def test_a_name_too_coarse_to_be_a_component_fails_closed() -> None:
     """
 
     for too_coarse, why in (
-        ("Vitamin D", "names a family, not one substance"),
         ("膳食盐", "names a salt-reduction education programme"),
     ):
         assert resolve_component(too_coarse) is None, f"{too_coarse} {why}"

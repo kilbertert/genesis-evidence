@@ -297,6 +297,7 @@ CREATE TABLE IF NOT EXISTS evidence_profiles (
     reviewer TEXT NOT NULL,
     reviewed_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    component_token TEXT NOT NULL DEFAULT '',
     UNIQUE (condition_code, version)
 );
 

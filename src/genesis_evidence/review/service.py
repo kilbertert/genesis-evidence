@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..core.components import pooled_by_label
 from ..core.consistency import NEEDS_REVIEW, is_source_based
 from ..core.methodology import (
     RANDOMIZED_DESIGNS,
@@ -55,6 +56,10 @@ class EvidenceProfileInput(BaseModel):
 
     certainty: Literal["high", "moderate", "low", "very_low"]
     scope_key: str | None = Field(default=None, min_length=1, max_length=160)
+    # ADR 0007: the component identity a synthesised body pools over. Empty
+    # means the body pools no component, which is only reachable for a
+    # hand-authored card; an automatic body always carries one.
+    component_token: str = Field(default="", max_length=160)
     certainty_rationale: str = Field(min_length=1, max_length=5000)
     estimate_target: str = Field(min_length=1, max_length=1000)
     interpretations: dict[
@@ -654,6 +659,11 @@ class EvidenceReviewService:
                 continue
             for group in groups:
                 scope_key = str(group["scope_key"])
+                # ADR 0007: identity for "is this the same body" is
+                # (scope, component). Without the component half, the calcium and
+                # vitamin-D groups of one scope would resolve to the same prior
+                # card and then collide on UNIQUE(condition_code, version).
+                component_token = str(group.get("component_token") or "")
                 profile, patient_body, grade_domains = _automatic_profile(candidate, group)
                 claim_ids = [str(claim["id"]) for claim in group["claims"]]
                 card = next(
@@ -662,6 +672,7 @@ class EvidenceReviewService:
                         for existing_card in existing.values()
                         if str(existing_card["topic_id"]) == str(candidate["id"])
                         and str(existing_card["scope_key"]) == scope_key
+                        and str(existing_card.get("component_token") or "") == component_token
                         and set(existing_card["claim_ids"]) == set(claim_ids)
                         and str(existing_card["grade"]) == profile.certainty
                         and existing_card["status"] not in {"rejected", "stale"}
@@ -680,6 +691,12 @@ class EvidenceReviewService:
                         },
                     )
                 key = (str(candidate["condition_code"]), version)
+                # Record the version this loop just decided on. Sibling groups
+                # under one condition each allocate a version, and the next group
+                # must see the previous one's choice: the snapshot above is taken
+                # once, before the loop, so without this two groups can be handed
+                # the same version and collide on UNIQUE(condition_code, version).
+                existing[key] = {"id": "", "status": "draft", "version": version}
                 card_id = str(card["id"]) if card else ""
                 card_status = str(card["status"]) if card else "draft"
                 try:
@@ -1236,16 +1253,25 @@ def _automatic_profile(
             else "不同结果对上述研究关系的支持并不一致。"
         )
     )
+    # ADR 0007: a body pools exactly one component, so what it names must be that
+    # component. `_synthesis_dimensions` fills ingredient_name from the locked
+    # topic, whose phrasing is a class ("dietary oils and solid fats"); left in
+    # place it would describe a coconut-oil pool as the whole class it came from.
+    pooled_label = pooled_by_label(str(group.get("component_token") or ""))
+    named_exposure = pooled_label or str(dimensions["ingredient_name"])
+    studied_exposure = (
+        f"{named_exposure}（{dimensions['ingredient_form']}，{dimensions['dose']}）"
+    )
     patient_body = (
         f"关于{candidate['condition_name']}，截至{candidate['evidence_cutoff_date']}的已审核研究"
-        f"在{dimensions['population']}中评估了{dimensions['ingredient_name']}"
-        f"（{dimensions['ingredient_form']}，{dimensions['dose']}）与"
+        f"在{dimensions['population']}中评估了{studied_exposure}与"
         f"{dimensions['outcome']}的关系，比较条件为{dimensions['comparator']}，"
         f"观察时间为{dimensions['timepoint']}。{conclusion}当前证据确定性为{certainty_label}，"
         "适用范围以所列研究人群和条件为限。"
     )
     profile = EvidenceProfileInput(
         scope_key=str(group["scope_key"]),
+        component_token=str(group.get("component_token") or ""),
         certainty=certainty,
         certainty_rationale=rationale,
         estimate_target=target,

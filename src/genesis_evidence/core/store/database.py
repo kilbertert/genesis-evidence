@@ -137,6 +137,7 @@ def _migrate_existing_schema(connection: sqlite3.Connection) -> None:
         "evidence_profiles": (
             "topic_id TEXT REFERENCES evidence_topics(id)",
             "scope_key TEXT NOT NULL DEFAULT ''",
+            "component_token TEXT NOT NULL DEFAULT ''",
         ),
         "knowledge_cards": ("evidence_profile_id TEXT REFERENCES evidence_profiles(id)",),
     }

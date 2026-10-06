@@ -28,6 +28,7 @@ def _publish_scoped_card(
     *,
     condition_code: str = "COND_PREDIABETES",
     scope_key: str = "metric:fasting_glucose",
+    component_token: str = "",
     card_id: str = "card-1",
     profile_id: str = "profile-1",
     topic_id: str = "topic-1",
@@ -58,13 +59,13 @@ def _publish_scoped_card(
                 id, topic_id, condition_code, scope_key, version, ingredient_name, ingredient_form,
                 population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
                 estimate_target, evidence_body_complete, certainty, certainty_rationale,
-                evidence_cutoff_date, reviewer, reviewed_at, created_at
+                evidence_cutoff_date, reviewer, reviewed_at, created_at, component_token
             ) VALUES (?, ?, ?, ?, ?, 'Test ingredient',
                 'Test form', 'Adults 40+', 'Not reported', 'Test dose', 'Comparator',
                 'Outcome', 'Timepoint', 'Target', 1, 'moderate', 'Test-only profile',
-                '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
+                '2026-08-11', 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z', ?)
             """,
-            (profile_id, topic_id, condition_code, scope_key, version),
+            (profile_id, topic_id, condition_code, scope_key, version, component_token),
         )
         connection.execute(
             """
@@ -661,3 +662,101 @@ def test_evidence_api_keeps_versioned_response_contract_private(tmp_path) -> Non
         "title": "Schema Version",
         "type": "string",
     }
+
+
+def test_two_components_in_one_scope_do_not_mix_patient_citations(tmp_path) -> None:
+    """ADR 0007: one scope may carry one card per component.
+
+    Keying patient answers by (condition, scope) is what `core.contracts`
+    requires of a visible card, so a scope carrying two components has no single
+    answer. It must serve nothing rather than one component's conclusion with the
+    other component's citations attached — the defect this pins.
+    """
+
+    database, client = _client(tmp_path)
+    _publish_scoped_card(
+        database,
+        component_token="coconut_oil",
+        card_id="card-a",
+        profile_id="profile-a",
+        topic_id="topic-a",
+        claim_id="claim-a",
+        paper_id="paper-a",
+        version="1.0.0",
+        doi="10.1000/coconut-oil",
+    )
+    _publish_scoped_card(
+        database,
+        component_token="soybean_oil",
+        card_id="card-b",
+        profile_id="profile-b",
+        topic_id="topic-b",
+        claim_id="claim-b",
+        paper_id="paper-b",
+        version="1.0.1",
+        doi="10.1000/soybean-oil",
+    )
+
+    adapted = build_evidence_request(
+        [
+            {
+                "metric_name": "空腹血糖",
+                "metric_value": "6.8",
+                "unit": "mmol/L",
+                "reference_range": "3.9-6.1",
+                "page_number": 2,
+                "source_file_index": 1,
+                "source_id": "health-flow/report-1/page-2",
+                "evidence_text": "空腹血糖 6.8 mmol/L 参考范围 3.9-6.1 H",
+            }
+        ],
+        confirmed=True,
+    )
+    response = client.post(
+        "/api/evidence/matches", json=adapted.request.model_dump()
+    )
+    assert response.status_code == 200, response.json()
+    body = response.json()
+
+    evidence = body["findings"][0]["evidence_items"] if body["findings"] else []
+    served = [item["card"]["id"] for item in evidence]
+    assert served == [], (
+        "an ambiguous (condition, scope) must serve no card, "
+        f"but served {served}"
+    )
+
+
+def test_a_single_component_scope_still_serves_its_card(tmp_path) -> None:
+    """The control for the fail-closed rule above.
+
+    An unambiguous scope — and the legacy case of a scope whose cards all carry
+    no component — must keep reaching the patient. Only *ambiguity* is withheld.
+    """
+
+    database, client = _client(tmp_path)
+    _publish_scoped_card(database, component_token="coconut_oil")
+    adapted = build_evidence_request(
+        [
+            {
+                "metric_name": "空腹血糖",
+                "metric_value": "6.8",
+                "unit": "mmol/L",
+                "reference_range": "3.9-6.1",
+                "page_number": 2,
+                "source_file_index": 1,
+                "source_id": "health-flow/report-1/page-2",
+                "evidence_text": "空腹血糖 6.8 mmol/L 参考范围 3.9-6.1 H",
+            }
+        ],
+        confirmed=True,
+    )
+
+    response = client.post("/api/evidence/matches", json=adapted.request.model_dump())
+
+    assert response.status_code == 200, response.json()
+    served = [
+        item["card"]["id"]
+        for finding in response.json()["findings"]
+        for item in finding["evidence_items"]
+    ]
+    assert served == ["card-1"]
