@@ -46,9 +46,23 @@ it is a **correctness** cost rather than a modelling preference:
 The mechanism is visible in `review/scope.py:621`: `_synthesis_dimensions`
 sources a profile's `ingredient_name` from the **locked topic's PICOTS**
 (`intervention_or_exposure`), not from the research results that are actually
-pooled. Every approved result whose *outcome* matches the topic's outcome
-qualifier is admitted to the same scope, however different its intervention.
-One certainty value is then computed over calcium, vitamin D3, protein and
+pooled.
+
+An intervention check does exist — `_profile_scope_matches`
+(`review/scope.py:380`) compares the topic's `intervention_or_exposure` against
+the result's `ingredient_name` + `ingredient_form` + `dose` before a result may
+enter a scope. It is not missing; it is the **wrong kind of test**. It is a
+loose token-overlap match (`_picots_text_matches`, `review/scope.py:25`) with a
+stopword list, an alias table, and a generic-nutrition marker rule, so a result
+passes when its exposure text *overlaps* the topic's exposure phrase. The topic
+phrase here is a class-level one — "Calcium, vitamin D, protein, or dietary
+pattern intervention/exposure" — and a calcium trial, a vitamin D3 trial and a
+protein trial each overlap it while denoting different substances. Text overlap
+is a recall heuristic; the question that decides poolability is whether two
+results denote **the same component**, which no amount of matching the topic's
+class phrase can answer.
+
+One certainty value is then computed over those calcium, vitamin D3, protein and
 dietary-pattern trials together, and one patient-visible conclusion is generated
 from it.
 
@@ -61,7 +75,7 @@ studied.
 A second, non-correctness pressure points the same way. The 43
 `COND_DYSLIPIDEMIA` / `metric:ldl_c` profiles resolve to only **2** distinct
 pooled bodies, rebuilt repeatedly at runtime (versions run 2.0.10 → 4.0.45), and
-44 of that condition's 106 profiles carry an **empty** `scope_key`. Without a
+34 of that condition's 106 profiles carry an **empty** `scope_key`. Without a
 stable per-ingredient identity there is no key under which a rebuild is
 recognised as a rebuild rather than as a new body, so corpora churn and
 fragment. The repository currently holds 174 profiles and 36 published cards;
@@ -91,6 +105,19 @@ computed.
    under a single-component claim. It stays in the evidence body, marked as
    ineligible for component-level synthesis, exactly as the existing design
    already retains high-risk and negative results.
+
+   **What "stays in the evidence body" means concretely**, since the follow-up
+   slices need a representation and the ADR should not leave it implied: a
+   result is stored in `results` regardless of pooling, the eligibility decision
+   already exists as an explicit outcome (`results.status`, today
+   `reviewed` / `rejected` / `not_reported`), and membership of a synthesised
+   body is a separate fact carried by `evidence_profile_results`. A result that
+   is approved but non-poolable is therefore *approved and reviewed, and a
+   member of no profile* — a state the database already contains: today **187**
+   approved results exist and only **144** are members of a profile, so 43
+   already live outside one. The slice adds the reason (non-poolable versus
+   ineligible-by-outcome) as a labelled state; it does not need a new mechanism,
+   and it must not drop such results from `results` to make the axis tidy.
 
 3. **Certainty is computed over one component and one form.** A GRADE
    assessment that mixes components is not a GRADE assessment of anything, so
