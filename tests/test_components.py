@@ -138,21 +138,69 @@ def test_non_nutrient_interventions_never_resolve() -> None:
         assert not is_poolable(non_nutrient), non_nutrient
 
 
-def test_measured_unmapped_population_is_reported() -> None:
-    """Record the fail-closed population rather than assuming it is small.
+#: Every corpus string that resolves, and the pooling identity it must get.
+#: Recorded per entry, not as a total: a total is satisfied by one string
+#: starting to resolve while another stops, which is exactly the silent swap
+#: that would move evidence between pools.
+EXPECTED_POOLING_IDENTITIES = {
+    "大麦嫩叶（barley green）": "barley_grass",
+    "麦芽酚铁": "iron:ferric_maltol",
+    "Coconut oil": "coconut_oil",
+    "Olive oil": "olive_oil",
+    "Prunes (Prunus domestica)": "prunes",
+    "EVOO": "olive_oil:extra_virgin",
+    "硫酸亚铁": "iron:ferrous_sulfate",
+    "特定生物活性胶原蛋白肽（SCP）": "collagen_peptide",
+    "Vitamin D": "vitamin_d",
+    "膳食盐": "sodium_chloride",
+    "特定角豆液体浓缩物": "carob",
+    "Standard Olive Oil": "olive_oil",
+    "Soybean oil": "soybean_oil",
+    "碳酸氢钠": "sodium_bicarbonate",
+    "大豆异黄酮": "soy_isoflavones",
+    "Walnut supplementation": "walnut",
+    "Virgin olive oil": "olive_oil:virgin",
+    "Refined olive oil": "olive_oil:refined",
+    "Cholecalciferol (vitamin D3)": "vitamin_d:cholecalciferol",
+    "Calcidiol (25(OH)D3)": "vitamin_d:calcidiol",
+    "Brazil nut oil": "brazil_nut_oil",
+}
 
-    Measured against the 2026-10-06 corpus: 23 of 59 strings resolve, 36 do not.
-    The catalog is deliberately narrow — most of the corpus is a multi-component
-    supplement, a whole dietary pattern, or a non-nutrient intervention. This
-    count is the honest exposure the ADR promised to report; a regression that
-    widened resolution would show up here as the resolved count climbing.
-    """
+#: Strings that must NOT resolve, and the reason they must not. Pinning the
+#: reason keeps a future edit from "fixing" one of these by adding it.
+EXPECTED_UNRESOLVED_REASONS = {
+    "钙和维生素D": "multi-component supplement",
+    "Fiber supplementation": "class, not a substance",
+    "必需氨基酸": "class, not a substance",
+    "抗阻运动": "not a nutrient",
+    "运动干预": "not a nutrient",
+}
 
-    resolved = [text for text in APPROVED_INTERVENTION_CORPUS if is_poolable(text)]
-    unresolved = [text for text in APPROVED_INTERVENTION_CORPUS if not is_poolable(text)]
-    assert len(resolved) == 23, sorted(unresolved)
-    assert len(unresolved) == 36
-    assert len(resolved) + len(unresolved) == 59
+
+def test_each_entry_resolves_to_its_recorded_pooling_identity() -> None:
+    for text, expected in EXPECTED_POOLING_IDENTITIES.items():
+        form = resolve_component(text)
+        assert form is not None, f"{text} stopped resolving"
+        assert form.pooled_by == expected, f"{text} -> {form.pooled_by} != {expected}"
+
+
+def test_the_corpus_partition_is_pinned_both_ways() -> None:
+    """Both halves are checked, so a swap cannot hide in the totals."""
+
+    for text, reason in EXPECTED_UNRESOLVED_REASONS.items():
+        assert not is_poolable(text), f"{text} resolved but is {reason}"
+
+    resolved = {text for text in APPROVED_INTERVENTION_CORPUS if is_poolable(text)}
+    assert resolved == set(EXPECTED_POOLING_IDENTITIES), (
+        f"unexpected: {sorted(resolved ^ set(EXPECTED_POOLING_IDENTITIES))}"
+    )
+
+
+def test_a_class_name_is_not_poolable() -> None:
+    """A name covering several substances cannot prove two studies matched."""
+
+    assert not is_poolable("Fiber supplementation")
+    assert not is_poolable("必需氨基酸")
 
 
 def test_an_unnamed_form_is_not_guessed_to_be_a_named_one() -> None:

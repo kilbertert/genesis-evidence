@@ -25,6 +25,25 @@ Two consequences are intended rather than tolerated:
   programmes, not exposures of the kind this catalog names. They are absent by
   construction, so they can never be pooled as if they were a nutrient.
 
+**A class is not a component.** "必需氨基酸" names a set of substances and
+"Fiber supplementation" names a nutrient class, so neither identifies what a
+study actually administered. They are deliberately **absent**: two studies that
+both say "fiber" may have used different fibres, and pooling them would compute
+a certainty for no single intervention. Only an entry that names one substance
+belongs here.
+
+**`results.ingredient_form` is not a form field and is not read here.** That
+column holds free text — measured on the 2026-10-06 database it carries 680
+distinct values across 672 distinct `ingredient_name` values, and its contents
+are dose descriptions, delivery modes and even questionnaire wording ("750 mL of
+olive oil for the MD group supply", "How much olive oil do you consume per day",
+"口服胶囊"). It cannot discriminate one chemical form from another, so this
+module takes **only the intervention name** and would rather return a coarser
+answer than read a field that does not mean what its name suggests. The
+`form` recorded on a `ComponentForm` is the form **declared by this catalog for
+that exact name** (the form `EVOO` denotes), not a value read back from a
+result.
+
 The catalog is intentionally small and is expected to grow. Growth must be by
 adding a line for a **newly named, single, determinate component**, not by
 loosening the match.
@@ -96,7 +115,9 @@ COMPONENT_FORMS: dict[str, ComponentForm] = {
     # --- other single substances ---
     "膳食盐": ComponentForm("sodium_chloride", SINGLE_FORM, "膳食盐"),
     "大豆异黄酮": ComponentForm("soy_isoflavones", SINGLE_FORM, "大豆异黄酮"),
-    "必需氨基酸": ComponentForm("essential_amino_acids", SINGLE_FORM, "必需氨基酸"),
+    # NOTE: "必需氨基酸" and "Fiber supplementation" are deliberately absent.
+    # Each names a set of substances, not one substance, so neither can prove
+    # that two studies administered the same thing — see the module docstring.
     "特定生物活性胶原蛋白肽(scp)": ComponentForm(
         "collagen_peptide", SINGLE_FORM, "生物活性胶原蛋白肽"
     ),
@@ -104,29 +125,32 @@ COMPONENT_FORMS: dict[str, ComponentForm] = {
     "prunes (prunus domestica)": ComponentForm("prunes", SINGLE_FORM, "西梅"),
     "walnut supplementation": ComponentForm("walnut", SINGLE_FORM, "核桃"),
     "大麦嫩叶(barley green)": ComponentForm("barley_grass", SINGLE_FORM, "大麦嫩叶"),
-    # --- a nutrient class named as a class, still one axis ---
-    "fiber supplementation": ComponentForm("dietary_fiber", SINGLE_FORM, "膳食纤维"),
 }
 
 
-def resolve_component(source_text: str) -> ComponentForm | None:
-    """Resolve one extracted intervention string to a component form, or None.
+def resolve_component(intervention_name: str) -> ComponentForm | None:
+    """Resolve one intervention **name** to a component form, or None.
+
+    Takes the name only — deliberately not `results.ingredient_form`, which is
+    free text with no controlled vocabulary (see the module docstring). A caller
+    holding a result row should pass `ingredient_name`.
 
     None is the fail-closed answer and covers every case the catalog does not
     positively name: an unmapped substance, a multi-component product, a dietary
-    pattern, and a non-nutrient intervention such as an exercise programme.
-    Callers must treat None as "not poolable", never as "unknown, so use it".
+    pattern, a nutrient class, and a non-nutrient intervention such as an
+    exercise programme. Callers must treat None as "not poolable", never as
+    "unknown, so use it".
     """
 
-    if not source_text or not source_text.strip():
+    if not intervention_name or not intervention_name.strip():
         return None
-    return COMPONENT_FORMS.get(normalize_component_text(source_text))
+    return COMPONENT_FORMS.get(normalize_component_text(intervention_name))
 
 
-def is_poolable(source_text: str) -> bool:
+def is_poolable(intervention_name: str) -> bool:
     """Whether one intervention string may enter component-level synthesis."""
 
-    return resolve_component(source_text) is not None
+    return resolve_component(intervention_name) is not None
 
 
 def demo() -> None:
@@ -147,6 +171,9 @@ def demo() -> None:
         "抗阻运动",
         "运动干预",
         "Salt reduction interventions",
+        # A class is not a component: several substances under one name.
+        "必需氨基酸",
+        "Fiber supplementation",
         "",
     ):
         assert resolve_component(text) is None, text

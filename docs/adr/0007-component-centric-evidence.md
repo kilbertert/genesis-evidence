@@ -139,11 +139,14 @@ computed.
    **This ADR settles the direction; the implementation shape belongs to the
    slices.** The paragraphs above name the couplings that constrain *where* the
    change may land, because a reader would otherwise have to rediscover them.
-   They are not a specification: whether the resolution is stored on `results` as
-   columns or in a companion row, exactly how `_profile_scopes` is narrowed to
-   component identity, and how the two predicates are named are slice-level
-   decisions to be made against the code as it then stands, with their own
-   review. Fixing them here would put unverified implementation claims into a
+   They are not a specification, and the "Table budget" section governs the one
+   point where they could be read as one: that section decides *where* the
+   resolution is stored — on the existing `results` row, not a new entity — and
+   it is the governing statement. What this paragraph leaves to the slices is the
+   *mechanism* at that place: which columns carry it, how `_profile_scopes` is
+   narrowed to component identity, and how the two predicates are named. Those
+   are decisions to be made against the code as it then stands, with their own
+   review; fixing them here would put unverified implementation claims into a
    record whose job is to fix the axis.
 
    A result remains stored in `results` regardless of pooling, and membership of
