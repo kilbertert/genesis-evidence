@@ -136,6 +136,16 @@ computed.
    dropping inconvenient evidence, and it is supplied with the *synthesis*
    eligible set, not a second exception path.
 
+   **This ADR settles the direction; the implementation shape belongs to the
+   slices.** The paragraphs above name the couplings that constrain *where* the
+   change may land, because a reader would otherwise have to rediscover them.
+   They are not a specification: whether the resolution is stored on `results` as
+   columns or in a companion row, exactly how `_profile_scopes` is narrowed to
+   component identity, and how the two predicates are named are slice-level
+   decisions to be made against the code as it then stands, with their own
+   review. Fixing them here would put unverified implementation claims into a
+   record whose job is to fix the axis.
+
    A result remains stored in `results` regardless of pooling, and membership of
    a synthesised body stays a separate fact in `evidence_profile_results`.
    Note that the 43 approved-but-unprofiled results in today's database are *not*
