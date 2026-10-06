@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from ..card_lifecycle import patient_visible_sql
-from ..contracts import EvidenceMatchObservation, card_capabilities
+from ..contracts import EvidenceMatchObservation
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
     CONDITIONS_BY_METRIC,
@@ -26,6 +26,7 @@ from ..matching import (
 )
 from ..metrics import METRIC_LABELS
 from .database import Database
+from .published_cards import project_published_cards
 
 __all__ = ["EvidenceStore"]
 
@@ -195,63 +196,7 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
         ORDER BY kc.published_at DESC, kc.version DESC
         """
     ).fetchall()
-    # ADR 0007 makes one scope able to carry several published cards — one per
-    # component — while this key stays (condition, scope). That is deliberate and
-    # it is why the loop below fails closed rather than picking one: keying by
-    # (condition, scope) is what `core.contracts` requires of a patient-visible
-    # card, and returning a single card for an ambiguous scope would hand the
-    # patient one component's conclusion with the other component's citations
-    # attached. How N cards should be presented is a product decision this slice
-    # does not make, so an ambiguous scope serves nothing until it is made.
-    #
-    # `indexable` mirrors the v2 gate at the bottom of this module, so a scope
-    # that cannot be keyed on one scope_key is excluded from both responses and
-    # a v2 client cannot be handed a card the v3 response considers ambiguous.
-    cards: dict[tuple[str, str], dict[str, object]] = {}
-    # Group rows into cards first, so one card's sources can never be appended
-    # to another card's body.
-    by_card: dict[str, dict[str, object]] = {}
-    by_scope: dict[tuple[str, str], set[str]] = {}
-    for row in rows:
-        scope_key = str(row["scope_key"] or "").strip()
-        if not scope_key:
-            continue
-        card_id = str(row["id"])
-        card = by_card.get(card_id)
-        if card is None:
-            card = {
-                "id": row["id"],
-                "condition_code": row["condition_code"],
-                "scope_key": scope_key,
-                "version": row["version"],
-                "status": "published",
-                "grade": row["grade"],
-                "published_at": row["published_at"],
-                "evidence_profile_id": row["evidence_profile_id"],
-                "patient_visible_body": row["patient_visible_body"],
-                "sources": [],
-                **card_capabilities(str(row["grade"])),
-            }
-            by_card[card_id] = card
-        by_scope.setdefault((str(row["condition_code"]), scope_key), set()).add(card_id)
-        if row["claim_id"]:
-            source = {
-                "claim_id": row["claim_id"],
-                "paper_id": row["paper_id"],
-                "paper_title": row["paper_title"],
-                "doi": row["doi"],
-                "evidence": row["card_evidence"] or row["candidate_text"] or "",
-                "locator": row["locator"] or "",
-            }
-            if source not in card["sources"]:
-                card["sources"].append(source)  # type: ignore[union-attr]
-    # Index a scope only when exactly one card claims it. A scope carrying
-    # several components has no single patient-visible answer yet, so it is left
-    # out rather than resolved arbitrarily — see the note above.
-    for key, card_ids in by_scope.items():
-        if len(card_ids) == 1:
-            cards[key] = by_card[next(iter(card_ids))]
-    return cards
+    return project_published_cards(rows)
 
 
 def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:

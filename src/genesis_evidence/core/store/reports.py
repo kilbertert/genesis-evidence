@@ -40,6 +40,7 @@ from ..matching import (
 )
 from .database import Database
 from .papers import ObjectStore
+from .published_cards import project_published_cards
 
 __all__ = [
     "ConfirmationInput",
@@ -638,54 +639,7 @@ class ReportStore:
                 ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall()
-            # Same two-step shape, and the same fail-closed rule, as
-            # `EvidenceStore._published_cards`: group rows into cards first so one
-            # card's citations cannot land on another card's body, then index a
-            # scope only when exactly one card claims it. ADR 0007 lets a scope
-            # carry one card per component, and how several should appear here is
-            # a product decision this slice does not make.
-            by_card: dict[str, dict[str, object]] = {}
-            by_scope: dict[tuple[str, str], set[str]] = {}
-            for row in card_rows:
-                scope_key = str(row["scope_key"] or "").strip()
-                # Legacy cards without an explicit outcome scope are deliberately
-                # not eligible for external metric matching.
-                if not scope_key:
-                    continue
-                card_id = str(row["id"])
-                card = by_card.get(card_id)
-                if card is None:
-                    card = {
-                        "id": row["id"],
-                        "condition_code": row["condition_code"],
-                        "scope_key": scope_key,
-                        "version": row["version"],
-                        "status": "published",
-                        "grade": row["grade"],
-                        "published_at": row["published_at"],
-                        "evidence_profile_id": row["evidence_profile_id"],
-                        "patient_visible_body": row["patient_visible_body"],
-                        "sources": [],
-                        **card_capabilities(str(row["grade"])),
-                    }
-                    by_card[card_id] = card
-                by_scope.setdefault((str(row["condition_code"]), scope_key), set()).add(card_id)
-                if row["claim_id"]:
-                    source = {
-                        "claim_id": row["claim_id"],
-                        "paper_id": row["paper_id"],
-                        "paper_title": row["paper_title"],
-                        "doi": row["doi"],
-                        "evidence": row["card_evidence"] or row["candidate_text"] or "",
-                        "locator": row["locator"] or "",
-                    }
-                    if source not in card["sources"]:
-                        card["sources"].append(source)  # type: ignore[union-attr]
-            cards: dict[tuple[str, str], dict[str, object]] = {
-                key: by_card[next(iter(card_ids))]
-                for key, card_ids in by_scope.items()
-                if len(card_ids) == 1
-            }
+            cards = project_published_cards(card_rows)
 
             adapter = CardAdapter(
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC.get(
