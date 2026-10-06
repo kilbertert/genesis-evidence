@@ -67,7 +67,14 @@ def _confirm(store, handle, *, value: float) -> str:
     return observation_id
 
 
-def _publish_card(database: Database, condition_code: str, *, grade: str, version: str = "1.0.0"):
+def _publish_card(
+    database: Database,
+    condition_code: str,
+    *,
+    grade: str,
+    version: str = "1.0.0",
+    scope_key: str = "metric:fasting_glucose",
+):
     card_id = f"card-{condition_code}-{version}"
     profile_id = f"profile-{condition_code}-{version}"
     topic_id = f"topic-{condition_code}-{version}"
@@ -92,13 +99,13 @@ def _publish_card(database: Database, condition_code: str, *, grade: str, versio
                 population, baseline_nutrient_status, dose, comparator, outcome,
                 timepoint, estimate_target, evidence_body_complete, certainty,
                 certainty_rationale, evidence_cutoff_date, reviewer, reviewed_at, created_at
-            ) VALUES (?, ?, ?, 'metric:fasting_glucose', ?, 'Test ingredient',
+            ) VALUES (?, ?, ?, ?, ?, 'Test ingredient',
                 'Test form', 'Adults 40+',
                 'Not reported', 'Test dose', 'Comparator', 'Outcome', 'Timepoint',
                 'Test target', 1, ?, 'Test-only reviewed profile', '2026-08-11',
                 'reviewer', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
             """,
-            (profile_id, topic_id, condition_code, version, grade),
+            (profile_id, topic_id, condition_code, scope_key, version, grade),
         )
         connection.execute(
             """
@@ -281,3 +288,33 @@ def test_stale_card_becomes_invisible_without_reusing_old_patient_content(tmp_pa
     result = store.get_assessment(handle.report_id, handle.access_token)
     assert result["findings"] == []
     assert result["message"] == "暂无已审核内容"
+
+
+def test_assessment_matches_the_card_for_the_observations_own_metric(tmp_path) -> None:
+    """A condition with several cards must not serve an arbitrary one.
+
+    This path keys cards by (condition, scope) so a lookup resolves to the card
+    for the observation's own metric. Keying by condition alone kept whichever
+    card sorted first by published_at, so a fasting-glucose observation could be
+    matched to the condition's newest card for a different metric. Nine
+    conditions in the 2026-10-06 database have more than one published card.
+    """
+
+    database, store, handle = _store(tmp_path)
+    _confirm(store, handle, value=6.8)
+    _publish_card(database, "COND_PREDIABETES", grade="moderate", version="1.0.0")
+    # Newer, and for a different metric: under condition-only keying this one
+    # would win and be served for a fasting-glucose observation.
+    _publish_card(
+        database,
+        "COND_PREDIABETES",
+        grade="moderate",
+        version="2.0.0",
+        scope_key="metric:hba1c",
+    )
+
+    result = store.assess(handle.report_id, handle.access_token)
+
+    assert [finding["card_id"] for finding in result["findings"]] == [
+        "card-COND_PREDIABETES-1.0.0"
+    ]
