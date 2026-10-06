@@ -25,6 +25,7 @@ from ...review.scope import (
     _synthesis_dimensions,
     _topic_outcome_components,  # noqa: F401
 )
+from ..components import pool_token
 from ..consistency import NEEDS_REVIEW, is_source_based
 from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
@@ -579,9 +580,31 @@ class ReviewStore:
                 """,
                 (condition_code, topic_id),
             ).fetchall()
+            # The body's component identity is read from the evidence it is
+            # actually built from, not taken on the caller's word: a card whose
+            # claims study two components is a contradiction, and deriving it
+            # here means the eligibility check below and the stored
+            # `component_token` can never disagree.
+            body_tokens = {_component_token(row) for row in rows}
+            if len(body_tokens) != 1 or "" in body_tokens:
+                raise ValueError(
+                    "evidence profile must pool exactly one component identity"
+                )
+            component_token = body_tokens.pop()
+            requested_token = str(profile.get("component_token") or "")
+            if requested_token and requested_token != component_token:
+                raise ValueError("evidence profile component does not match its results")
             scoped_eligible = []
             for row in eligible:
                 item = _augment_profile_population(connection, dict(row))
+                # ADR 0007: scope eligibility alone is not enough. A body may
+                # contain only results of one component identity, so a result the
+                # topic covers but which resolves to a different component — or
+                # to none — is not eligible for THIS body. That it is still
+                # approved and retained is the point: it is excluded from a
+                # component pool, not from the evidence.
+                if _component_token(item) != component_token:
+                    continue
                 if scope_key in _profile_scopes(picots, condition_code, item):
                     scoped_eligible.append(item)
             eligible = scoped_eligible
@@ -638,8 +661,8 @@ class ReviewStore:
                     population, baseline_nutrient_status, dose, comparator, outcome,
                     timepoint, estimate_target, certainty, certainty_rationale,
                     evidence_body_complete, evidence_cutoff_date, reviewer, reviewed_at,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, component_token
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
@@ -663,6 +686,7 @@ class ReviewStore:
                     reviewer,
                     now,
                     now,
+                    component_token,
                 ),
             )
             profile_results: dict[str, str] = {}
@@ -1123,17 +1147,26 @@ class ReviewStore:
                     """,
                     (topic["condition_code"], topic["id"]),
                 ).fetchall()
-                groups: dict[str, dict[str, object]] = {}
+                groups: dict[tuple[str, str], dict[str, object]] = {}
                 for row in rows:
                     item = _augment_profile_population(connection, dict(row))
                     item["risk_of_bias"] = json.loads(item.pop("risk_of_bias_json"))
+                    # ADR 0007: a result pools only with results of the same
+                    # component identity. The token is "" when the intervention
+                    # resolves to no component, and such a result forms no group
+                    # at all — it stays in the evidence body, reviewable and
+                    # approvable, but is not pooled into a component body.
+                    component_token = _component_token(item)
+                    if not component_token:
+                        continue
                     for scope_key, scope_label in _profile_scopes(
                         base["picots"], str(topic["condition_code"]), item
                     ).items():
                         group = groups.setdefault(
-                            scope_key,
+                            (scope_key, component_token),
                             {
                                 "scope_key": scope_key,
+                                "component_token": component_token,
                                 "dimensions": _synthesis_dimensions(base["picots"], scope_label),
                                 "claims": [],
                             },
@@ -1165,7 +1198,7 @@ class ReviewStore:
             rows = connection.execute(
                 """
                 SELECT kc.id, kc.condition_code, kc.version, kc.status, kc.grade,
-                    kc.evidence_profile_id, ep.topic_id, ep.scope_key,
+                    kc.evidence_profile_id, ep.topic_id, ep.scope_key, ep.component_token,
                     kc.reviewer, kc.reviewed_at, kc.published_at, kc.patient_visible_body,
                     count(cc.claim_id) AS claim_count,
                     group_concat(cc.claim_id) AS claim_ids,
@@ -1588,6 +1621,20 @@ class ReviewStore:
             """,
             (entity_type, entity_id, action, actor, json.dumps(detail, ensure_ascii=False), _now()),
         )
+
+
+def _component_token(row) -> str:
+    """The component identity a result row pools under (ADR 0007), or "".
+
+    Derived from the stored intervention name rather than kept in a column: the
+    grouping is decided in Python, so a stored copy would only add a second
+    place for the two to disagree, and would be wrong for any row a fixture
+    inserted without running the migration. Empty means the result pools with
+    nothing, which is what keeps an unattributable intervention in the evidence
+    body but out of every component body.
+    """
+
+    return pool_token(str(row.get("ingredient_name") or ""))
 
 
 def _card_passes_publish_gate(connection, card) -> bool:

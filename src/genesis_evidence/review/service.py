@@ -55,6 +55,10 @@ class EvidenceProfileInput(BaseModel):
 
     certainty: Literal["high", "moderate", "low", "very_low"]
     scope_key: str | None = Field(default=None, min_length=1, max_length=160)
+    # ADR 0007: the component identity a synthesised body pools over. Empty
+    # means the body pools no component, which is only reachable for a
+    # hand-authored card; an automatic body always carries one.
+    component_token: str = Field(default="", max_length=160)
     certainty_rationale: str = Field(min_length=1, max_length=5000)
     estimate_target: str = Field(min_length=1, max_length=1000)
     interpretations: dict[
@@ -654,6 +658,11 @@ class EvidenceReviewService:
                 continue
             for group in groups:
                 scope_key = str(group["scope_key"])
+                # ADR 0007: identity for "is this the same body" is
+                # (scope, component). Without the component half, the calcium and
+                # vitamin-D groups of one scope would resolve to the same prior
+                # card and then collide on UNIQUE(condition_code, version).
+                component_token = str(group.get("component_token") or "")
                 profile, patient_body, grade_domains = _automatic_profile(candidate, group)
                 claim_ids = [str(claim["id"]) for claim in group["claims"]]
                 card = next(
@@ -662,6 +671,7 @@ class EvidenceReviewService:
                         for existing_card in existing.values()
                         if str(existing_card["topic_id"]) == str(candidate["id"])
                         and str(existing_card["scope_key"]) == scope_key
+                        and str(existing_card.get("component_token") or "") == component_token
                         and set(existing_card["claim_ids"]) == set(claim_ids)
                         and str(existing_card["grade"]) == profile.certainty
                         and existing_card["status"] not in {"rejected", "stale"}
@@ -680,6 +690,12 @@ class EvidenceReviewService:
                         },
                     )
                 key = (str(candidate["condition_code"]), version)
+                # Record the version this loop just decided on. Sibling groups
+                # under one condition each allocate a version, and the next group
+                # must see the previous one's choice: the snapshot above is taken
+                # once, before the loop, so without this two groups can be handed
+                # the same version and collide on UNIQUE(condition_code, version).
+                existing[key] = {"id": "", "status": "draft", "version": version}
                 card_id = str(card["id"]) if card else ""
                 card_status = str(card["status"]) if card else "draft"
                 try:
@@ -1246,6 +1262,7 @@ def _automatic_profile(
     )
     profile = EvidenceProfileInput(
         scope_key=str(group["scope_key"]),
+        component_token=str(group.get("component_token") or ""),
         certainty=certainty,
         certainty_rationale=rationale,
         estimate_target=target,
