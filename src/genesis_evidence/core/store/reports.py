@@ -496,6 +496,10 @@ class ReportStore:
             ) -> None:
                 # ponytail: generic reference-range deviations stay level 1/routine until
                 # reviewed metric-specific thresholds are published with the knowledge card.
+                # Keyed by condition AND card: one condition can carry several
+                # component cards, and keying by condition alone would keep the
+                # first and append the same observation again for every other,
+                # so the report's evidence would be both lost and duplicated.
                 finding = findings_by_condition.setdefault(
                     (condition.code, str(card["id"])),
                     {
@@ -507,14 +511,6 @@ class ReportStore:
                         "needs_recheck": True,
                         "epidemiology": "",
                     },
-                )
-                # Keyed by condition AND card: one condition can carry several
-                # component cards, and keying by condition alone would keep the
-                # first and append the same observation again for every other,
-                # so the report's evidence would be both lost and duplicated.
-                finding = findings_by_condition.setdefault(
-                    (condition.code, str(card["id"])),
-                    {**finding, "observation_ids": []},
                 )
                 finding["observation_ids"].append(entry.input.observation_id)
 
