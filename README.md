@@ -326,7 +326,7 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 **加表** → 同时回答第 4 节的表预算问题，并更新 `scripts/check_schema.py` 的 `MAX_TABLES`
 与 `tests/test_schema.py` 的期望集合。
 
-**改领域术语** → 只动 `CONTEXT.md`（术语表，不含实现决策），决策写进 `docs/adr/`。
+**改领域术语** → 只动 `GLOSSARY.md`（术语表，不含实现决策），决策写进 `docs/adr/`。
 `tests/test_governance_artifacts.py` 会校验术语与 ADR 结构。
 
 **改自动化审核行为** → `review/service.py`，并提升 `AUTONOMOUS_REVIEW_POLICY_VERSION`，

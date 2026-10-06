@@ -94,7 +94,7 @@ def test_qa_plan_cases_have_complete_metadata() -> None:
 
 
 def test_context_glossary_covers_the_evidence_terms() -> None:
-    context = _read("CONTEXT.md")
+    context = _read("GLOSSARY.md")
 
     for term in (
         "体检报告解读与健康风险提示",
@@ -112,14 +112,14 @@ def test_context_glossary_covers_the_evidence_terms() -> None:
 
 
 def test_context_pins_the_component_axis_vocabulary() -> None:
-    context = _read("CONTEXT.md")
+    context = _read("GLOSSARY.md")
 
     for term in COMPONENT_AXIS_TERMS:
         assert term in context, f"component-axis term not pinned: {term}"
 
 
 def test_context_is_glossary_only_and_adrs_are_separate() -> None:
-    context = _read("CONTEXT.md")
+    context = _read("GLOSSARY.md")
 
     assert "## Decision" not in context
     assert "## 数据与迁移" not in context
