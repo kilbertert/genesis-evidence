@@ -444,17 +444,27 @@ class ReportStore:
                 """,
                 (report_id,),
             ).fetchall()
-            cards: dict[str, dict[str, object]] = {}
+            # Keyed by (condition, scope), like the shipped path, so a lookup
+            # resolves to the card for the observation's own metric. Keying by
+            # condition alone made `setdefault` keep whichever card sorted first,
+            # which served an arbitrary card for a condition that has several —
+            # measured on the 2026-10-06 database, nine conditions do.
+            cards: dict[tuple[str, str], dict[str, object]] = {}
             for row in connection.execute(
                 f"""
-                SELECT id, condition_code, version, grade, published_at
-                FROM knowledge_cards
-                WHERE {patient_visible_sql("knowledge_cards")}
-                ORDER BY published_at DESC, version DESC
+                SELECT kc.id, kc.condition_code, kc.version, kc.grade, kc.published_at,
+                    ep.scope_key
+                FROM knowledge_cards kc
+                JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
+                WHERE {patient_visible_sql("kc")}
+                ORDER BY kc.published_at DESC, kc.version DESC
                 """
             ).fetchall():
+                scope_key = str(row["scope_key"] or "").strip()
+                if not scope_key:
+                    continue
                 cards.setdefault(
-                    row["condition_code"],
+                    (str(row["condition_code"]), scope_key),
                     {**dict(row), **card_capabilities(str(row["grade"]))},
                 )
 
@@ -462,7 +472,9 @@ class ReportStore:
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC.get(
                     metric_code, ()
                 ),
-                lookup=lambda condition_code, scope_key: cards.get(condition_code),
+                lookup=lambda condition_code, scope_key: cards.get(
+                    (condition_code, scope_key)
+                ),
             )
             resolver = CardScopeResolver(strict=False)
             entries = [
