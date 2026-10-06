@@ -106,18 +106,38 @@ computed.
    ineligible for component-level synthesis, exactly as the existing design
    already retains high-risk and negative results.
 
-   **What "stays in the evidence body" means concretely**, since the follow-up
-   slices need a representation and the ADR should not leave it implied: a
-   result is stored in `results` regardless of pooling, the eligibility decision
-   already exists as an explicit outcome (`results.status`, today
-   `reviewed` / `rejected` / `not_reported`), and membership of a synthesised
-   body is a separate fact carried by `evidence_profile_results`. A result that
-   is approved but non-poolable is therefore *approved and reviewed, and a
-   member of no profile* — a state the database already contains: today **187**
-   approved results exist and only **144** are members of a profile, so 43
-   already live outside one. The slice adds the reason (non-poolable versus
-   ineligible-by-outcome) as a labelled state; it does not need a new mechanism,
-   and it must not drop such results from `results` to make the axis tidy.
+   **Where the pooling decision must land, and why it is not a new label.** The
+   slices must place this decision at **scope eligibility** — in
+   `_profile_scopes` (`review/scope.py:574`) — and *not* add a non-poolable
+   exemption to the profile-completeness gate. `create_card`
+   (`review/store/review.py:595`) requires a profile to contain **every**
+   scope-eligible approved result:
+
+   ```python
+   if {row["id"] for row in eligible} != set(claim_ids):
+       raise ValueError("evidence profile must include every reviewed eligible result")
+   ```
+
+   So "approved but non-poolable" is **not representable today** — a profile
+   that omitted such a result would be rejected outright. That completeness rule
+   is in fact the mechanism that *forces* the pooling this record objects to:
+   because every result whose outcome matches a topic is scope-eligible, the
+   profile must contain all of them, including the calcium, vitamin D3 and
+   protein trials. Making a result ineligible for a component scope is therefore
+   the one change needed, and it leaves the completeness gate — a good rule,
+   which prevents a body from silently dropping inconvenient evidence — exactly
+   as it is. Adding a second eligibility path to that gate is the alternative
+   and is worse: two places would then decide what belongs in a body.
+
+   A result remains stored in `results` regardless of pooling, and membership of
+   a synthesised body stays a separate fact in `evidence_profile_results`. The
+   reason a reviewed result is unprofiled is carried by the eligibility
+   decision, not by `results.status` (whose vocabulary is
+   `reviewed` / `rejected` / `not_reported` — a review outcome, not a pooling
+   one). Note that the 43 approved-but-unprofiled results in today's database
+   are *not* an example of the target state: they are unprofiled because no
+   profile was built for their scope at all, not because anything excluded them.
+   The slice must not point at that number as precedent.
 
 3. **Certainty is computed over one component and one form.** A GRADE
    assessment that mixes components is not a GRADE assessment of anything, so
