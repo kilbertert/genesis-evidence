@@ -1,20 +1,33 @@
 """Rebuild the published evidence bodies under the component axis (ADR 0007 D).
 
-Dry run by default; nothing is written unless ``--apply`` is given. The rebuild
-itself does **not** re-search, re-fetch or re-extract: it re-derives profiles and
-cards from the results the database already holds, because the evidence gate
-forbids adding evidence or relaxing a threshold to make a build succeed.
+Dry run by default, and the dry run is genuinely read-only: it opens a throwaway
+copy rather than the database it was pointed at. That matters because
+``Database.initialize()`` is not read-only — it runs the retirement and legacy-split
+migrations — so "just opening the database to preview" would already have
+retired published cards. Working on a copy is also what lets the preview report
+the forecast instead of a bare count.
+
+The rebuild itself does **not** re-search, re-fetch or re-extract: it re-derives
+profiles and cards from the results the database already holds, because the
+evidence gate forbids adding evidence or relaxing a threshold to make a build
+succeed.
 
     scripts/rebuild_evidence_bodies.py --db var/genesis-evidence.sqlite3
     scripts/rebuild_evidence_bodies.py --db ... --apply --backup /var/backups/...
 
 What the run has to tell the operator, and therefore prints:
 
-- which published cards the rebuild would retire, and why each left the pool;
-- which scopes had a published card before and have none after — these are not
-  failures. A card that pooled ten different interventions is *supposed* to lose
-  its body; the point is that the operator sees the list rather than discovering
-  it from patient reports.
+- which published cards the rebuild retires;
+- the scopes a patient can still be served from, the scopes that went dark, and
+  the scopes now carrying several components. The last two are not failures: a
+  card that pooled ten different interventions is *supposed* to lose its body,
+  and a scope with several components has no single answer to give. The point is
+  that the operator reads the list rather than discovering it from patient
+  reports;
+- per paper, whether the rebuild completed, produced some cards, or produced
+  none — with the reason. "Produced none" is usually a topic with no matching
+  PICOTS scope or an unclosed screening ledger, which is a state rather than a
+  defect. Only a raised exception is a failure and sets a non-zero exit.
 
 The write path refuses to run without a backup, because the only way to undo this
 is to restore one. Stop the service before taking that backup: a SQLite database
@@ -26,8 +39,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -99,28 +114,68 @@ def main() -> int:
         return 2
 
     objects_root = args.objects or args.db.parent / "objects"
-    database = Database(args.db)
-    # Runs the additive migration, including the component_token columns.
+
+    # A dry run must not touch the database it was pointed at. `initialize()` is
+    # not read-only — it runs `retire_ungoverned_profile_cards` and
+    # `_migrate_legacy_shared_results`, so merely opening a database can already
+    # retire published cards. A preview that writes is worse than no preview, so
+    # the preview runs the whole rebuild against a throwaway copy instead, which
+    # is also what lets it report the retirement forecast rather than a count.
+    with TemporaryDirectory() as scratch:
+        target = args.db
+        if not args.apply:
+            target = Path(scratch) / args.db.name
+            # The sidecars carry committed transactions when the database is in
+            # WAL mode; copying the main file alone would preview a stale state.
+            for suffix in ("", "-wal", "-shm"):
+                source = Path(f"{args.db}{suffix}")
+                if source.is_file():
+                    shutil.copy(source, f"{target}{suffix}")
+        report, failures = _run(target, objects_root, args.reviewer, write=args.apply)
+
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.json_out:
+        args.json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+
+    if not args.apply:
+        print(
+            "\nDRY RUN on a copy — nothing was written to "
+            f"{args.db}. Rerun with --apply --backup <path> to write.",
+            file=sys.stderr,
+        )
+    return 1 if failures else 0
+
+def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
+    database = Database(db_path)
+    # The additive migration, including the component_token columns.
     database.initialize()
-    store = ReviewStore(database)
-    service = EvidenceReviewService(store, PaperStore(database), ObjectStore(objects_root))
+    service = EvidenceReviewService(
+        ReviewStore(database), PaperStore(database), ObjectStore(objects_root)
+    )
 
     with database.connect() as connection:
         before = _published_by_scope(connection)
         before_status = _statuses(connection)
         papers = _admitted_papers(connection)
 
-    if not args.apply:
-        print(f"DRY RUN — {len(papers)} admitted papers, {len(before)} published scopes")
-        print("rerun with --apply --backup <path> to write")
-        return 0
-
+    # A raised exception is a failure. A paper that ends without a published card
+    # is not: its topic may legitimately have no matching PICOTS scope, or its
+    # screening ledger may still be open, and calling those failures would send an
+    # operator hunting for a defect that is a state. They are reported, not failed.
     failures: list[tuple[str, str]] = []
+    unbuilt: list[tuple[str, str]] = []
+    partial: list[tuple[str, str]] = []
     for paper_id in papers:
         try:
-            service.auto_review_paper(paper_id, requested_by=args.reviewer)
+            outcome = service.auto_review_paper(paper_id, requested_by=reviewer)
         except Exception as exc:  # noqa: BLE001 — one paper must not stop the run
             failures.append((paper_id, str(exc)))
+            continue
+        kind, why = _outcome_kind(outcome)
+        if kind == "none":
+            unbuilt.append((paper_id, why))
+        elif kind == "partial":
+            partial.append((paper_id, why))
 
     with database.connect() as connection:
         after = _published_by_scope(connection)
@@ -131,9 +186,6 @@ def main() -> int:
         for card_id, status in before_status.items()
         if status == "published" and after_status.get(card_id) == "stale"
     ]
-    published = sorted(
-        card_id for card_id, status in after_status.items() if status == "published"
-    )
     # A scope reaches a patient iff it carries exactly one published card, which
     # is what the readers require. So a scope can lose service in two ways: it
     # ends with no card, or it ends with several and the reader refuses to pick.
@@ -143,39 +195,48 @@ def main() -> int:
     dark = sorted(key for key in before if key not in after)
 
     report = {
+        "applied": write,
         "papers_reviewed": len(papers),
         "failures": failures,
+        "rebuilt_completely": len(papers) - len(failures) - len(unbuilt) - len(partial),
+        "rebuilt_partially": partial,
+        "did_not_rebuild": unbuilt,
         "published_before": sum(len(v) for v in before.values()),
-        "published_after": len(published),
+        "published_after": len(
+            [card_id for card_id, status in after_status.items() if status == "published"]
+        ),
         "retired_cards": retired,
         "scopes_serving_one_card": [list(key) for key in servable],
         "scopes_serving_before_no_card_after": [list(key) for key in dark],
         "scopes_with_several_components": [list(key) for key in ambiguous],
     }
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return report, failures
 
-    if dark:
-        print(
-            f"\n{len(dark)} scope(s) had a published card and now have none. "
-            "This is expected where the old card pooled several interventions under "
-            "one conclusion; the list above is what a human reviews.",
-            file=sys.stderr,
-        )
-    if ambiguous:
-        print(
-            f"\n{len(ambiguous)} scope(s) now carry cards for several components and "
-            "therefore serve nothing: how a patient should be shown more than one "
-            "answer is undecided. These are not failures — the scopes that used to "
-            "pool several interventions under one conclusion now have one body per "
-            "intervention, and the presentation question is a product decision.",
-            file=sys.stderr,
-        )
-    if failures:
-        print(f"\n{len(failures)} paper(s) failed; rerun after diagnosing", file=sys.stderr)
 
-    if args.json_out:
-        args.json_out.write_text(json.dumps(report, ensure_ascii=False, indent=2))
-    return 1 if failures else 0
+def _outcome_kind(outcome: object) -> tuple[str, str]:
+    """Classify one paper's rebuild as complete, partial, or none.
+
+    "Not every card published" is not the same as "the rebuild failed". A paper
+    covering several topics legitimately has topics with no matching PICOTS
+    scope, and it ends with some cards published and others not. Calling that a
+    failure would be as wrong as calling it a success — which is the mistake this
+    replaced. Only a paper that ends with **no** published card did not rebuild.
+    """
+
+    if not isinstance(outcome, dict):
+        return "none", "automatic review returned no result"
+    if outcome.get("status") == "attention_required":
+        return "none", f"attention_required: {outcome.get('reason', '')}"
+    cards = outcome.get("cards")
+    if not isinstance(cards, list) or not cards:
+        return "none", "automatic review produced no card at all"
+    statuses = [str(card.get("status")) for card in cards if isinstance(card, dict)]
+    published = sum(1 for status in statuses if status == "published")
+    if published == len(statuses):
+        return "complete", ""
+    if published:
+        return "partial", f"{published}/{len(statuses)} cards published: {sorted(set(statuses))}"
+    return "none", f"no card published: {sorted(set(statuses))}"
 
 
 if __name__ == "__main__":
