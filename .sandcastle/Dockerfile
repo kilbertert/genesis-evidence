@@ -26,6 +26,16 @@ RUN groupmod -o -g ${AGENT_GID} node \
   && usermod -o -u ${AGENT_UID} -g ${AGENT_GID} -d /home/agent -m -l agent node \
   && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex
 
+# Verification skill support: `verify-genesis-evidence` drives the review
+# workbench through headless Chrome (screenshots for layout, --dump-dom for
+# state). Without a browser baked in, that step can only report "cannot run",
+# which the implement prompt surfaces as a blocked step rather than a passed one.
+# No PLAYWRIGHT_BROWSERS_PATH is needed: this drives the system chrome directly,
+# the same way scripts/check_review_workbench_layout.py does.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN npm install --global @anthropic-ai/claude-code \
   && npm install --global @openai/codex@0.146.1 \
   && mv /usr/local/bin/claude /usr/local/bin/claude-real \

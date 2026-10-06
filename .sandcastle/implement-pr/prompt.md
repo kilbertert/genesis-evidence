@@ -47,6 +47,14 @@ Not everything in here is necessarily actionable — reviewers may leave context
 2. For a code change, run the Economy ladder and stop at the first option that
    fully addresses the confirmed feedback.
 3. Make the code changes you decided on. Run `uv sync --extra dev && uv run pytest && uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
+
+This repo HAS a project verification skill, `.claude/skills/verify-genesis-evidence`.
+If your change alters behavior a reviewer or a patient-facing consumer can
+observe, run that skill and capture its evidence before committing. Tests are not
+a substitute: it drives the real service against a throwaway database. **Never
+point it at `var/genesis-evidence.sqlite3`.** Its evidence is usually gitignored,
+so put what you rely on somewhere the commit carries. If you cannot run it, say
+so and why in the commit body; do not report it as done.
 4. If you made no changes that's fine — only commit when there's a real diff.
 
 You do not have to reply to every thread. Reply only where a reply adds value: confirming what you changed, explaining why you chose not to make a requested change, answering a question, or pointing out something the reviewer should look at. Silence is fine for context-only comments.

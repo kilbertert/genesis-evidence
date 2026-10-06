@@ -34,6 +34,14 @@ Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff chec
 `git diff --check` to ensure everything passes. Then run
 `node .sandcastle/policy-check.mjs commit`. Do not weaken or skip checks.
 
+This repo HAS a project verification skill, `.claude/skills/verify-genesis-evidence`.
+If your change alters behavior a reviewer or a patient-facing consumer can
+observe, run that skill and capture its evidence before committing. Tests are not
+a substitute: it drives the real service against a throwaway database. **Never
+point it at `var/genesis-evidence.sqlite3`.** Its evidence is usually gitignored,
+so put what you rely on somewhere the commit carries. If you cannot run it, say
+so and why in the commit body; do not report it as done.
+
 # COMMIT
 
 Make git commits on `{{BRANCH}}` with **Conventional Commit** messages
