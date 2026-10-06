@@ -32,6 +32,15 @@ QA_SCALAR_FIELDS = (
 ADR_NAMES = (
     "0005-review-workbench-independent-reading-regions.md",
     "0006-retire-product-capability-and-move-goods-authority-to-the-mall.md",
+    "0007-component-centric-evidence.md",
+)
+
+COMPONENT_AXIS_TERMS = (
+    "成分 / component",
+    "`component_key`",
+    "成分形式 / component form",
+    "确定性判定 / determinacy",
+    "非可合并 / not poolable",
 )
 
 
@@ -100,6 +109,13 @@ def test_context_glossary_covers_the_evidence_terms() -> None:
         "已移到商城",
     ):
         assert term in context
+
+
+def test_context_pins_the_component_axis_vocabulary() -> None:
+    context = _read("CONTEXT.md")
+
+    for term in COMPONENT_AXIS_TERMS:
+        assert term in context, f"component-axis term not pinned: {term}"
 
 
 def test_context_is_glossary_only_and_adrs_are_separate() -> None:
