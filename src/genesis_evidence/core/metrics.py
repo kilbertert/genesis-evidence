@@ -144,6 +144,19 @@ REPORT_METRIC_ALIASES = {
     # 属尿常规（T5），不是血白细胞。按字面归 WBC 会把尿里的计数挂到血象上。
     "WBC": "wbc",
     "White Cell Count": "wbc",
+    # 尿常规（T5）。实测单位 x10⁶/L、镜检口径。
+    # `RBC` **不在此列**：它是 x10¹²/L 的血红细胞计数，不是尿红细胞。
+    # ponytail: 解析只看名字、不看单位，所以裸名按本报告的实测口径归属；
+    # 若日后出现把 `Erythrocytes` 用作血象的报告，需要引入单位校验再分派。
+    "Urine protein": "urine_protein",
+    "Leucocytes": "urine_leucocytes",
+    "Leucocytes (microscopy)": "urine_leucocytes",
+    "Urine leucocytes microscopy": "urine_leucocytes",
+    "Erythrocytes": "urine_erythrocytes",
+    "Erythrocytes (microscopy)": "urine_erythrocytes",
+    "Specific Gravity": "urine_specific_gravity",
+    "SG": "urine_specific_gravity",
+    "pH": "urine_ph",
 }
 
 

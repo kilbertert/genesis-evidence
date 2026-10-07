@@ -82,9 +82,10 @@ def test_urine_leucocytes_is_not_blood_wbc() -> None:
     """尿沉渣的 `Leucocytes`（x10⁶/L）不是血白细胞，不得归 `wbc`。
 
     按字面归 WBC 会把尿里的计数挂到血象上——正是本批要避免的错误归属。
+    T5 把它归到尿常规的 `urine_leucocytes`；本片只保证**不是** `wbc`。
     """
 
-    assert METRIC_ALIASES.get(normalize_metric_name("Leucocytes")) is None
+    assert METRIC_ALIASES.get(normalize_metric_name("Leucocytes")) != "wbc"
 
 
 def test_every_differential_metric_reaches_the_infection_condition() -> None:
