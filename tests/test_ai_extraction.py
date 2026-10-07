@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.literature.ai_extraction import (
     ArkPaperAnalyzer,
     ConsistencyReport,
@@ -142,7 +143,7 @@ def test_ark_analyzer_runs_extraction_then_consistency_check() -> None:
         assert body["thinking"] == {"type": "disabled"}
         if calls == 1:
             source = json.loads(body["messages"][1]["content"])
-            assert len(source["condition_catalog"]) == 12
+            assert len(source["condition_catalog"]) == len(CONDITIONS)
         assert body["stream"] is True
         content = _extraction() if calls < 3 else {"verdict": "consistent", "issues": []}
         encoded = json.dumps(content)

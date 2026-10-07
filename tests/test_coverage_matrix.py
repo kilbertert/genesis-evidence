@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
 from genesis_evidence.review.api import create_app
 from genesis_evidence.review.service import EvidenceReviewService
@@ -19,21 +20,28 @@ def test_coverage_matrix_expands_first_batch_metrics(tmp_path) -> None:
 
     matrix = ReviewStore(database).list_coverage_matrix()
 
-    assert len(matrix) == 33
-    assert {row["condition_code"] for row in matrix} == {
-        "COND_HYPERTENSION_RISK",
-        "COND_PREDIABETES",
-        "COND_DYSLIPIDEMIA",
-        "COND_MASLD_RISK",
-        "COND_HYPERURICEMIA_RISK",
-        "COND_CKD_RISK",
-        "COND_ANEMIA_PATTERN",
-        "COND_VITAMIN_D_DEFICIENCY",
-        "COND_OSTEOPOROSIS_RISK",
-        "COND_SARCOPENIA_FRAILTY",
-        "COND_MALNUTRITION_RISK",
-        "COND_CHRONIC_CONSTIPATION",
+    # The matrix is a projection of the catalog: one scope per (condition,
+    # metric), plus a `condition:` scope for a condition that claims no metric.
+    # Asserting the projection stays total as the catalog grows is the point;
+    # a row count would only re-pin the catalog's current size.
+    #
+    # Grouped by condition, not compared as one global scope set: metrics are
+    # shared across conditions (`triglycerides` is in both dyslipidemia and
+    # MASLD), so a global set still matches when a row is missing for one
+    # condition but present for another.
+    expected = {
+        item.code: (
+            {f"metric:{metric}" for metric in item.metrics}
+            if item.metrics
+            else {f"condition:{item.code}"}
+        )
+        for item in CONDITIONS
     }
+    actual: dict[str, set[str]] = {}
+    for row in matrix:
+        actual.setdefault(row["condition_code"], set()).add(row["scope_key"])
+
+    assert actual == expected
     ldl = next(row for row in matrix if row["metric_code"] == "ldl_c")
     assert ldl["coverage_status"] == "planned"
     assert ldl["next_action"] == "建立并锁定版本化主题/PICOTS"
