@@ -101,6 +101,34 @@ REPORT_METRIC_ALIASES = {
     "K": "potassium",
     "Cl": "chloride",
     "Ca": "calcium",
+    # 血细胞分类（T4）。实测：报告上的裸名 `Neutrophils` **是绝对值**
+    # （单位 x10⁹/L，参考区间 2.0-7.0），百分比另有其名。所以裸名归 `_absolute`，
+    # 百分比归 `_percent`，不能按字面「裸名=百分比」猜。
+    "Neutrophils": "neutrophils_absolute",
+    "Neutrophils percentage": "neutrophils_percent",
+    "NEUT%": "neutrophils_percent",
+    "Neutrophils absolute count": "neutrophils_absolute",
+    "Lymphocytes": "lymphocytes_absolute",
+    "Lymphocytes percentage": "lymphocytes_percent",
+    "LYMPH%": "lymphocytes_percent",
+    "Lymphocytes absolute count": "lymphocytes_absolute",
+    "Monocytes": "monocytes_absolute",
+    "Monocytes percentage": "monocytes_percent",
+    "MONO%": "monocytes_percent",
+    "Monocytes absolute count": "monocytes_absolute",
+    "Eosinophils": "eosinophils_absolute",
+    "Eosinophils percentage": "eosinophils_percent",
+    "EO%": "eosinophils_percent",
+    "Eosinophils absolute count": "eosinophils_absolute",
+    "Basophils": "basophils_absolute",
+    "Basophils percentage": "basophils_percent",
+    "BASO%": "basophils_percent",
+    "Basophils absolute count": "basophils_absolute",
+    # 白细胞总数：报告上多种写法。
+    # **不含 `Leucocytes`**：实测那一条是尿沉渣镜检（单位 x10⁶/L，`<10`），
+    # 属尿常规（T5），不是血白细胞。按字面归 WBC 会把尿里的计数挂到血象上。
+    "WBC": "wbc",
+    "White Cell Count": "wbc",
 }
 
 

@@ -74,16 +74,20 @@ def test_adapter_resolves_an_electrolyte_row() -> None:
 
 
 def test_adapter_still_rejects_a_name_outside_this_domain() -> None:
-    """本片只碰电解质：别的域的项目名必须仍然显式落 unknown_metric，不得被误认。"""
+    """域外项目名必须显式落 unknown_metric，不得被误认。
+
+    用 `Rheumatoid Factor`：它至今仍无归宿（T8 才处理）。先前这里用的是
+    `Neutrophils`，T4 落地后它已被正确认领——那是 T4 的职责，不是本片回归。
+    """
 
     result = build_evidence_request(
         [
             {
-                "metric_name": "Neutrophils",
+                "metric_name": "Rheumatoid Factor",
                 "metric_value": "80",
-                "unit": "%",
-                "reference_range": "40-75",
-                "evidence_text": "Neutrophils 80 % 参考范围 40-75 H",
+                "unit": "IU/mL",
+                "reference_range": "0-14",
+                "evidence_text": "Rheumatoid Factor 80 IU/mL 参考范围 0-14 H",
                 "page_number": 1,
             }
         ],
