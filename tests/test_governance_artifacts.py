@@ -35,6 +35,16 @@ ADR_NAMES = (
     "0007-component-centric-evidence.md",
 )
 
+CATALOG_AXIS_TERMS = (
+    "`condition` / 健康问题",
+    "健康方向",
+    "触达方式",
+    "可触达",
+    "`metric_code`",
+    "报告项目名",
+    "别名表",
+)
+
 COMPONENT_AXIS_TERMS = (
     "成分 / component",
     "`component_key`",
@@ -116,6 +126,36 @@ def test_context_pins_the_component_axis_vocabulary() -> None:
 
     for term in COMPONENT_AXIS_TERMS:
         assert term in context, f"component-axis term not pinned: {term}"
+
+
+def test_context_pins_the_catalog_axis_vocabulary() -> None:
+    """The two terms this expansion turns on, so they cannot be conflated later."""
+
+    context = _read("GLOSSARY.md")
+
+    for term in CATALOG_AXIS_TERMS:
+        assert term in context, f"catalog-axis term not pinned: {term}"
+
+
+def test_condition_is_not_defined_by_report_abnormality_alone() -> None:
+    """`COND_CHRONIC_CONSTIPATION` has no metric and is a valid catalog entry.
+
+    A definition of `condition` that requires a report abnormality would make a
+    real catalog entry an impossible state. Pin the caveat, not just the term.
+    This says nothing about whether it currently *reaches* a patient: no
+    questionnaire reach path exists in code, and the reach-mode row states that
+    rather than implying it.
+    """
+
+    glossary = _read("GLOSSARY.md")
+    row = next(
+        line for line in glossary.splitlines() if line.startswith("| `condition` / 健康问题 |")
+    )
+
+    assert "可以没有对应的报告项目" in row, row
+    assert "报告异常不是它成立的前提" in row, row
+    # And the reach claim is not overstated in the reach-mode row either.
+    assert "只有「指标」一条已实现" in glossary
 
 
 def test_context_is_glossary_only_and_adrs_are_separate() -> None:
