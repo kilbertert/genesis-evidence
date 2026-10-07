@@ -88,15 +88,22 @@ def test_population_restricted_conditions_stay_in_the_catalog() -> None:
 
 
 def test_the_boundary_carries_no_patient_demographics() -> None:
-    """ADR 0008 的前提：证据请求里没有性别/年龄字段。
+    """ADR 0008 的前提：证据边界里没有性别/年龄字段。
 
-    若将来加了，这条会红——那时应当连同 ADR 一起重新判定，而不是顺手让它绿。
+    检查**两层**：观测层与请求层。只查观测层会漏掉「加在请求上」的契约变更
+    ——那正是这条断言要拦的东西。若将来任一层加了，这条会红，那时应当连同
+    ADR 一起重新判定，而不是顺手让它绿。
     """
 
-    from genesis_evidence.core.contracts import EvidenceMatchObservation
+    from genesis_evidence.core.contracts import EvidenceMatchObservation, EvidenceMatchRequest
 
-    fields = set(EvidenceMatchObservation.model_fields)
+    forbidden = {"patient_sex", "patient_age", "sex", "age", "birth_date", "gender"}
+    observation_fields = set(EvidenceMatchObservation.model_fields)
+    request_fields = set(EvidenceMatchRequest.model_fields)
 
-    assert not (fields & {"patient_sex", "patient_age", "sex", "age", "birth_date"}), (
-        "the evidence boundary gained patient demographics; revisit ADR 0008"
+    assert not (observation_fields & forbidden), (
+        "the observation contract gained patient demographics; revisit ADR 0008"
+    )
+    assert not (request_fields & forbidden), (
+        "the request contract gained patient demographics; revisit ADR 0008"
     )

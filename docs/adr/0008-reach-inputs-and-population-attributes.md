@@ -107,11 +107,18 @@ unlocks are exactly the ones whose evidence base is youngest, so they would
 serve `planned` scopes at best.
 
 Fail-closed is the right default here because the failure modes are asymmetric.
-A served finding is read as a statement about the reader's body. A *missing*
-finding is indistinguishable from "nothing to say", which the service already
-says honestly (`patient_reply_v3` reports why nothing was shown). Sending a man
+A served finding is read as a statement about the reader's body. Sending a man
 to the gynecology department, or telling a woman she has a male-only condition,
 is a different class of error from saying nothing.
+
+The asymmetry does not depend on the patient being *told* why nothing appeared.
+A metric-less condition never enters the matcher, so it can appear in neither
+`findings` nor `unmatched`; `patient_reply_v3`'s explanations are about
+observations it could not use, and it has nothing to say about a condition it was
+never asked about. Silence here is real silence, not an explained omission — an
+honest limit of the current design, recorded rather than papered over. Making that
+silence legible is a separate question (T9 显式化 covers the "not in scope"
+notice for observations; the population case has no observation to notice).
 
 ## Alternatives Considered
 
