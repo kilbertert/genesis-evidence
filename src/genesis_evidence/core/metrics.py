@@ -78,6 +78,8 @@ METRIC_LABELS = {
     "total_protein": "总蛋白",
     "globulin": "球蛋白",
     "albumin_globulin_ratio": "白球比",
+    # 专项标志物（T8）。`psa`/`uncorrected_vision`/`intraocular_pressure` 已在 T2。
+    "rheumatoid_factor": "类风湿因子",
 }
 
 
@@ -184,6 +186,17 @@ REPORT_METRIC_ALIASES = {
     # 只让报告的英文全称能解析到既有的 `alp`。
     "Alkaline Phosphatase": "alp",
     # `AST/ALT` 是**比值**，不是任一单项，暂不登记（见 PR 说明）。
+    # 专项标志物（T8）。报告把眼别写在名字里；左右眼都归同一个 canonical 指标，
+    # 因为病种与复查方向相同，分眼只会让 scope 翻倍而没有分别。
+    "Rheumatoid Factor": "rheumatoid_factor",
+    "Uncorrected Vision, Right Eye": "uncorrected_vision",
+    "Uncorrected Vision, Left Eye": "uncorrected_vision",
+    "Uncorrected Vision - Right Eye": "uncorrected_vision",
+    "Uncorrected Vision - Left Eye": "uncorrected_vision",
+    "Intraocular Pressure, Right Eye": "intraocular_pressure",
+    "Intraocular Pressure, Left Eye": "intraocular_pressure",
+    "Intraocular Pressure - Right Eye": "intraocular_pressure",
+    "Intraocular Pressure - Left Eye": "intraocular_pressure",
 }
 
 
