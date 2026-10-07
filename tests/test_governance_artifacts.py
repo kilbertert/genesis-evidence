@@ -137,6 +137,23 @@ def test_context_pins_the_catalog_axis_vocabulary() -> None:
         assert term in context, f"catalog-axis term not pinned: {term}"
 
 
+def test_condition_is_not_defined_by_report_abnormality_alone() -> None:
+    """`COND_CHRONIC_CONSTIPATION` has no metric and is reachable by questionnaire.
+
+    A definition of `condition` that requires a report abnormality contradicts the
+    reach-mode row ten lines below it, and would make a real catalog entry an
+    impossible state. Pin the caveat, not just the term.
+    """
+
+    row = next(
+        line
+        for line in _read("GLOSSARY.md").splitlines()
+        if line.startswith("| `condition` / 健康问题 |")
+    )
+
+    assert "报告异常只是其中一种" in row, row
+
+
 def test_context_is_glossary_only_and_adrs_are_separate() -> None:
     context = _read("GLOSSARY.md")
 
