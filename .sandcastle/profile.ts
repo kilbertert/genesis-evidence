@@ -12,7 +12,6 @@ import { sandboxNetworkOptions } from "./profile-network.js";
 // A mount leaves the key on the host, where rotating it is an edit.
 const profiles = {
   claude: undefined,
-  "claude-stepfun": process.env.AFK_STEPFUN_SETTINGS ?? join(homedir(), "cliproxyapi/settings.stepfun.json"),
   // Local relay (`cli-proxy-api` on 127.0.0.1:8317), reached with a host-network
   // sandbox. The settings file points ANTHROPIC_BASE_URL at the relay's loopback
   // address, so the container **must** share the host network namespace —
