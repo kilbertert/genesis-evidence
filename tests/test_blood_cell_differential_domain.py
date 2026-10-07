@@ -22,6 +22,7 @@ REPORT_NAMES = {
     "Neutrophils": "neutrophils_absolute",
     "Neutrophils percentage": "neutrophils_percent",
     "NEUT%": "neutrophils_percent",
+    "NEUT#": "neutrophils_absolute",
     "Neutrophils absolute count": "neutrophils_absolute",
     "Lymphocytes": "lymphocytes_absolute",
     "Lymphocytes percentage": "lymphocytes_percent",
@@ -40,6 +41,31 @@ REPORT_NAMES = {
 @pytest.mark.parametrize(("report_name", "expected"), sorted(REPORT_NAMES.items()))
 def test_differential_report_names_resolve(report_name: str, expected: str) -> None:
     assert METRIC_ALIASES.get(normalize_metric_name(report_name)) == expected
+
+
+def test_hash_and_percent_notations_do_not_collide() -> None:
+    """`NEUT#`（绝对值）与 `NEUT%`（百分比）是两个指标，不得折成同一个键。
+
+    名称归一化原会去掉所有标点，`NEUT#` 与 `NEUT%` 因此都变成 `neut`，绝对值
+    形式被静默解析成百分比——一个值挂到另一个指标上。
+    """
+
+    assert METRIC_ALIASES[normalize_metric_name("NEUT#")] == "neutrophils_absolute"
+    assert METRIC_ALIASES[normalize_metric_name("NEUT%")] == "neutrophils_percent"
+    for prefix, base in (
+        ("LYMPH", "lymphocytes"),
+        ("MONO", "monocytes"),
+        ("EO", "eosinophils"),
+        ("BASO", "basophils"),
+    ):
+        assert METRIC_ALIASES[normalize_metric_name(f"{prefix}#")] == f"{base}_absolute"
+        assert METRIC_ALIASES[normalize_metric_name(f"{prefix}%")] == f"{base}_percent"
+
+
+def test_normalizer_keeps_hash_and_percent_but_still_folds_case_and_spacing() -> None:
+    assert normalize_metric_name("NEUT #") == "neut#"
+    assert normalize_metric_name("neut%") == "neut%"
+    assert normalize_metric_name("Fasting Glucose") == "fastingglucose"
 
 
 def test_bare_name_is_absolute_not_percent() -> None:

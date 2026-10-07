@@ -75,8 +75,18 @@ METRIC_LABELS = {
 
 
 def normalize_metric_name(value: str) -> str:
+    """Fold a report item name for alias lookup.
+
+    ``%`` and ``#`` are **kept**, not stripped. In a CBC report they are the only
+    thing distinguishing a percentage (``NEUT%``) from an absolute count
+    (``NEUT#``): the same base name, two different metrics and units. Stripping
+    them collapses the pair to one key, so one form silently resolves as the
+    other. No canonical code, label, or existing alias contains either character,
+    so keeping them leaves every current key byte-identical.
+    """
+
     normalized = unicodedata.normalize("NFKC", value).casefold()
-    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", normalized)
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff%#]+", "", normalized)
 
 
 def evidence_contains_value(evidence: str, value: float) -> bool:
@@ -107,22 +117,27 @@ REPORT_METRIC_ALIASES = {
     "Neutrophils": "neutrophils_absolute",
     "Neutrophils percentage": "neutrophils_percent",
     "NEUT%": "neutrophils_percent",
+    "NEUT#": "neutrophils_absolute",
     "Neutrophils absolute count": "neutrophils_absolute",
     "Lymphocytes": "lymphocytes_absolute",
     "Lymphocytes percentage": "lymphocytes_percent",
     "LYMPH%": "lymphocytes_percent",
+    "LYMPH#": "lymphocytes_absolute",
     "Lymphocytes absolute count": "lymphocytes_absolute",
     "Monocytes": "monocytes_absolute",
     "Monocytes percentage": "monocytes_percent",
     "MONO%": "monocytes_percent",
+    "MONO#": "monocytes_absolute",
     "Monocytes absolute count": "monocytes_absolute",
     "Eosinophils": "eosinophils_absolute",
     "Eosinophils percentage": "eosinophils_percent",
     "EO%": "eosinophils_percent",
+    "EO#": "eosinophils_absolute",
     "Eosinophils absolute count": "eosinophils_absolute",
     "Basophils": "basophils_absolute",
     "Basophils percentage": "basophils_percent",
     "BASO%": "basophils_percent",
+    "BASO#": "basophils_absolute",
     "Basophils absolute count": "basophils_absolute",
     # 白细胞总数：报告上多种写法。
     # **不含 `Leucocytes`**：实测那一条是尿沉渣镜检（单位 x10⁶/L，`<10`），
