@@ -98,3 +98,42 @@ def test_short_derived_codes_do_not_match_inside_unrelated_words() -> None:
     # Chinese labels are never substring-risky, so a derived metric still matches.
     assert RESOLVER.metric_outcome_matches_text("sodium", "血钠")
     assert RESOLVER.metric_outcome_matches_text("sodium", "Sodium")
+
+
+def test_a_shorter_metric_does_not_claim_a_longer_metrics_text() -> None:
+    """Longest alias wins: `ck` must not claim `CK-MB`, nor `urine_ph` → phosphate.
+
+    Floor aliases nest — `ck` inside `ck_mb`, `urineph` inside `urinephosphate`.
+    Plain substring matching lets the short metric claim the long one's text, so a
+    card published under that wrong scope is delivered for an unrelated abnormal
+    metric. Each pair is asserted in both directions.
+    """
+
+    matches = RESOLVER.metric_outcome_matches_text
+
+    assert not matches("ck", "CK-MB")
+    assert matches("ck_mb", "CK-MB")
+
+    assert not matches("urine_ph", "Urine phosphate")
+    assert matches("phosphate", "Urine phosphate")
+
+    # The longer metric's own text still resolves to the longer metric.
+    assert matches("urine_protein", "Urine protein")
+
+
+def test_registry_metrics_keep_their_historical_matching() -> None:
+    """The 30 hand-registered metrics must match exactly as before this change.
+
+    Their matching path is untouched; this pins that the derived floor did not
+    leak into it.
+    """
+
+    matches = RESOLVER.metric_outcome_matches_text
+    from genesis_evidence.review.scope import _PROFILE_OUTCOME_ALIASES
+
+    assert len(_PROFILE_OUTCOME_ALIASES) == 30
+    # SBP/DBP are handled by their dedicated branches, `fastingglucose` by alias.
+    assert matches("systolic_blood_pressure", "Systolic blood pressure")
+    assert matches("fasting_glucose", "Fasting glucose")
+    # `urate` is a registry synonym only for uric_acid.
+    assert matches("uric_acid", "urate")

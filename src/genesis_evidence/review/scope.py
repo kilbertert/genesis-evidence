@@ -525,6 +525,60 @@ def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
     return tuple(sorted(aliases))
 
 
+def _derived_match_span(metric_code: str, value: str) -> tuple[int, int] | None:
+    """The longest span covered by one of a metric's floor aliases, or ``None``.
+
+    Short ASCII floor aliases (``psa``, ``ck``) must land on a **token boundary**
+    so ``psa`` cannot match "ca**psa**icin"; longer ones and Chinese labels match
+    as plain substrings, so ``\u94a0`` still matches \u8840\u94a0.
+    """
+
+    compact = _compact_text(value)
+    tokens = _token_set(value)
+    best: tuple[int, int] | None = None
+    for alias in _derived_outcome_aliases(metric_code):
+        if alias.isascii() and len(alias) <= 3 and alias not in tokens:
+            continue
+        start = compact.find(alias)
+        if start < 0:
+            continue
+        end = start + len(alias)
+        if best is None or (end - start) > (best[1] - best[0]):
+            best = (start, end)
+    return best
+
+
+def _derived_alias_matches(metric_code: str, value: str) -> bool:
+    """Match a floor alias, letting the **most specific** metric own the text.
+
+    Floor aliases are substrings of each other \u2014 ``ck`` sits inside ``ck_mb``,
+    and ``urine_ph`` (``urineph``) sits inside ``urinephosphate``. Substring
+    matching alone therefore lets a short metric claim a longer one's text, and a
+    card published under that wrong scope is served to a patient whose abnormal
+    metric it does not describe. So a floor match loses whenever a **longer**
+    catalog metric's floor alias overlaps the same span: longest match wins.
+    """
+
+    span = _derived_match_span(metric_code, value)
+    if span is None:
+        return False
+    for other in METRIC_LABELS:
+        if other == metric_code or other in _PROFILE_OUTCOME_ALIASES:
+            continue
+        other_span = _derived_match_span(other, value)
+        if other_span is None:
+            continue
+        longer = (other_span[1] - other_span[0]) > (span[1] - span[0])
+        overlaps = other_span[0] < span[1] and span[0] < other_span[1]
+        if longer and overlaps:
+            return False
+    return True
+
+
+def _token_set(value: str) -> set[str]:
+    return set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
+
+
 def _metric_outcome_matches(metric_code: str, value: str) -> bool:
     compact = _compact_text(value)
     if metric_code in {"hdl_c", "ldl_c", "total_cholesterol"} and "ratio" in value.casefold():
@@ -550,22 +604,20 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         token in compact for token in ("tscore", "t评分", "t值")
     ):
         return False
-    aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code) or _derived_outcome_aliases(metric_code)
+    if metric_code not in _PROFILE_OUTCOME_ALIASES:
+        # Floor aliases go through their own matcher: token-boundary for short
+        # ASCII codes, and longest-match-wins so a shorter metric cannot claim a
+        # longer metric's text (`ck` vs `CK-MB`, `urine_ph` vs `Urine phosphate`).
+        return _derived_alias_matches(metric_code, value)
+    aliases = _PROFILE_OUTCOME_ALIASES[metric_code]
     # Short codes that can appear inside unrelated words ("ck" in "check") are matched
-    # on token boundaries only; the rest may match as substrings.
+    # on token boundaries only; the rest may match as substrings. Registry metrics
+    # keep their historical matching byte-for-byte.
     risky_abbreviations = {"alt", "ast", "alp"}
-    if metric_code in _PROFILE_OUTCOME_ALIASES:
-        # Registry metrics keep their historical matching byte-for-byte.
-        risk = risky_abbreviations
-    else:
-        # Derived floor aliases: guard the short ASCII codes so `psa` cannot match
-        # "capsaicin". Chinese labels are never at risk, so `钠` still matches 血钠.
-        short = {alias for alias in aliases if alias.isascii() and len(alias) <= 3}
-        risk = risky_abbreviations | short
-    if any(alias in compact for alias in aliases if alias not in risk):
+    if any(alias in compact for alias in aliases if alias not in risky_abbreviations):
         return True
-    tokens = set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
-    if any(alias in tokens for alias in aliases if alias in risk):
+    tokens = _token_set(value)
+    if any(alias in tokens for alias in aliases if alias in risky_abbreviations):
         return True
     if metric_code == "systolic_blood_pressure":
         return "systolic" in compact and "bloodpressure" in compact
