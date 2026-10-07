@@ -491,12 +491,11 @@ def test_empty_summary_names_the_out_of_catalog_case_separately() -> None:
 
     原措辞「不在当前已发布的指标目录内」不够：目录**收**了这个指标、只是还没有
     已发布卡时，患者读到的也是一句「不在目录内」，两件事被说成一件。现在它说
-    「不在当前**解读范围**内」并给出条数，且与 `unmatched` 分开计数。
+    「不在当前**解读范围**内」并给出条数。
     """
 
     reply = patient_reply_v3([], [], [{"observation_id": "m1", "reason": "unknown_metric_code"}])
 
-    assert reply["uncovered_count"] == 1
     assert reply["unmatched_count"] == 0
     assert "不在当前解读范围内" in reply["summary"]
     assert "1 项" in reply["summary"]
@@ -527,7 +526,6 @@ def test_out_of_catalog_count_rides_alongside_findings() -> None:
         [{"observation_id": f"u{i}", "reason": "unknown_metric_code"} for i in range(3)],
     )
 
-    assert reply["uncovered_count"] == 3
     assert "3 项" in reply["summary"]
 
 

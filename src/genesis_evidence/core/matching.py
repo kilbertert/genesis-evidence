@@ -163,9 +163,16 @@ def patient_reply_v3(
         summary = "发现异常指标，但当前没有对应的已审核知识卡。"
     else:
         summary = _empty_summary(skipped)
-    # The uncovered count rides on **every** branch, not just the empty one. A report
+    # The unreadable rider goes on **every** branch, not just the empty one. A report
     # can produce three findings and forty unreadable rows; before this the patient
     # was told about the three and never the forty, which reads as "the rest was fine".
+    #
+    # It is folded into the existing `summary` rather than added as a
+    # `patient_reply.uncovered_count` field: `patient_reply` is parsed by health-flow
+    # under `extra="forbid"`, so a new field there is a **breaking** change to a live
+    # consumer. Prose degrades gracefully — an older consumer shows the sentence and
+    # ignores it — and the machine-readable form the AC asks for already exists in
+    # `skipped`, the moment the adapter's `unknown_metric` rows are carried across.
     if uncovered:
         summary += (
             f"报告还有 {uncovered} 项异常不在当前解读范围内，"
@@ -176,10 +183,6 @@ def patient_reply_v3(
         "summary": summary,
         "findings": visible_findings,
         "unmatched_count": len(unmatched),
-        # Kept separate from `unmatched_count`: "we have a card but no evidence yet"
-        # and "we cannot read this at all" are different facts and must stay countable
-        # apart on the patient side.
-        "uncovered_count": uncovered,
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
 

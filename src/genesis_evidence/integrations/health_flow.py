@@ -29,6 +29,16 @@ class HealthFlowAdapterResult:
     request: EvidenceMatchRequest
     skipped: tuple[dict[str, str], ...]
 
+    @property
+    def uncovered(self) -> tuple[dict[str, str], ...]:
+        """Confirmed abnormal rows this adapter could not read at all.
+
+        Already inside `skipped`; this is the same rows selected by reason, so a
+        caller can hand them to the reply builder without re-deriving the predicate.
+        """
+
+        return tuple(item for item in self.skipped if item.get("reason") == "unknown_metric")
+
 
 def build_evidence_request(
     records: Sequence[Mapping[str, Any]],

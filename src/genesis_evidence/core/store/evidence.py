@@ -227,11 +227,11 @@ def _v2_patient_reply(
     unmatched: list[dict[str, object]],
     skipped: object,
 ) -> dict[str, object]:
-    """The v2 patient envelope, including the uncovered count (T9).
+    """The v2 patient envelope, including the unreadable rider (T9).
 
-    Same fact set as v3, expressed with v2's flatter finding shape. The uncovered
-    rider is appended on every branch for the same reason as v3: a report whose
-    readable parts produced findings must still say how many parts were unreadable.
+    Same fact set as v3, expressed with v2's flatter finding shape. The rider goes
+    on every branch for the same reason as v3, and lives in `summary` for the same
+    reason: `patient_reply` is parsed by health-flow under `extra="forbid"`.
     """
 
     uncovered = sum(
@@ -257,7 +257,6 @@ def _v2_patient_reply(
         "summary": summary,
         "findings": patient_findings,
         "unmatched_count": len(unmatched),
-        "uncovered_count": uncovered,
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
 

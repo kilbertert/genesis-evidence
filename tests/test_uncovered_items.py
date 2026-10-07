@@ -43,45 +43,33 @@ def _uncovered(n: int) -> list[dict[str, str]]:
     return [{"observation_id": f"u{i}", "reason": "unknown_metric_code"} for i in range(n)]
 
 
-def test_uncovered_count_is_separate_from_unmatched_count() -> None:
-    """两者是不同的事实，必须能分开计数。
+def test_unreadable_rows_are_reported_alongside_findings() -> None:
+    """有 finding 时更要报——否则患者把「其余没提」读成「其余都正常」。
 
-    `unmatched` = 知道它属于哪个健康问题、只是还没有已发布卡。
-    `uncovered` = 根本读不懂这项是什么。合并成一个数会让「证据还没到位」和
-    「我们看不懂」变得不可分辨。
+    `unmatched`（知道归属、只差卡）与「读不懂」在同一句里各报各的，不合并。
     """
 
-    reply = patient_reply_v3([_FINDING], _UNMATCHED, _uncovered(4))
+    reply = patient_reply_v3([_FINDING], _UNMATCHED, _uncovered(40))
 
-    assert reply["unmatched_count"] == 1
-    assert reply["uncovered_count"] == 4
-
-
-def test_uncovered_count_survives_a_report_that_also_produced_findings() -> None:
-    """有 finding 时更要报——否则患者把「其余没提」读成「其余都正常」。"""
-
-    reply = patient_reply_v3([_FINDING], [], _uncovered(40))
-
-    assert reply["uncovered_count"] == 40
+    assert "1 条指标与健康问题关联暂无已审核知识卡" in reply["summary"]
     assert "40 项" in reply["summary"]
     assert "不在当前解读范围内" in reply["summary"]
 
 
-def test_uncovered_count_survives_a_report_with_nothing_readable() -> None:
+def test_unreadable_rows_survive_a_report_with_nothing_readable() -> None:
     reply = patient_reply_v3([], [], _uncovered(7))
 
-    assert reply["uncovered_count"] == 7
     assert "7 项" in reply["summary"]
+    assert "不在当前解读范围内" in reply["summary"]
 
 
-def test_clean_report_says_nothing_about_uncovered_items() -> None:
+def test_clean_report_says_nothing_about_unreadable_rows() -> None:
     """全是参考范围内的报告不该出现「不在解读范围内」的提示——那会平白吓人。"""
 
     reply = patient_reply_v3(
         [], [], [{"observation_id": "a", "reason": "within_reference_range"}]
     )
 
-    assert reply["uncovered_count"] == 0
     assert "不在当前解读范围内" not in reply["summary"]
 
 
@@ -131,5 +119,5 @@ def test_an_unreadable_item_is_counted_but_never_becomes_a_finding() -> None:
 
     reply = patient_reply_v3([], [], [{"reason": "unknown_metric_code"}])
 
-    assert reply["uncovered_count"] == 1
+    assert "1 项" in reply["summary"]
     assert "不在当前解读范围内" in reply["summary"]
