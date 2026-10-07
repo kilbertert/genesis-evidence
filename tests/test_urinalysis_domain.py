@@ -26,8 +26,18 @@ REPORT_NAMES = {
     "Specific Gravity": "urine_specific_gravity",
     "SG": "urine_specific_gravity",
     "Urine pH": "urine_ph",
-    "pH": "urine_ph",
 }
+
+
+def test_bare_ph_is_not_mapped_it_is_specimen_ambiguous() -> None:
+    """裸 `pH` 不登记：血气分析也报 pH，报告上都不带单位，名字不决定标本来源。
+
+    没有标本字段可查时就只能 fail-closed——否则一份血气 pH 会产出泌尿系统
+    finding。带标本前缀的 `Urine pH` 仍正常解析。
+    """
+
+    assert METRIC_ALIASES.get(normalize_metric_name("pH")) is None
+    assert METRIC_ALIASES.get(normalize_metric_name("Urine pH")) == "urine_ph"
 
 
 @pytest.mark.parametrize(("report_name", "expected"), sorted(REPORT_NAMES.items()))

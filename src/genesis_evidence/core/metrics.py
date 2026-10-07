@@ -163,7 +163,10 @@ REPORT_METRIC_ALIASES = {
     "Erythrocytes (microscopy)": "urine_erythrocytes",
     "Specific Gravity": "urine_specific_gravity",
     "SG": "urine_specific_gravity",
-    "pH": "urine_ph",
+    # **裸名 `pH` 不登记**：血气分析也报 pH，报告上两者都不带单位，名字本身
+    # 不决定标本来源。没有标本字段可查，就只能 fail-closed——否则一份血气 pH
+    # 会产出泌尿系统的 finding。「Specific Gravity」无此歧义（常规套餐里是尿检）。
+    # 等 T9 把未覆盖项显式化，或用上标本字段再接。
     # 肝功能扩展（T6）。报告上英文全称与短代号并存。
     "Total Bilirubin": "total_bilirubin",
     "TBIL": "total_bilirubin",

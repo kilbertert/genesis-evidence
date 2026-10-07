@@ -120,6 +120,15 @@ def test_a_shorter_metric_does_not_claim_a_longer_metrics_text() -> None:
     # The longer metric's own text still resolves to the longer metric.
     assert matches("urine_protein", "Urine protein")
 
+    # A *short* alias must be a whole token: `ck` starts the word `CKD`
+    # (chronic kidney disease), which is not creatine kinase.
+    assert not matches("ck", "CKD")
+    assert matches("ck", "CK")
+
+    # A *long* alias must start a token: `globulin` sits inside `Immunoglobulin`.
+    assert not matches("globulin", "Immunoglobulin G")
+    assert matches("globulin", "Globulin")
+
 
 def test_a_compound_outcome_keeps_both_metrics_scopes() -> None:
     """`CK-MB / CK` names two metrics; both must keep their scope.
