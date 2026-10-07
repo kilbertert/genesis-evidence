@@ -487,9 +487,48 @@ def test_empty_summary_is_truthful_for_the_in_range_case() -> None:
 
 
 def test_empty_summary_names_the_out_of_catalog_case_separately() -> None:
+    """目录外与「证据不足」是两回事，患者侧要能分辨（T9）。
+
+    原措辞「不在当前已发布的指标目录内」不够：目录**收**了这个指标、只是还没有
+    已发布卡时，患者读到的也是一句「不在目录内」，两件事被说成一件。现在它说
+    「不在当前**解读范围**内」并给出条数，且与 `unmatched` 分开计数。
+    """
+
     reply = patient_reply_v3([], [], [{"observation_id": "m1", "reason": "unknown_metric_code"}])
-    expected = "已确认的异常指标不在当前已发布的指标目录内，暂无法给出对应的健康提示。"
-    assert reply["summary"] == expected
+
+    assert reply["uncovered_count"] == 1
+    assert reply["unmatched_count"] == 0
+    assert "不在当前解读范围内" in reply["summary"]
+    assert "1 项" in reply["summary"]
+
+
+def test_out_of_catalog_count_rides_alongside_findings() -> None:
+    """有 finding 时也必须报未覆盖数——否则「其余都正常」是虚假保证。"""
+
+    finding = {
+        "condition_code": "COND_X",
+        "condition_name": "X",
+        "urgency": "routine",
+        "abnormality_severity": 1,
+        "evidence_strength": "low",
+        "needs_recheck": True,
+        "department": "D",
+        "recheck_direction": "R",
+        "source_observation_ids": ["o1"],
+        "source_observations": [],
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": "",
+        "evidence_items": [],
+    }
+    reply = patient_reply_v3(
+        [finding],
+        [],
+        [{"observation_id": f"u{i}", "reason": "unknown_metric_code"} for i in range(3)],
+    )
+
+    assert reply["uncovered_count"] == 3
+    assert "3 项" in reply["summary"]
 
 
 def test_empty_summary_counts_a_generator_without_consuming_it_to_zero() -> None:

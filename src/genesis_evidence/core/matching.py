@@ -144,6 +144,7 @@ def patient_reply_v3(
             "evidence_items": finding["evidence_items"],
         }
         visible_findings.append(visible)
+    uncovered = _uncovered_count(skipped)
     if visible_findings:
         metric_count = len(
             {
@@ -162,13 +163,36 @@ def patient_reply_v3(
         summary = "发现异常指标，但当前没有对应的已审核知识卡。"
     else:
         summary = _empty_summary(skipped)
+    # The uncovered count rides on **every** branch, not just the empty one. A report
+    # can produce three findings and forty unreadable rows; before this the patient
+    # was told about the three and never the forty, which reads as "the rest was fine".
+    if uncovered:
+        summary += (
+            f"报告还有 {uncovered} 项异常不在当前解读范围内，"
+            "本次未作解读，需要时可请医生一同查看。"
+        )
     return {
         "title": "体检报告解读与健康风险提示",
         "summary": summary,
         "findings": visible_findings,
         "unmatched_count": len(unmatched),
+        # Kept separate from `unmatched_count`: "we have a card but no evidence yet"
+        # and "we cannot read this at all" are different facts and must stay countable
+        # apart on the patient side.
+        "uncovered_count": uncovered,
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
     }
+
+
+def _uncovered_count(skipped: Iterable[dict[str, object]]) -> int:
+    """How many confirmed abnormalities this service could not read.
+
+    ``unknown_metric_code`` is the one skip reason that means "we have no idea what
+    this is", as opposed to "we know what it is and could not use it right now".
+    The count is what the patient side needs; the reason breakdown stays internal.
+    """
+
+    return sum(1 for item in skipped if str(item.get("reason", "")) == "unknown_metric_code")
 
 
 def _empty_summary(skipped: Iterable[dict[str, object]]) -> str:
@@ -188,7 +212,9 @@ def _empty_summary(skipped: Iterable[dict[str, object]]) -> str:
     if reasons == {"within_reference_range"}:
         return "已确认的指标均在参考范围内，没有需要提示的异常。"
     if reasons == {"unknown_metric_code"}:
-        return "已确认的异常指标不在当前已发布的指标目录内，暂无法给出对应的健康提示。"
+        # The "还有 N 项…" rider is appended by the caller; keep this sentence about
+        # what was readable so the two do not say the same thing twice.
+        return ""
     return f"已确认的指标中有 {len(items)} 项无法参与匹配，因此本次未生成健康提示。"
 
 

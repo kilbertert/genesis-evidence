@@ -308,6 +308,9 @@ class PatientReplyV2(BaseModel):
     summary: str
     findings: list[PatientReplyFindingV2]
     unmatched_count: int = Field(ge=0)
+    #: See `PatientReply.uncovered_count`. Carried on v2 as well: the fact is the
+    #: same and a v2 consumer that never learns it keeps the false assurance.
+    uncovered_count: int = Field(default=0, ge=0)
     disclaimer: str
 
 
@@ -441,7 +444,12 @@ class PatientReply(BaseModel):
     title: Literal["体检报告解读与健康风险提示"]
     summary: str
     findings: list[PatientReplyFinding]
+    #: Abnormal rows the service has a health problem for but no published card yet.
     unmatched_count: int = Field(ge=0)
+    #: Abnormal rows the service **cannot read at all** — no catalog entry for the
+    #: report item. Distinct from `unmatched_count`: that is a missing answer, this is
+    #: a missing question, and a patient told only the first assumes the rest was fine.
+    uncovered_count: int = Field(default=0, ge=0)
     disclaimer: str
 
 
