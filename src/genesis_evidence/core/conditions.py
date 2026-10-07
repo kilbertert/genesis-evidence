@@ -99,6 +99,136 @@ CONDITIONS = (
         "消化内科",
         "记录排便症状并完成生活方式评估",
     ),
+    # --- 第二批：报告异常驱动的健康问题（PRD #239）--------------------------------
+    # 这批的名字来自对真实报告的逐域复核，不是补充剂功能分类（健康方向）。批次是
+    # 历史事实，不进模型：不加前缀、不改形状，与首批走同一道证据闸门。
+    ConditionDefinition(
+        "COND_OVERWEIGHT_OBESITY",
+        "超重与肥胖",
+        ("bmi", "waist_circumference", "body_fat_rate"),
+        "内分泌科",
+        "记录体重与腰围并评估体重管理",
+    ),
+    ConditionDefinition(
+        "COND_METABOLIC_SYNDROME",
+        "代谢综合征",
+        (
+            "bmi",
+            "waist_circumference",
+            "fasting_glucose",
+            "triglycerides",
+            "hdl_c",
+            "systolic_blood_pressure",
+            "diastolic_blood_pressure",
+        ),
+        "内分泌科",
+        "复核腰围、血糖、血压与血脂的组合风险",
+    ),
+    ConditionDefinition(
+        "COND_COGNITIVE_DECLINE_RISK",
+        "认知功能下降风险",
+        (),
+        "神经内科",
+        "记录认知相关困扰并到神经内科评估",
+    ),
+    ConditionDefinition(
+        "COND_AMD_RISK",
+        "年龄相关性黄斑变性风险",
+        ("uncorrected_vision", "intraocular_pressure"),
+        "眼科",
+        "到眼科复查视力与眼底",
+    ),
+    ConditionDefinition(
+        "COND_DRY_EYE_RISK",
+        "干眼风险",
+        (),
+        "眼科",
+        "记录眼部干涩症状并到眼科评估",
+    ),
+    ConditionDefinition(
+        "COND_INSOMNIA_RISK",
+        "失眠风险",
+        (),
+        "睡眠医学科",
+        "记录睡眠情况并评估持续时间与继发因素",
+    ),
+    ConditionDefinition(
+        "COND_OSTEOARTHRITIS_RISK",
+        "骨关节炎风险",
+        (),
+        "骨科",
+        "结合关节症状与查体到骨科评估",
+    ),
+    ConditionDefinition(
+        "COND_MALE_OSTEOPOROSIS",
+        "男性骨质疏松风险",
+        ("bone_density_t_score",),
+        "内分泌科",
+        "复查骨密度并排查继发因素",
+    ),
+    ConditionDefinition(
+        "COND_BPH_RISK",
+        "良性前列腺增生风险",
+        ("psa",),
+        "泌尿外科",
+        "到泌尿外科复查评估下尿路症状",
+    ),
+    ConditionDefinition(
+        "COND_MENOPAUSE_HEALTH_RISK",
+        "更年期健康风险",
+        ("ldl_c", "fasting_glucose", "bone_density_t_score"),
+        "妇科",
+        "结合围绝经期症状到妇科或内分泌科评估",
+    ),
+    # 以下四条按域补齐。它们是 T3–T6 各自的归宿：电解质（44 条观测）、血细胞分类
+    # （82 条，报告里最多的域）、尿常规（8/9 份报告）此前落不到任何健康问题，
+    # 而 PRD 的问题陈述正是「不要静默丢弃」。不补则 T5 无家可归、无法完成。
+    ConditionDefinition(
+        "COND_ELECTROLYTE_DISTURBANCE",
+        "电解质紊乱风险",
+        ("sodium", "potassium", "chloride", "phosphate", "corrected_calcium"),
+        "肾内科",
+        "复查电解质并结合临床评估",
+    ),
+    ConditionDefinition(
+        "COND_INFECTION_INFLAMMATION_PATTERN",
+        "感染与炎症模式",
+        (
+            "wbc",
+            "neutrophils_percent",
+            "lymphocytes_percent",
+            "monocytes_percent",
+            "eosinophils_percent",
+            "basophils_percent",
+            "neutrophils_absolute",
+            "lymphocytes_absolute",
+            "monocytes_absolute",
+            "eosinophils_absolute",
+            "basophils_absolute",
+        ),
+        "全科",
+        "复查血常规并结合症状到全科评估",
+    ),
+    ConditionDefinition(
+        "COND_URINARY_ABNORMALITY",
+        "泌尿系统异常提示",
+        (
+            "urine_protein",
+            "urine_leucocytes",
+            "urine_erythrocytes",
+            "urine_specific_gravity",
+            "urine_ph",
+        ),
+        "肾内科",
+        "复查尿常规并到肾内科或泌尿外科评估",
+    ),
+    ConditionDefinition(
+        "COND_CARDIAC_ENZYME_PATTERN",
+        "心肌酶异常提示",
+        ("ck", "ck_mb", "ldh"),
+        "心血管内科",
+        "复查心肌酶并到心血管内科评估",
+    ),
 )
 
 

@@ -306,6 +306,17 @@ def test_matrix_matches_long_form_uacr_and_bone_outcomes(tmp_path) -> None:
         store.lock_topic(topic_id, reviewer="reviewer")
 
     matrix = ReviewStore(database).list_coverage_matrix()
-    for metric_code in ("uacr", "bone_density_t_score", "calcium"):
-        row = next(row for row in matrix if row["metric_code"] == metric_code)
+    # Scoped by condition: `bone_density_t_score` and `calcium` are claimed by more
+    # than one condition now, and only the topic created here drives a status for
+    # *this* one. Looking up by metric alone picks whichever condition sorts first.
+    for condition_code, metric_code in (
+        ("COND_CKD_RISK", "uacr"),
+        ("COND_OSTEOPOROSIS_RISK", "bone_density_t_score"),
+        ("COND_OSTEOPOROSIS_RISK", "calcium"),
+    ):
+        row = next(
+            row
+            for row in matrix
+            if row["metric_code"] == metric_code and row["condition_code"] == condition_code
+        )
         assert row["coverage_status"] == "topic_locked"

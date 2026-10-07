@@ -51,7 +51,9 @@ def test_initialization_seeds_every_catalog_condition_idempotently(tmp_path) -> 
 
     conditions = database.list_conditions()
     assert {item.code for item in conditions} == {item.code for item in CONDITIONS}
-    assert conditions[0].code == "COND_ANEMIA_PATTERN"
+    # `list_conditions` orders by code, so this asserts the ordering contract, not
+    # a particular member: the first row is whatever code sorts first.
+    assert conditions[0].code == min(item.code for item in CONDITIONS)
 
 
 def test_evidence_profile_has_stable_outcome_scope_key(tmp_path) -> None:
