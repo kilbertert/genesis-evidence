@@ -202,3 +202,8 @@ Proof standards:
 - `--virtual-time-budget` makes the page render fast-forwarded; a feature that needs
   real network round-trips may screenshot before it settles. Prefer DOM assertions
   (`--dump-dom`) over screenshots for state, screenshots for layout.
+- **This map rots.** When a change makes a feature file wrong — a moved route, a
+  renamed control, a step that no longer works — update that file in the same
+  change. For a periodic pass over the whole map, run the
+  `maintain-verification-skill` skill. Do not let a stale entry stand: an
+  out-of-date map reports a pass it did not earn.
