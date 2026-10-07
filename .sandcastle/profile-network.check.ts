@@ -19,9 +19,9 @@ function assert(condition: boolean, message: string): void {
 // The relay profile reaches host loopback, so it must share the host network.
 assert(networkFor("claude-deepseek") === "host", "claude-deepseek must use host networking");
 
-// Public-HTTPS profiles must stay on the default bridge — host networking would
-// hand them the host's loopback for no reason.
-assert(networkFor("claude-stepfun") === undefined, "claude-stepfun must stay on the default bridge");
+// Profiles that talk to a public HTTPS origin must stay on the default bridge —
+// host networking would hand them the host's loopback for no reason. `claude`
+// is the only one left: it points at the Anthropic API directly.
 assert(networkFor("claude") === undefined, "claude must stay on the default bridge");
 assert(networkFor(undefined) === undefined, "no profile means the default bridge");
 
@@ -43,17 +43,13 @@ assert(
   "claude-deepseek must produce { network: 'host' } for docker()",
 );
 assert(
-  JSON.stringify(sandboxNetworkOptions("claude-stepfun")) === JSON.stringify({}),
-  "claude-stepfun must produce no docker() network option",
-);
-assert(
   JSON.stringify(sandboxNetworkOptions(undefined)) === JSON.stringify({}),
   "no profile must produce no docker() network option",
 );
 
 // The splatted object must be exactly {} or { network: "host" } — never some
 // other network, which would break the relay profile or widen the sandbox.
-for (const profile of [...LOOPBACK_PROFILES, "claude", "claude-stepfun", undefined]) {
+for (const profile of [...LOOPBACK_PROFILES, "claude", "claude-deepseek", undefined]) {
   const keys = Object.keys(sandboxNetworkOptions(profile));
   assert(
     keys.length === 0 || (keys.length === 1 && keys[0] === "network"),
