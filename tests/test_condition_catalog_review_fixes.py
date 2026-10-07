@@ -121,6 +121,22 @@ def test_a_shorter_metric_does_not_claim_a_longer_metrics_text() -> None:
     assert matches("urine_protein", "Urine protein")
 
 
+def test_a_compound_outcome_keeps_both_metrics_scopes() -> None:
+    """`CK-MB / CK` names two metrics; both must keep their scope.
+
+    Suppression is per-occurrence: the `CK` inside `CK-MB` is claimed by the longer
+    alias, but the standalone `CK` after it is a second, unclaimed occurrence. A
+    first-occurrence-only search would drop `metric:ck` from the combined outcome.
+    """
+
+    matches = RESOLVER.metric_outcome_matches_text
+
+    assert matches("ck_mb", "CK-MB / CK")
+    assert matches("ck", "CK-MB / CK")
+    # Suppression still holds where the short alias is *only* inside the long one.
+    assert not matches("ck", "CK-MB")
+
+
 def test_registry_metrics_keep_their_historical_matching() -> None:
     """The 30 hand-registered metrics must match exactly as before this change.
 

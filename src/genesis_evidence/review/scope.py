@@ -525,8 +525,13 @@ def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
     return tuple(sorted(aliases))
 
 
-def _derived_match_span(metric_code: str, value: str) -> tuple[int, int] | None:
-    """The longest span covered by one of a metric's floor aliases, or ``None``.
+def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
+    """Every span a metric's floor aliases cover, longest-first.
+
+    **All** occurrences, not just the first: a compound outcome like ``CK-MB / CK``
+    names two metrics, and the standalone ``CK`` sits after the ``CK-MB``. Looking
+    only at the first occurrence would let the longer alias suppress the short one
+    and drop the second metric's scope entirely.
 
     Short ASCII floor aliases (``psa``, ``ck``) must land on a **token boundary**
     so ``psa`` cannot match "ca**psa**icin"; longer ones and Chinese labels match
@@ -535,44 +540,47 @@ def _derived_match_span(metric_code: str, value: str) -> tuple[int, int] | None:
 
     compact = _compact_text(value)
     tokens = _token_set(value)
-    best: tuple[int, int] | None = None
+    spans: set[tuple[int, int]] = set()
     for alias in _derived_outcome_aliases(metric_code):
         if alias.isascii() and len(alias) <= 3 and alias not in tokens:
             continue
         start = compact.find(alias)
-        if start < 0:
-            continue
-        end = start + len(alias)
-        if best is None or (end - start) > (best[1] - best[0]):
-            best = (start, end)
-    return best
+        while start >= 0:
+            spans.add((start, start + len(alias)))
+            start = compact.find(alias, start + 1)
+    return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
 
 
 def _derived_alias_matches(metric_code: str, value: str) -> bool:
     """Match a floor alias, letting the **most specific** metric own the text.
 
-    Floor aliases are substrings of each other \u2014 ``ck`` sits inside ``ck_mb``,
-    and ``urine_ph`` (``urineph``) sits inside ``urinephosphate``. Substring
-    matching alone therefore lets a short metric claim a longer one's text, and a
-    card published under that wrong scope is served to a patient whose abnormal
-    metric it does not describe. So a floor match loses whenever a **longer**
-    catalog metric's floor alias overlaps the same span: longest match wins.
+    Floor aliases nest \u2014 ``ck`` inside ``ck_mb``, ``urineph`` inside
+    ``urinephosphate``. Plain substring matching lets the short metric claim the
+    longer one's text, and a card published under that wrong scope is served to a
+    patient whose abnormal metric it does not describe. So a candidate span is
+    rejected when a **longer** catalog metric's alias overlaps exactly it \u2014
+    longest match wins \u2014 but the metric still matches if any **other** occurrence
+    is unclaimed.
     """
 
-    span = _derived_match_span(metric_code, value)
-    if span is None:
+    spans = _derived_match_spans(metric_code, value)
+    if not spans:
         return False
-    for other in METRIC_LABELS:
-        if other == metric_code or other in _PROFILE_OUTCOME_ALIASES:
-            continue
-        other_span = _derived_match_span(other, value)
-        if other_span is None:
-            continue
-        longer = (other_span[1] - other_span[0]) > (span[1] - span[0])
-        overlaps = other_span[0] < span[1] and span[0] < other_span[1]
-        if longer and overlaps:
-            return False
-    return True
+    rivals = [
+        (other, span)
+        for other in METRIC_LABELS
+        if other != metric_code and other not in _PROFILE_OUTCOME_ALIASES
+        for span in _derived_match_spans(other, value)
+    ]
+    for span in spans:
+        if not any(
+            (rival[1] - rival[0]) > (span[1] - span[0])
+            and rival[0] < span[1]
+            and span[0] < rival[1]
+            for _, rival in rivals
+        ):
+            return True
+    return False
 
 
 def _token_set(value: str) -> set[str]:
