@@ -192,7 +192,7 @@ CONDITIONS = (
     ConditionDefinition(
         "COND_ELECTROLYTE_DISTURBANCE",
         "电解质紊乱风险",
-        ("sodium", "potassium", "chloride", "phosphate", "corrected_calcium"),
+        ("sodium", "potassium", "chloride", "phosphate", "calcium", "corrected_calcium"),
         "肾内科",
         "复查电解质并结合临床评估",
     ),

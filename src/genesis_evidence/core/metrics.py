@@ -89,7 +89,23 @@ def evidence_contains_value(evidence: str, value: float) -> bool:
     )
 
 
+#: 报告项目名 → metric_code。canonical 码与中文标签由 `METRIC_LABELS` 派生；
+#: 这里只补**两者派生不出来**的报告写法：缩写。
+#: 两种来源最后合进 `METRIC_ALIASES` 一个映射，解析点仍只有一处（见术语表）。
+#: 英文全称（`Sodium`/`Phosphate`/`Corrected Calcium`）无需登记——它们与
+#: canonical 码同名，派生已经覆盖。
+REPORT_METRIC_ALIASES = {
+    # 电解质（T3）。报告上印的是短代号。
+    # `Ca` 是**总钙**，不是白蛋白校正钙，所以归 `calcium` 而非 `corrected_calcium`。
+    "Na": "sodium",
+    "K": "potassium",
+    "Cl": "chloride",
+    "Ca": "calcium",
+}
+
+
 METRIC_ALIASES = {
     **{normalize_metric_name(code): code for code in METRIC_LABELS},
     **{normalize_metric_name(label): code for code, label in METRIC_LABELS.items()},
+    **{normalize_metric_name(name): code for name, code in REPORT_METRIC_ALIASES.items()},
 }
