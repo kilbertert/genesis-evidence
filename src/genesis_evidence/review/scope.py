@@ -505,6 +505,26 @@ def _compact_text(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold())
 
 
+def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
+    """The floor aliases for a canonical metric: its code and its Chinese label.
+
+    `_PROFILE_OUTCOME_ALIASES` above holds *synonyms* (``sbp``, ``fbg``, ``urate``).
+    This is the set that must exist for **every** metric in `METRIC_LABELS`, because
+    a metric the resolver cannot match can never be assigned a ``metric:`` scope \u2014
+    and a card whose scope is not ``metric:<code>`` is never served to a patient.
+
+    Keeping it derived, rather than a second hand-maintained list, is the point:
+    the two registries drift silently, and the only symptom is a missing card long
+    after the metric was added.
+    """
+
+    aliases = {_compact_text(metric_code)}
+    label = METRIC_LABELS.get(metric_code)
+    if label:
+        aliases.add(_compact_text(label))
+    return tuple(sorted(aliases))
+
+
 def _metric_outcome_matches(metric_code: str, value: str) -> bool:
     compact = _compact_text(value)
     if metric_code in {"hdl_c", "ldl_c", "total_cholesterol"} and "ratio" in value.casefold():
@@ -530,12 +550,22 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         token in compact for token in ("tscore", "t评分", "t值")
     ):
         return False
-    aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code, ())
+    aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code) or _derived_outcome_aliases(metric_code)
+    # Short codes that can appear inside unrelated words ("ck" in "check") are matched
+    # on token boundaries only; the rest may match as substrings.
     risky_abbreviations = {"alt", "ast", "alp"}
-    if any(alias in compact for alias in aliases if alias not in risky_abbreviations):
+    if metric_code in _PROFILE_OUTCOME_ALIASES:
+        # Registry metrics keep their historical matching byte-for-byte.
+        risk = risky_abbreviations
+    else:
+        # Derived floor aliases: guard the short ASCII codes so `psa` cannot match
+        # "capsaicin". Chinese labels are never at risk, so `钠` still matches 血钠.
+        short = {alias for alias in aliases if alias.isascii() and len(alias) <= 3}
+        risk = risky_abbreviations | short
+    if any(alias in compact for alias in aliases if alias not in risk):
         return True
     tokens = set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
-    if any(alias in tokens for alias in aliases if alias in risky_abbreviations):
+    if any(alias in tokens for alias in aliases if alias in risk):
         return True
     if metric_code == "systolic_blood_pressure":
         return "systolic" in compact and "bloodpressure" in compact
@@ -598,8 +628,10 @@ def _profile_scopes(
     scopes = {
         f"metric:{metric_code}": METRIC_LABELS[metric_code]
         for metric_code in (condition.metrics if condition else ())
-        if metric_code in _PROFILE_OUTCOME_ALIASES
-        and _metric_outcome_matches_text(metric_code, topic_outcome)
+        # No membership test against the synonym registry: every metric the catalog
+        # declares must be scope-assignable, or its cards could never reach a
+        # patient. `_metric_outcome_matches_text` falls back to the derived aliases.
+        if _metric_outcome_matches_text(metric_code, topic_outcome)
         and _metric_outcome_matches_text(metric_code, result_outcome)
     }
     for component in _topic_outcome_components(topic_outcome):

@@ -159,24 +159,30 @@ CONDITIONS = (
         "骨科",
         "结合关节症状与查体到骨科评估",
     ),
+    # 这三条按人群属性限定（男/女），但匹配链路上**没有性别闸门**——
+    # `EvidenceMatcher` 拿不到患者性别，`CONDITIONS_BY_METRIC` 只按指标索引。
+    # 若现在就给它们挂上通用指标，一位男性高 LDL 会拿到「更年期健康风险」，
+    # 一位女性低骨密度会拿到「男性骨质疏松风险」。所以先 fail-closed：指标集
+    # 留空，患者侧不可达，直到 T7 建好人群属性触达再填回。
+    # 这是已知且接受的中间态，不是缺陷——与 `COND_CHRONIC_CONSTIPATION` 同形。
     ConditionDefinition(
         "COND_MALE_OSTEOPOROSIS",
         "男性骨质疏松风险",
-        ("bone_density_t_score",),
+        (),
         "内分泌科",
         "复查骨密度并排查继发因素",
     ),
     ConditionDefinition(
         "COND_BPH_RISK",
         "良性前列腺增生风险",
-        ("psa",),
+        (),
         "泌尿外科",
         "到泌尿外科复查评估下尿路症状",
     ),
     ConditionDefinition(
         "COND_MENOPAUSE_HEALTH_RISK",
         "更年期健康风险",
-        ("ldl_c", "fasting_glucose", "bone_density_t_score"),
+        (),
         "妇科",
         "结合围绝经期症状到妇科或内分泌科评估",
     ),
