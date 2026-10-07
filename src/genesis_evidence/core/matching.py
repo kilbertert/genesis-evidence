@@ -175,7 +175,7 @@ def patient_reply_v3(
     # `skipped`, the moment the adapter's `unknown_metric` rows are carried across.
     if uncovered:
         summary += (
-            f"报告还有 {uncovered} 项异常不在当前解读范围内，"
+            f"报告另有 {uncovered} 项不在当前解读范围内，"
             "本次未作解读，需要时可请医生一同查看。"
         )
     return {
