@@ -32,17 +32,23 @@ def test_first_batch_conditions_all_remain() -> None:
     every later slice would have landed on a red test for no reason.
     """
 
-    codes = {item.code for item in CONDITIONS}
+    codes = [item.code for item in CONDITIONS]
 
-    assert not (FIRST_BATCH_CODES - codes), (
-        f"dropped first-batch conditions: {sorted(FIRST_BATCH_CODES - codes)}"
+    assert not (FIRST_BATCH_CODES - set(codes)), (
+        f"dropped first-batch conditions: {sorted(FIRST_BATCH_CODES - set(codes))}"
     )
     assert not (FIRST_BATCH_CODES - set(CONDITION_BY_CODE)), (
         "first batch missing from the by-code index"
     )
-    # Subset alone would pass if a code appeared twice and another vanished, so
-    # bind the index to the sequence as well.
-    assert sorted(codes) == sorted(CONDITION_BY_CODE), "duplicate condition code in the catalog"
+    # Both collections above are set-valued, so a duplicate code is invisible to
+    # them: two entries collapse to one and every set comparison still holds. The
+    # sequence length is what catches it, so compare against the raw sequence, not
+    # against a set derived from it.
+    duplicates = sorted({code for code in codes if codes.count(code) > 1})
+    assert not duplicates, f"duplicate condition code in the catalog: {duplicates}"
+    assert len(CONDITION_BY_CODE) == len(set(CONDITION_BY_CODE)), (
+        "the by-code index lost an entry to a duplicate code"
+    )
 
 
 def test_later_batch_conditions_are_the_declared_ones() -> None:

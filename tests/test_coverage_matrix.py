@@ -24,11 +24,24 @@ def test_coverage_matrix_expands_first_batch_metrics(tmp_path) -> None:
     # metric), plus a `condition:` scope for a condition that claims no metric.
     # Asserting the projection stays total as the catalog grows is the point;
     # a row count would only re-pin the catalog's current size.
-    assert {row["condition_code"] for row in matrix} == {item.code for item in CONDITIONS}
-    assert {row["scope_key"] for row in matrix} == (
-        {f"metric:{metric}" for item in CONDITIONS for metric in item.metrics}
-        | {f"condition:{item.code}" for item in CONDITIONS if not item.metrics}
-    )
+    #
+    # Grouped by condition, not compared as one global scope set: metrics are
+    # shared across conditions (`triglycerides` is in both dyslipidemia and
+    # MASLD), so a global set still matches when a row is missing for one
+    # condition but present for another.
+    expected = {
+        item.code: (
+            {f"metric:{metric}" for metric in item.metrics}
+            if item.metrics
+            else {f"condition:{item.code}"}
+        )
+        for item in CONDITIONS
+    }
+    actual: dict[str, set[str]] = {}
+    for row in matrix:
+        actual.setdefault(row["condition_code"], set()).add(row["scope_key"])
+
+    assert actual == expected
     ldl = next(row for row in matrix if row["metric_code"] == "ldl_c")
     assert ldl["coverage_status"] == "planned"
     assert ldl["next_action"] == "建立并锁定版本化主题/PICOTS"
