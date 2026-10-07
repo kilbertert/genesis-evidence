@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.core.store import Database, PaperStore, ReviewStore
 from genesis_evidence.review.api import create_app
 from genesis_evidence.review.service import EvidenceReviewService
@@ -73,7 +74,9 @@ def test_disease_library_lists_admitted_papers_per_condition(tmp_path) -> None:
 
     assert response.status_code == 200
     rows = response.json()
-    assert len(rows) == 12  # all conditions present
+    # One row per catalog condition, whatever the catalog's current size — the
+    # property is "every condition is listed", not "there are twelve".
+    assert {row["condition_code"] for row in rows} == {item.code for item in CONDITIONS}
     taken = next(row for row in rows if row["condition_code"] == "COND_VITAMIN_D_DEFICIENCY")
     assert taken["condition_name"] == "维生素 D 缺乏风险"
     assert taken["paper_count"] == 1

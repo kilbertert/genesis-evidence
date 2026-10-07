@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 
+from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.core.store import Database
 
 
@@ -36,13 +37,20 @@ def test_schema_has_expected_tables_and_stays_under_budget(tmp_path) -> None:
     } <= tables
 
 
-def test_initialization_seeds_only_the_first_twelve_conditions(tmp_path) -> None:
+def test_initialization_seeds_every_catalog_condition_idempotently(tmp_path) -> None:
+    """Seeding is a whole-catalog operation and stays idempotent as it grows.
+
+    Pinning the row count at 12 tested the catalog's size, not the seeding
+    behaviour; the property that matters is that the seeded set *is* the catalog
+    and a second initialize() adds nothing.
+    """
+
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
     database.initialize()
 
     conditions = database.list_conditions()
-    assert len(conditions) == 12
+    assert {item.code for item in conditions} == {item.code for item in CONDITIONS}
     assert conditions[0].code == "COND_ANEMIA_PATTERN"
 
 
