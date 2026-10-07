@@ -189,3 +189,16 @@ METRIC_ALIASES = {
     **{normalize_metric_name(label): code for code, label in METRIC_LABELS.items()},
     **{normalize_metric_name(name): code for name, code in REPORT_METRIC_ALIASES.items()},
 }
+
+#: 无量纲指标：报告上**本就不印单位**，值本身是比值/指数/对数。
+#: 适配器要求每个观测带单位，这三项因此会被 `missing_unit` 静默丢弃——
+#: 实测它们确实以空单位出现（比值 6 行、尿 pH 6 行、比重 7 行）。
+#: 这里给它们一个规范的无量纲单位，让它们能过闸门，而不是放宽闸门。
+DIMENSIONLESS_METRICS = frozenset(
+    {
+        "albumin_globulin_ratio",
+        "urine_ph",
+        "urine_specific_gravity",
+    }
+)
+DIMENSIONLESS_UNIT = "1"

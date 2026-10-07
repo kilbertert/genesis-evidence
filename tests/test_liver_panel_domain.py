@@ -85,3 +85,63 @@ def test_adapter_resolves_a_liver_panel_row() -> None:
     )
 
     assert [item.metric_code for item in result.request.observations] == ["total_bilirubin"]
+
+
+def test_dimensionless_ratio_survives_the_unit_gate() -> None:
+    """`A/G` 无量纲，报告上不印单位；它必须过闸门而不是被丢弃。
+
+    实测该比值在报告里恒为空单位。丢弃等于「有值有参考区间却当作没有数据」。
+    """
+
+    result = build_evidence_request(
+        [
+            {
+                "metric_name": "A/G",
+                "metric_value": "0.9",
+                "unit": "",
+                "reference_range": "1.2-2.4",
+                "evidence_text": "A/G 0.9 参考范围 1.2-2.4 L",
+                "page_number": 2,
+            }
+        ],
+        confirmed=True,
+    )
+
+    observations = list(result.request.observations)
+    assert [item.metric_code for item in observations] == ["albumin_globulin_ratio"]
+    assert observations[0].unit == "1"
+    assert result.skipped == ()
+
+
+def test_unitless_non_dimensionless_rows_are_still_gated() -> None:
+    """放宽只针对无量纲指标；别的指标缺单位仍应显式丢弃。"""
+
+    result = build_evidence_request(
+        [
+            {
+                "metric_name": "Urea",
+                "metric_value": "9",
+                "unit": "",
+                "reference_range": "2.5-8.0",
+                "evidence_text": "Urea 9 参考范围 2.5-8.0 H",
+                "page_number": 1,
+            }
+        ],
+        confirmed=True,
+    )
+
+    assert list(result.request.observations) == []
+    assert result.skipped[0]["reason"] == "unknown_metric"
+
+
+def test_immunoglobulin_is_not_total_globulin() -> None:
+    """`globulin` 不得在 `Immunoglobulin G` 里命中——总球蛋白与免疫球蛋白是两回事。"""
+
+    from genesis_evidence.review.scope import EvidenceProfileScopeResolver
+
+    resolver = EvidenceProfileScopeResolver()
+
+    assert not resolver.metric_outcome_matches_text("globulin", "Immunoglobulin G")
+    assert not resolver.metric_outcome_matches_text("globulin", "Immunoglobulin A")
+    assert resolver.metric_outcome_matches_text("globulin", "Globulin")
+    assert resolver.metric_outcome_matches_text("globulin", "serum globulin")

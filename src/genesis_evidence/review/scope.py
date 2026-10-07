@@ -525,6 +525,30 @@ def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
     return tuple(sorted(aliases))
 
 
+def _token_start_offsets(value: str) -> set[int]:
+    """Compact-string offsets at which a new word begins.
+
+    ``compact`` has all separators removed, so word boundaries are otherwise lost:
+    ``Immunoglobulin G`` and ``Globulin`` both contain ``globulin`` as a substring,
+    but only the latter begins a word. Mapping the boundary back into ``compact``
+    is what lets a floor alias reject the first without losing the second.
+    """
+
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    starts: set[int] = set()
+    offset = 0
+    previous_is_word = False
+    for char in normalized:
+        is_word = bool(re.fullmatch(r"[0-9a-z]", char))
+        if is_word and not previous_is_word:
+            starts.add(offset)
+        # Must mirror `_compact_text`'s class exactly, or the offsets drift.
+        if re.fullmatch(r"[0-9a-z\u4e00-\u9fff]", char):
+            offset += 1
+        previous_is_word = is_word
+    return starts
+
+
 def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
     """Every span a metric's floor aliases cover, longest-first.
 
@@ -533,20 +557,19 @@ def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
     only at the first occurrence would let the longer alias suppress the short one
     and drop the second metric's scope entirely.
 
-    Short ASCII floor aliases (``psa``, ``ck``) must land on a **token boundary**
-    so ``psa`` cannot match "ca**psa**icin"; longer ones and Chinese labels match
-    as plain substrings, so ``\u94a0`` still matches \u8840\u94a0.
+    An **ASCII** floor alias must begin at a word boundary, so ``globulin`` cannot
+    claim ``Immunoglobulin G`` and ``psa`` cannot claim "ca**psa**icin". Chinese
+    labels are not word-delimited, so ``\u94a0`` still matches \u8840\u94a0 as a substring.
     """
 
     compact = _compact_text(value)
-    tokens = _token_set(value)
+    starts = _token_start_offsets(value)
     spans: set[tuple[int, int]] = set()
     for alias in _derived_outcome_aliases(metric_code):
-        if alias.isascii() and len(alias) <= 3 and alias not in tokens:
-            continue
         start = compact.find(alias)
         while start >= 0:
-            spans.add((start, start + len(alias)))
+            if not alias.isascii() or start in starts:
+                spans.add((start, start + len(alias)))
             start = compact.find(alias, start + 1)
     return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
 

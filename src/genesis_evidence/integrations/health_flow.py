@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.contracts import EvidenceMatchObservation, EvidenceMatchRequest
-from ..core.metrics import METRIC_ALIASES, evidence_contains_value, normalize_metric_name
+from ..core.metrics import (
+    DIMENSIONLESS_METRICS,
+    DIMENSIONLESS_UNIT,
+    METRIC_ALIASES,
+    evidence_contains_value,
+    normalize_metric_name,
+)
 
 _NUMBER = r"-?\d+(?:\.\d+)?"
 _NUMBER_RE = re.compile(rf"(?<![\d.]){_NUMBER}(?![\d.])")
@@ -60,8 +66,14 @@ def build_evidence_request(
             continue
         unit = _text(record.get("unit"))
         if not unit:
-            skipped.append(_skip(position, "missing_unit"))
-            continue
+            # 无量纲指标（比值/指数/对数）报告上本就不印单位。给它们规范的
+            # 无量纲单位，而不是把已确认的观测丢掉——「有值有参考区间但没单位」
+            # 与「真的缺数据」是两回事。
+            if code in DIMENSIONLESS_METRICS:
+                unit = DIMENSIONLESS_UNIT
+            else:
+                skipped.append(_skip(position, "missing_unit"))
+                continue
         evidence = _text(record.get("evidence_text"))
         value = _single_number(record.get("metric_value"))
         if value is None or not evidence or not evidence_contains_value(evidence, value):
