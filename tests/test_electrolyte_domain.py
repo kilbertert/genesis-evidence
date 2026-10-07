@@ -76,18 +76,20 @@ def test_adapter_resolves_an_electrolyte_row() -> None:
 def test_adapter_still_rejects_a_name_outside_this_domain() -> None:
     """域外项目名必须显式落 unknown_metric，不得被误认。
 
-    用 `Rheumatoid Factor`：它至今仍无归宿（T8 才处理）。先前这里用的是
-    `Neutrophils`，T4 落地后它已被正确认领——那是 T4 的职责，不是本片回归。
+    用 `Alkaline Phosphatase`——它**故意的**仍在域外：电解质健康问题不认领
+    `alp`（那是首批骨质疏松的指标）。先前这里用过 `Neutrophils`（T4 认领）、
+    后用过 `Rheumatoid Factor`（T8 认领），都随各自切片落地而失效；换成一条
+    **本就不该归电解质**的名字，让断言与切片解耦。
     """
 
     result = build_evidence_request(
         [
             {
-                "metric_name": "Rheumatoid Factor",
-                "metric_value": "80",
-                "unit": "IU/mL",
-                "reference_range": "0-14",
-                "evidence_text": "Rheumatoid Factor 80 IU/mL 参考范围 0-14 H",
+                "metric_name": "C-Reactive Protein",
+                "metric_value": "12",
+                "unit": "mg/L",
+                "reference_range": "0-5",
+                "evidence_text": "C-Reactive Protein 12 mg/L 参考范围 0-5 H",
                 "page_number": 1,
             }
         ],

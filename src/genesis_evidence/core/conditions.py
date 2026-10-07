@@ -134,7 +134,7 @@ CONDITIONS = (
     ConditionDefinition(
         "COND_AMD_RISK",
         "年龄相关性黄斑变性风险",
-        ("uncorrected_vision", "intraocular_pressure"),
+        (),
         "眼科",
         "到眼科复查视力与眼底",
     ),
@@ -172,6 +172,10 @@ CONDITIONS = (
         "内分泌科",
         "复查骨密度并排查继发因素",
     ),
+    # BPH / AMD / 干眼 / 骨关节炎仍留在目录里——它们是真实的健康问题，覆盖矩阵
+    # 必须显示它们——但指标集为空：这些病种不能由化验数值判定。PSA 异常只支持
+    # 「前列腺相关复查提示」（见下），AMD/干眼要靠眼科检查（问卷/影像触达，
+    # 另立项），骨关节炎靠症状与查体。这是 fail-closed，与 ADR 0008 同一条原则。
     ConditionDefinition(
         "COND_BPH_RISK",
         "良性前列腺增生风险",
@@ -248,6 +252,31 @@ CONDITIONS = (
         ),
         "消化内科",
         "复查肝功能并到消化内科评估",
+    ),
+    # 专项标志物（T8）。这三项**按化验结果命名，不按疾病命名**——这是刻意的：
+    # 一个异常标志物只能支持「去复查」，不支持某疾病风险。把 PSA 挂在
+    # 「良性前列腺增生风险」上，等于让患者读到自己可能得了增生；把类风湿因子
+    # 挂在骨关节炎上更错（RF 指向类风湿，不是骨关节炎）。名称即边界。
+    ConditionDefinition(
+        "COND_PROSTATE_REVIEW_PROMPT",
+        "前列腺相关复查提示",
+        ("psa",),
+        "泌尿外科",
+        "到泌尿外科复查并评估",
+    ),
+    ConditionDefinition(
+        "COND_RHEUMATOID_REVIEW_PROMPT",
+        "类风湿相关复查提示",
+        ("rheumatoid_factor",),
+        "风湿免疫科",
+        "到风湿免疫科复查评估",
+    ),
+    ConditionDefinition(
+        "COND_EYE_REVIEW_PROMPT",
+        "眼科复查提示",
+        ("uncorrected_vision", "intraocular_pressure"),
+        "眼科",
+        "到眼科复查视力与眼压",
     ),
 )
 
