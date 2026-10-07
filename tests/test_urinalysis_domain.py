@@ -26,8 +26,18 @@ REPORT_NAMES = {
     "Specific Gravity": "urine_specific_gravity",
     "SG": "urine_specific_gravity",
     "Urine pH": "urine_ph",
-    "pH": "urine_ph",
 }
+
+
+def test_bare_ph_is_not_mapped_it_is_specimen_ambiguous() -> None:
+    """裸 `pH` 不登记：血气分析也报 pH，报告上都不带单位，名字不决定标本来源。
+
+    没有标本字段可查时就只能 fail-closed——否则一份血气 pH 会产出泌尿系统
+    finding。带标本前缀的 `Urine pH` 仍正常解析。
+    """
+
+    assert METRIC_ALIASES.get(normalize_metric_name("pH")) is None
+    assert METRIC_ALIASES.get(normalize_metric_name("Urine pH")) == "urine_ph"
 
 
 @pytest.mark.parametrize(("report_name", "expected"), sorted(REPORT_NAMES.items()))
@@ -82,12 +92,11 @@ def test_adapter_resolves_a_urinalysis_row() -> None:
     assert [item.metric_code for item in result.request.observations] == ["urine_leucocytes"]
 
 
-def test_unitless_urinalysis_rows_are_dropped_upstream_not_mismapped() -> None:
-    """`SG`/`pH` 在报告里**没有单位**，适配器要求单位，于是它们被丢弃。
+def test_unitless_urinalysis_rows_now_reach_the_observation() -> None:
+    """`SG`/`pH` 无量纲，报告上不印单位；T6 起它们过闸门而不再被丢弃。
 
-    这不是本片能修的：它是适配器的单位闸门，不是名称解析问题。如实钉住这个
-    现状，免得有人以为这两个指标已经端到端可用。丢弃是显式的（落
-    `missing_unit`），不是静默错配。
+    先前这里钉的是「被丢弃」——那是适配器把「没有单位」与「缺数据」混为一谈。
+    T6 给无量纲指标补了规范单位，本片随之修正。
     """
 
     result = build_evidence_request(
@@ -104,5 +113,7 @@ def test_unitless_urinalysis_rows_are_dropped_upstream_not_mismapped() -> None:
         confirmed=True,
     )
 
-    assert list(result.request.observations) == []
-    assert result.skipped[0]["reason"] == "missing_unit"
+    observations = list(result.request.observations)
+    assert [item.metric_code for item in observations] == ["urine_specific_gravity"]
+    assert observations[0].unit == "1"
+    assert result.skipped == ()

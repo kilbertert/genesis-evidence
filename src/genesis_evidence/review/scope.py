@@ -525,6 +525,38 @@ def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
     return tuple(sorted(aliases))
 
 
+def _ascii_token_spans(value: str) -> list[tuple[int, int]]:
+    """Spans of maximal ASCII word runs, in ``compact`` coordinates.
+
+    ``compact`` has all separators removed, so word boundaries are otherwise lost:
+    ``Immunoglobulin G`` and ``Globulin`` both contain ``globulin``. Two rules use
+    these spans, because one is not enough:
+
+    * a **long** ASCII alias must start a token \u2014 ``globulin`` may claim ``Globulin``
+      but not ``Immunoglobulin``;
+    * a **short** one (``ck``, ``psa``) must *be* a whole token, or ``ck`` claims
+      ``CKD`` (chronic kidney disease) as creatine kinase.
+    """
+
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    run_start: int | None = None
+    for char in normalized:
+        is_ascii_word = bool(re.fullmatch(r"[0-9a-z]", char))
+        if is_ascii_word and run_start is None:
+            run_start = offset
+        elif not is_ascii_word and run_start is not None:
+            spans.append((run_start, offset))
+            run_start = None
+        # Must mirror `_compact_text`'s class exactly, or the offsets drift.
+        if re.fullmatch(r"[0-9a-z\u4e00-\u9fff]", char):
+            offset += 1
+    if run_start is not None:
+        spans.append((run_start, offset))
+    return spans
+
+
 def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
     """Every span a metric's floor aliases cover, longest-first.
 
@@ -533,20 +565,26 @@ def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
     only at the first occurrence would let the longer alias suppress the short one
     and drop the second metric's scope entirely.
 
-    Short ASCII floor aliases (``psa``, ``ck``) must land on a **token boundary**
-    so ``psa`` cannot match "ca**psa**icin"; longer ones and Chinese labels match
-    as plain substrings, so ``\u94a0`` still matches \u8840\u94a0.
+    An **ASCII** floor alias must begin a token, and a short one must be a whole
+    token \u2014 see ``_ascii_token_spans``. Chinese labels are not word-delimited, so
+    ``\u94a0`` still matches \u8840\u94a0 as a substring.
     """
 
     compact = _compact_text(value)
-    tokens = _token_set(value)
+    token_spans = _ascii_token_spans(value)
+    token_starts = {start for start, _ in token_spans}
     spans: set[tuple[int, int]] = set()
     for alias in _derived_outcome_aliases(metric_code):
-        if alias.isascii() and len(alias) <= 3 and alias not in tokens:
-            continue
         start = compact.find(alias)
         while start >= 0:
-            spans.add((start, start + len(alias)))
+            end = start + len(alias)
+            if not alias.isascii():
+                spans.add((start, end))
+            elif len(alias) <= 3:
+                if (start, end) in token_spans:
+                    spans.add((start, end))
+            elif start in token_starts:
+                spans.add((start, end))
             start = compact.find(alias, start + 1)
     return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
 

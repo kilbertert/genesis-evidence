@@ -71,6 +71,13 @@ METRIC_LABELS = {
     "ck": "肌酸激酶",
     "ck_mb": "肌酸激酶同工酶",
     "ldh": "乳酸脱氢酶",
+    # 肝功能扩展（T6）。`alp` 已在首批，此处不重复、不改归属。
+    "total_bilirubin": "总胆红素",
+    "direct_bilirubin": "直接胆红素",
+    "indirect_bilirubin": "间接胆红素",
+    "total_protein": "总蛋白",
+    "globulin": "球蛋白",
+    "albumin_globulin_ratio": "白球比",
 }
 
 
@@ -156,7 +163,27 @@ REPORT_METRIC_ALIASES = {
     "Erythrocytes (microscopy)": "urine_erythrocytes",
     "Specific Gravity": "urine_specific_gravity",
     "SG": "urine_specific_gravity",
-    "pH": "urine_ph",
+    # **裸名 `pH` 不登记**：血气分析也报 pH，报告上两者都不带单位，名字本身
+    # 不决定标本来源。没有标本字段可查，就只能 fail-closed——否则一份血气 pH
+    # 会产出泌尿系统的 finding。「Specific Gravity」无此歧义（常规套餐里是尿检）。
+    # 等 T9 把未覆盖项显式化，或用上标本字段再接。
+    # 肝功能扩展（T6）。报告上英文全称与短代号并存。
+    "Total Bilirubin": "total_bilirubin",
+    "TBIL": "total_bilirubin",
+    "Direct Bilirubin": "direct_bilirubin",
+    "DBIL": "direct_bilirubin",
+    "Indirect Bilirubin": "indirect_bilirubin",
+    "IBIL": "indirect_bilirubin",
+    "Total Protein": "total_protein",
+    "TP": "total_protein",
+    "Globulin": "globulin",
+    "GLB": "globulin",
+    "Albumin/Globulin ratio": "albumin_globulin_ratio",
+    "A/G": "albumin_globulin_ratio",
+    # `Alkaline Phosphatase` 只是补**别名**：它的归属（首批骨质疏松）本片不改，
+    # 只让报告的英文全称能解析到既有的 `alp`。
+    "Alkaline Phosphatase": "alp",
+    # `AST/ALT` 是**比值**，不是任一单项，暂不登记（见 PR 说明）。
 }
 
 
@@ -165,3 +192,16 @@ METRIC_ALIASES = {
     **{normalize_metric_name(label): code for code, label in METRIC_LABELS.items()},
     **{normalize_metric_name(name): code for name, code in REPORT_METRIC_ALIASES.items()},
 }
+
+#: 无量纲指标：报告上**本就不印单位**，值本身是比值/指数/对数。
+#: 适配器要求每个观测带单位，这三项因此会被 `missing_unit` 静默丢弃——
+#: 实测它们确实以空单位出现（比值 6 行、尿 pH 6 行、比重 7 行）。
+#: 这里给它们一个规范的无量纲单位，让它们能过闸门，而不是放宽闸门。
+DIMENSIONLESS_METRICS = frozenset(
+    {
+        "albumin_globulin_ratio",
+        "urine_ph",
+        "urine_specific_gravity",
+    }
+)
+DIMENSIONLESS_UNIT = "1"

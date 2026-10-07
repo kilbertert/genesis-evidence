@@ -235,6 +235,20 @@ CONDITIONS = (
         "心血管内科",
         "复查心肌酶并到心血管内科评估",
     ),
+    ConditionDefinition(
+        "COND_LIVER_FUNCTION_PATTERN",
+        "肝功能异常提示",
+        (
+            "total_bilirubin",
+            "direct_bilirubin",
+            "indirect_bilirubin",
+            "total_protein",
+            "globulin",
+            "albumin_globulin_ratio",
+        ),
+        "消化内科",
+        "复查肝功能并到消化内科评估",
+    ),
 )
 
 
