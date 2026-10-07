@@ -222,6 +222,45 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
     return project_published_cards(rows)
 
 
+def _v2_patient_reply(
+    patient_findings: list[dict[str, object]],
+    unmatched: list[dict[str, object]],
+    skipped: object,
+) -> dict[str, object]:
+    """The v2 patient envelope, including the unreadable rider (T9).
+
+    Same fact set as v3, expressed with v2's flatter finding shape. The rider goes
+    on every branch for the same reason as v3, and lives in `summary` for the same
+    reason: `patient_reply` is parsed by health-flow under `extra="forbid"`.
+    """
+
+    uncovered = sum(
+        1
+        for item in (skipped or ())  # type: ignore[union-attr]
+        if str(item.get("reason", "")) == "unknown_metric_code"
+    )
+    if patient_findings:
+        summary = (
+            f"根据已确认的报告指标，发现 {len(patient_findings)} 个有正式知识卡支持的健康问题。"
+        )
+    elif unmatched:
+        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
+    else:
+        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
+    if uncovered:
+        summary += (
+            f"报告另有 {uncovered} 项不在当前解读范围内，"
+            "本次未作解读，需要时可请医生一同查看。"
+        )
+    return {
+        "title": "体检报告解读与健康风险提示",
+        "summary": summary,
+        "findings": patient_findings,
+        "unmatched_count": len(unmatched),
+        "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
+    }
+
+
 def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
     """Flatten the v3 condition groups for clients that still speak v2."""
 
@@ -300,19 +339,5 @@ def _legacy_v2_response(result: dict[str, object]) -> dict[str, object]:
         "unmatched": unmatched,
         "skipped": result["skipped"],
         "message": result["message"],
-        "patient_reply": {
-            "title": "体检报告解读与健康风险提示",
-            "summary": (
-                f"根据已确认的报告指标，发现 {len(patient_findings)} 个有正式知识卡支持的健康问题。"
-                if patient_findings
-                else (
-                    "发现异常指标，但当前没有对应的已审核知识卡。"
-                    if unmatched
-                    else "当前没有发现可由已发布知识卡支持的异常指标。"
-                )
-            ),
-            "findings": patient_findings,
-            "unmatched_count": len(unmatched),
-            "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
-        },
+        "patient_reply": _v2_patient_reply(patient_findings, unmatched, result["skipped"]),
     }

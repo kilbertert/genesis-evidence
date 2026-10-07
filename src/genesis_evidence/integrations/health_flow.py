@@ -26,8 +26,24 @@ _LOWER_RE = re.compile(rf"(?:>|>=|≥)\s*(?P<low>{_NUMBER})")
 
 @dataclass(frozen=True, slots=True)
 class HealthFlowAdapterResult:
+    """What crossed the boundary, and what could not.
+
+    ``uncovered`` is ``skipped`` rows selected by reason, so a caller can hand them
+    to the reply builder without re-deriving the predicate.
+
+    Its size is **not** the abnormal-unreadable count, and must not be presented as
+    one: alias lookup happens before the value or reference range is read, so the set
+    mixes genuinely abnormal rows with in-range ones and ones that never had a usable
+    number. Narrowing it would mean reading each row's value first — a change to how
+    the adapter decides, not to how the reply is worded, and out of scope here.
+    """
+
     request: EvidenceMatchRequest
     skipped: tuple[dict[str, str], ...]
+
+    @property
+    def uncovered(self) -> tuple[dict[str, str], ...]:
+        return tuple(item for item in self.skipped if item.get("reason") == "unknown_metric")
 
 
 def build_evidence_request(
