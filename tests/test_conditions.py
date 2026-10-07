@@ -40,15 +40,16 @@ def test_first_batch_conditions_all_remain() -> None:
     assert not (FIRST_BATCH_CODES - set(CONDITION_BY_CODE)), (
         "first batch missing from the by-code index"
     )
-    # Both collections above are set-valued, so a duplicate code is invisible to
-    # them: two entries collapse to one and every set comparison still holds. The
-    # sequence length is what catches it, so compare against the raw sequence, not
-    # against a set derived from it.
+    # Both assertions above are set-valued, so a duplicate code is invisible to
+    # them: two entries collapse to one and every set comparison still holds. Count
+    # over the raw sequence instead — `list` sees the duplicate, `set` cannot.
+    #
+    # Deliberately not also asserting `set(CONDITION_BY_CODE) == set(codes)`: the
+    # index is built by comprehension over `CONDITIONS`, so that equality holds by
+    # construction and the assertion can never fail. A duplicate is the one way the
+    # index can lose an entry, and it is caught here.
     duplicates = sorted({code for code in codes if codes.count(code) > 1})
     assert not duplicates, f"duplicate condition code in the catalog: {duplicates}"
-    assert len(CONDITION_BY_CODE) == len(set(CONDITION_BY_CODE)), (
-        "the by-code index lost an entry to a duplicate code"
-    )
 
 
 def test_later_batch_conditions_are_the_declared_ones() -> None:
