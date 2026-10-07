@@ -505,6 +505,88 @@ def _compact_text(value: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", unicodedata.normalize("NFKC", value).casefold())
 
 
+def _derived_outcome_aliases(metric_code: str) -> tuple[str, ...]:
+    """The floor aliases for a canonical metric: its code and its Chinese label.
+
+    `_PROFILE_OUTCOME_ALIASES` above holds *synonyms* (``sbp``, ``fbg``, ``urate``).
+    This is the set that must exist for **every** metric in `METRIC_LABELS`, because
+    a metric the resolver cannot match can never be assigned a ``metric:`` scope \u2014
+    and a card whose scope is not ``metric:<code>`` is never served to a patient.
+
+    Keeping it derived, rather than a second hand-maintained list, is the point:
+    the two registries drift silently, and the only symptom is a missing card long
+    after the metric was added.
+    """
+
+    aliases = {_compact_text(metric_code)}
+    label = METRIC_LABELS.get(metric_code)
+    if label:
+        aliases.add(_compact_text(label))
+    return tuple(sorted(aliases))
+
+
+def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
+    """Every span a metric's floor aliases cover, longest-first.
+
+    **All** occurrences, not just the first: a compound outcome like ``CK-MB / CK``
+    names two metrics, and the standalone ``CK`` sits after the ``CK-MB``. Looking
+    only at the first occurrence would let the longer alias suppress the short one
+    and drop the second metric's scope entirely.
+
+    Short ASCII floor aliases (``psa``, ``ck``) must land on a **token boundary**
+    so ``psa`` cannot match "ca**psa**icin"; longer ones and Chinese labels match
+    as plain substrings, so ``\u94a0`` still matches \u8840\u94a0.
+    """
+
+    compact = _compact_text(value)
+    tokens = _token_set(value)
+    spans: set[tuple[int, int]] = set()
+    for alias in _derived_outcome_aliases(metric_code):
+        if alias.isascii() and len(alias) <= 3 and alias not in tokens:
+            continue
+        start = compact.find(alias)
+        while start >= 0:
+            spans.add((start, start + len(alias)))
+            start = compact.find(alias, start + 1)
+    return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
+
+
+def _derived_alias_matches(metric_code: str, value: str) -> bool:
+    """Match a floor alias, letting the **most specific** metric own the text.
+
+    Floor aliases nest \u2014 ``ck`` inside ``ck_mb``, ``urineph`` inside
+    ``urinephosphate``. Plain substring matching lets the short metric claim the
+    longer one's text, and a card published under that wrong scope is served to a
+    patient whose abnormal metric it does not describe. So a candidate span is
+    rejected when a **longer** catalog metric's alias overlaps exactly it \u2014
+    longest match wins \u2014 but the metric still matches if any **other** occurrence
+    is unclaimed.
+    """
+
+    spans = _derived_match_spans(metric_code, value)
+    if not spans:
+        return False
+    rivals = [
+        (other, span)
+        for other in METRIC_LABELS
+        if other != metric_code and other not in _PROFILE_OUTCOME_ALIASES
+        for span in _derived_match_spans(other, value)
+    ]
+    for span in spans:
+        if not any(
+            (rival[1] - rival[0]) > (span[1] - span[0])
+            and rival[0] < span[1]
+            and span[0] < rival[1]
+            for _, rival in rivals
+        ):
+            return True
+    return False
+
+
+def _token_set(value: str) -> set[str]:
+    return set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
+
+
 def _metric_outcome_matches(metric_code: str, value: str) -> bool:
     compact = _compact_text(value)
     if metric_code in {"hdl_c", "ldl_c", "total_cholesterol"} and "ratio" in value.casefold():
@@ -530,11 +612,19 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         token in compact for token in ("tscore", "t评分", "t值")
     ):
         return False
-    aliases = _PROFILE_OUTCOME_ALIASES.get(metric_code, ())
+    if metric_code not in _PROFILE_OUTCOME_ALIASES:
+        # Floor aliases go through their own matcher: token-boundary for short
+        # ASCII codes, and longest-match-wins so a shorter metric cannot claim a
+        # longer metric's text (`ck` vs `CK-MB`, `urine_ph` vs `Urine phosphate`).
+        return _derived_alias_matches(metric_code, value)
+    aliases = _PROFILE_OUTCOME_ALIASES[metric_code]
+    # Short codes that can appear inside unrelated words ("ck" in "check") are matched
+    # on token boundaries only; the rest may match as substrings. Registry metrics
+    # keep their historical matching byte-for-byte.
     risky_abbreviations = {"alt", "ast", "alp"}
     if any(alias in compact for alias in aliases if alias not in risky_abbreviations):
         return True
-    tokens = set(re.findall(r"[0-9a-z]+", unicodedata.normalize("NFKC", value).casefold()))
+    tokens = _token_set(value)
     if any(alias in tokens for alias in aliases if alias in risky_abbreviations):
         return True
     if metric_code == "systolic_blood_pressure":
@@ -598,8 +688,10 @@ def _profile_scopes(
     scopes = {
         f"metric:{metric_code}": METRIC_LABELS[metric_code]
         for metric_code in (condition.metrics if condition else ())
-        if metric_code in _PROFILE_OUTCOME_ALIASES
-        and _metric_outcome_matches_text(metric_code, topic_outcome)
+        # No membership test against the synonym registry: every metric the catalog
+        # declares must be scope-assignable, or its cards could never reach a
+        # patient. `_metric_outcome_matches_text` falls back to the derived aliases.
+        if _metric_outcome_matches_text(metric_code, topic_outcome)
         and _metric_outcome_matches_text(metric_code, result_outcome)
     }
     for component in _topic_outcome_components(topic_outcome):

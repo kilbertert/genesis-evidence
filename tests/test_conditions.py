@@ -20,7 +20,24 @@ FIRST_BATCH_CODES = frozenset(
 
 #: 第二批及其后。与首批**分开断言**：这里增删是预期内的扩表，不是回归。
 #: 声明在此、断言在下一处；维护者新增健康问题时把 code 加进来。
-LATER_BATCH_CODES: frozenset[str] = frozenset()
+LATER_BATCH_CODES: frozenset[str] = frozenset(
+    {
+        "COND_OVERWEIGHT_OBESITY",
+        "COND_METABOLIC_SYNDROME",
+        "COND_COGNITIVE_DECLINE_RISK",
+        "COND_AMD_RISK",
+        "COND_DRY_EYE_RISK",
+        "COND_INSOMNIA_RISK",
+        "COND_OSTEOARTHRITIS_RISK",
+        "COND_MALE_OSTEOPOROSIS",
+        "COND_BPH_RISK",
+        "COND_MENOPAUSE_HEALTH_RISK",
+        "COND_ELECTROLYTE_DISTURBANCE",
+        "COND_INFECTION_INFLAMMATION_PATTERN",
+        "COND_URINARY_ABNORMALITY",
+        "COND_CARDIAC_ENZYME_PATTERN",
+    }
+)
 
 
 def test_first_batch_conditions_all_remain() -> None:

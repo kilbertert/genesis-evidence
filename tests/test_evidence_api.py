@@ -2,6 +2,7 @@
 from fastapi.testclient import TestClient
 
 from genesis_evidence.core.contracts import EvidenceMatchResponse
+from genesis_evidence.core.matching import CONDITIONS_BY_METRIC
 from genesis_evidence.core.store import Database
 from genesis_evidence.integrations.health_flow import build_evidence_request
 from genesis_evidence.portal.api import create_app
@@ -224,8 +225,17 @@ def test_evidence_api_returns_only_published_cards_and_audit(tmp_path) -> None:
         "epidemiology_background": "",
     }
     unmatched_by_id = {item["observation_id"]: item for item in body["unmatched"]}
-    assert unmatched_by_id["metric-1"]["condition_names"] == ["代谢相关脂肪性肝病风险"]
-    assert unmatched_by_id["metric-unmatched"]["condition_names"] == ["高尿酸血症 / 痛风风险"]
+    # Derived from the catalog, minus the condition this observation *did* match:
+    # every other condition that claims the same metric still has no card for it,
+    # and each must be named. A literal list would silently rot as the catalog grows.
+    assert unmatched_by_id["metric-1"]["condition_names"] == [
+        condition.name
+        for condition in CONDITIONS_BY_METRIC["fasting_glucose"]
+        if condition.code != "COND_PREDIABETES"
+    ]
+    assert unmatched_by_id["metric-unmatched"]["condition_names"] == [
+        condition.name for condition in CONDITIONS_BY_METRIC["uric_acid"]
+    ]
 
     assert {item["reason"] for item in body["skipped"]} == {"within_reference_range"}
     with database.connect() as connection:
@@ -272,8 +282,12 @@ def test_metric_scope_prevents_cross_outcome_card_match(tmp_path) -> None:
             "observation_id": "metric-triglycerides",
             "metric_code": "triglycerides",
             "metric_label": "甘油三酯",
-            "condition_codes": ["COND_DYSLIPIDEMIA", "COND_MASLD_RISK"],
-            "condition_names": ["血脂异常", "代谢相关脂肪性肝病风险"],
+            "condition_codes": [
+                condition.code for condition in CONDITIONS_BY_METRIC["triglycerides"]
+            ],
+            "condition_names": [
+                condition.name for condition in CONDITIONS_BY_METRIC["triglycerides"]
+            ],
             "reason": "no_published_knowledge_card",
         }
     ]
@@ -543,10 +557,18 @@ def test_partial_condition_coverage_keeps_unmatched_metric_condition_link(tmp_pa
     body = response.json()
     assert [finding["condition_code"] for finding in body["findings"]] == ["COND_DYSLIPIDEMIA"]
     assert [item["metric_code"] for item in body["findings"][0]["evidence_items"]] == ["ldl_c"]
-    assert body["unmatched"][0]["observation_id"] == "metric-triglycerides"
-    assert body["unmatched"][0]["condition_names"] == [
-        "血脂异常",
-        "代谢相关脂肪性肝病风险",
+    # Look the entry up by id rather than by position: a metric can now also be
+    # reported unmatched for *other* conditions that claim it, so the index of a
+    # given observation is not stable.
+    triglycerides = next(
+        item for item in body["unmatched"] if item["observation_id"] == "metric-triglycerides"
+    )
+    # The entry must name **every** condition that claims the metric, in catalog
+    # order. Written against the catalog rather than a literal list: which
+    # conditions claim `triglycerides` is data, and it grows as the catalog does —
+    # the property under test is that the link is complete, not its members.
+    assert triglycerides["condition_names"] == [
+        condition.name for condition in CONDITIONS_BY_METRIC["triglycerides"]
     ]
 
 
