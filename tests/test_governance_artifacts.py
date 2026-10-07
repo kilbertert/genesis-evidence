@@ -33,12 +33,14 @@ ADR_NAMES = (
     "0005-review-workbench-independent-reading-regions.md",
     "0006-retire-product-capability-and-move-goods-authority-to-the-mall.md",
     "0007-component-centric-evidence.md",
+    "0008-reach-inputs-and-population-attributes.md",
 )
 
 CATALOG_AXIS_TERMS = (
     "`condition` / 健康问题",
     "健康方向",
     "触达方式",
+    "人群属性输入",
     "可触达",
     "`metric_code`",
     "报告项目名",
