@@ -61,7 +61,7 @@ Missing delivery credentials produce `agent:blocked`; there is no non-triggering
 
 ## Providers
 
-The configured Sandcastle profile is server-global: `claude`, `claude-stepfun`,
+The configured Sandcastle profile is server-global: `claude`, `claude-deepseek`,
 or `claude-deepseek`. Set `AFK_PROFILE` for local runs or the repository
 variable for Actions; no project-side credential is needed.
 
@@ -69,11 +69,11 @@ Each is one settings file the host owns, mounted read-only into the sandbox:
 
 - `claude` talks to the Anthropic API with whatever credential the host shell
   already exports.
-- `claude-stepfun` points Claude Code at StepFun's native Anthropic Messages
-  API through `~/cliproxyapi/settings.stepfun.json`, which holds
+- `claude-deepseek` points Claude Code at the host-local cli-proxy-api relay's Anthropic Messages
+  API through `~/cliproxyapi/settings.deepseek.json`, which holds
   `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` plus the three
   `ANTHROPIC_DEFAULT_*_MODEL` entries. Override the path with
-  `AFK_STEPFUN_SETTINGS` when the file lives elsewhere.
+  `AFK_DEEPSEEK_SETTINGS` when the file lives elsewhere.
 - `claude-deepseek` points Claude Code at the **local relay**
   (`cli-proxy-api`, `127.0.0.1:8317`) through
   `~/cliproxyapi/settings.deepseek.json`. Override the path with
@@ -86,7 +86,7 @@ Each is one settings file the host owns, mounted read-only into the sandbox:
 > (measured: bridge cannot connect; host network reaches it). The cost is real
 > and deliberate: a host-network sandbox **loses Docker's bridge isolation** and
 > can reach other host-loopback services. Only profiles whose endpoint is
-> host-loopback need this; `claude` and `claude-stepfun` talk to public HTTPS
+> host-loopback need this; `claude` and `claude-deepseek` talk to public HTTPS
 > origins and stay on the default bridge. If the relay is ever reached by a
 > non-loopback address, drop the profile from `LOOPBACK_PROFILES`.
 
