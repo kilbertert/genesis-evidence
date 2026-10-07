@@ -35,6 +35,16 @@ ADR_NAMES = (
     "0007-component-centric-evidence.md",
 )
 
+CATALOG_AXIS_TERMS = (
+    "`condition` / 健康问题",
+    "健康方向",
+    "触达方式",
+    "可触达",
+    "`metric_code`",
+    "报告项目名",
+    "别名表",
+)
+
 COMPONENT_AXIS_TERMS = (
     "成分 / component",
     "`component_key`",
@@ -116,6 +126,15 @@ def test_context_pins_the_component_axis_vocabulary() -> None:
 
     for term in COMPONENT_AXIS_TERMS:
         assert term in context, f"component-axis term not pinned: {term}"
+
+
+def test_context_pins_the_catalog_axis_vocabulary() -> None:
+    """The two terms this expansion turns on, so they cannot be conflated later."""
+
+    context = _read("GLOSSARY.md")
+
+    for term in CATALOG_AXIS_TERMS:
+        assert term in context, f"catalog-axis term not pinned: {term}"
 
 
 def test_context_is_glossary_only_and_adrs_are_separate() -> None:
