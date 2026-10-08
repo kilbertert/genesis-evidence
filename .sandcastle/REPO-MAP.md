@@ -13,10 +13,15 @@ answer how they work.
 
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
+- console script "genesis-evidence-api": genesis_evidence.portal.api:main (pyproject.toml)
+- console script "genesis-evidence-review": genesis_evidence.review.api:main (pyproject.toml)
+- console script "genesis-evidence-worker": genesis_evidence.literature.extraction_worker:main (pyproject.toml)
+- console script "genesis-evidence-backlog": genesis_evidence.literature.backlog:main (pyproject.toml)
 
 ## Tests
 
 - tests/ — 50 test file(s)
+- pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
 
