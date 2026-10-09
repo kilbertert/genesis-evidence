@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS papers (
     publication_status TEXT NOT NULL DEFAULT 'unknown'
         CHECK (publication_status IN ('formal', 'preprint', 'unknown')),
     study_design_candidate TEXT,
+    -- A schema string cannot import Python, so this CHECK stays literal.
+    -- `core.publication_integrity.INTEGRITY_STATUSES` is the one vocabulary and
+    -- `tests/test_publication_integrity.py` extracts this set and compares it,
+    -- so the two cannot drift.
     integrity_status TEXT NOT NULL DEFAULT 'unknown'
         CHECK (integrity_status IN (
             'clear', 'updated', 'corrected', 'expression_of_concern', 'retracted', 'unknown'
