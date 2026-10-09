@@ -1,4 +1,9 @@
-"""Retraction, correction, and publication-integrity status checks."""
+"""Retraction, correction, and publication-integrity status checks.
+
+The *vocabulary* is owned by `core.publication_integrity` (#264); this module
+derives its enum from it, so the values the providers report and the values the
+store accepts cannot diverge.
+"""
 
 from __future__ import annotations
 
@@ -7,16 +12,31 @@ from enum import StrEnum
 from typing import Any, Protocol
 from urllib.parse import quote
 
+from ..core.publication_integrity import INTEGRITY_STATUSES
 from .http import HttpClient, HttpRequestError
 
 
 class IntegrityStatus(StrEnum):
+    """The provider-facing spelling of the one vocabulary.
+
+    Members are written out one by one **on purpose**: `IntegrityStatus.CLEAR` is a
+    name several call sites read, and generating members dynamically would make them
+    invisible to a type checker. `tests/test_publication_integrity.py` asserts the
+    member values *are* `INTEGRITY_STATUSES`, so the vocabulary has one definition
+    and this is a checked view of it.
+    """
+
     CLEAR = "clear"
     UPDATED = "updated"
     CORRECTED = "corrected"
     EXPRESSION_OF_CONCERN = "expression_of_concern"
     RETRACTED = "retracted"
     UNKNOWN = "unknown"
+
+
+assert tuple(member.value for member in IntegrityStatus) == INTEGRITY_STATUSES, (
+    "IntegrityStatus has drifted from core.publication_integrity.INTEGRITY_STATUSES"
+)
 
 
 @dataclass(frozen=True, slots=True)

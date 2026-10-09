@@ -31,6 +31,7 @@ from ..consistency import NEEDS_REVIEW, is_source_based
 from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
+from ..publication_integrity import admits_paper, integrity_sql
 from ..synthesis_eligibility import is_component_poolable
 from .card_evidence import (
     CARD_CLAIM_TYPE,
@@ -87,7 +88,7 @@ class ReviewStore:
             ).fetchone()
             if paper is None:
                 raise ValueError("paper not found")
-            if paper["integrity_status"] != "clear":
+            if not admits_paper(str(paper["integrity_status"])):
                 raise ValueError("paper integrity must be clear before internal admission")
             if not paper["source_available"]:
                 raise ValueError("paper source identity must be present before internal admission")
@@ -377,7 +378,7 @@ class ReviewStore:
                 raise ValueError("claim not found")
             if claim["admission_status"] != "internally_admitted":
                 raise ValueError("paper must be internally admitted before claim review")
-            if decision == "approved" and claim["integrity_status"] != "clear":
+            if decision == "approved" and not admits_paper(str(claim["integrity_status"])):
                 raise ValueError("claim cannot be approved while paper integrity is not clear")
             if decision == "approved" and not claim["result_id"]:
                 raise ValueError("claim requires a structured Result before approval")
@@ -491,7 +492,7 @@ class ReviewStore:
             if any(
                 row["decision"] != "approved"
                 or row["condition_code"] != condition_code
-                or row["integrity_status"] != "clear"
+                or not admits_paper(str(row["integrity_status"]))
                 or row["admission_status"] != "internally_admitted"
                 for row in rows
             ):
@@ -558,7 +559,7 @@ class ReviewStore:
                 JOIN results r ON r.id = c.result_id
                 JOIN papers p ON p.id = c.paper_id
                 JOIN paper_admissions pa ON pa.paper_id = p.id
-                WHERE p.integrity_status = 'clear'
+                WHERE {integrity_sql("p")}
                     AND p.publication_status = 'formal'
                     AND pa.status = 'internally_admitted'
                     AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
@@ -882,7 +883,7 @@ class ReviewStore:
                                 )
                         ) THEN 'completed'
                         WHEN pe.id IS NULL THEN 'blocked'
-                        WHEN p.integrity_status <> 'clear' THEN 'blocked'
+                        WHEN {integrity_sql("p", admits=False)} THEN 'blocked'
                         WHEN NOT EXISTS (
                             SELECT 1 FROM collection_papers cp
                             JOIN collection_runs cr ON cr.id = cp.run_id
@@ -1131,7 +1132,7 @@ class ReviewStore:
                     JOIN papers p ON p.id = c.paper_id
                     JOIN paper_admissions pa ON pa.paper_id = p.id
                     WHERE cr.decision = 'approved' AND cr.condition_code = ?
-                        AND p.integrity_status = 'clear' AND p.publication_status = 'formal'
+                        AND {integrity_sql("p")} AND p.publication_status = 'formal'
                         AND pa.status = 'internally_admitted'
                         AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
                         AND cr.corrected_study_design NOT IN (
@@ -1314,7 +1315,7 @@ class ReviewStore:
                             JOIN collection_runs run ON run.id = cp.run_id
                             JOIN evidence_topics topic ON topic.id = run.topic_id
                             WHERE cr.condition_code = ? AND cr.decision = 'approved'
-                                AND p.integrity_status = 'clear'
+                                AND {integrity_sql("p")}
                                 AND p.publication_status = 'formal'
                                 AND pa.status = 'internally_admitted'
                                 AND c.candidate_claim_type = '{CARD_CLAIM_TYPE}'
@@ -1546,7 +1547,7 @@ class ReviewStore:
             f"""
             SELECT count(*) AS total,
                 sum(CASE WHEN cr.decision <> 'approved'
-                    OR p.integrity_status <> 'clear'
+                    OR {integrity_sql("p", admits=False)}
                     OR p.publication_status <> 'formal'
                     OR pa.status <> 'internally_admitted'
                     OR p.doi IS NULL OR trim(p.doi) = ''
@@ -2270,10 +2271,14 @@ def _review_guidance(
             "id": "identity_integrity",
             "label": "论文身份与完整性",
             "status": "pass"
-            if paper.get("integrity_status") == "clear" and source_count and len(studies) == 1
+            if admits_paper(str(paper.get("integrity_status")))
+            and source_count
+            and len(studies) == 1
             else "blocked",
             "detail": "来源、完整性状态和唯一 Study/Publication 关系齐全。"
-            if paper.get("integrity_status") == "clear" and source_count and len(studies) == 1
+            if admits_paper(str(paper.get("integrity_status")))
+            and source_count
+            and len(studies) == 1
             else "完整性必须为 clear，且需要来源和唯一 Study/Publication 关系。",
         },
         {
