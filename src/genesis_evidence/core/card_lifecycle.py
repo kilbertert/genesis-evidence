@@ -25,6 +25,14 @@ from __future__ import annotations
 
 from typing import Literal
 
+# The two grade thresholds are named slices of the evidence-strength vocabulary,
+# not of the lifecycle; `core.evidence_strength` (#238) owns the vocabulary they
+# slice, so a change to "which strengths a patient may see" is one edit there.
+from .evidence_strength import (
+    ACTION_THRESHOLD_STRENGTHS,
+    PATIENT_VISIBLE_STRENGTHS,
+)
+
 #: The one status vocabulary. Every other declaration derives from it.
 CARD_STATUSES: tuple[str, ...] = (
     "draft",
@@ -50,15 +58,15 @@ NON_TERMINAL_STATUSES: frozenset[str] = frozenset(CARD_STATUSES) - TERMINAL_STAT
 RETIRED_STATUS = "stale"
 
 #: Grades whose strength is enough to carry a patient-visible context card.
-#: `very_low` is deliberately absent: such a card is draftable and reviewable,
-#: but may not be published.
-PATIENT_VISIBLE_GRADES: frozenset[str] = frozenset({"high", "moderate", "low"})
+#: Derived from `core.evidence_strength`, which owns the vocabulary; the name is
+#: kept here because `is_patient_visible` is the lifecycle predicate that reads it.
+PATIENT_VISIBLE_GRADES: frozenset[str] = PATIENT_VISIBLE_STRENGTHS
 
 #: The grades that additionally clear the action-advice threshold. A different
 #: question from PATIENT_VISIBLE_GRADES — it decides the message a patient reads,
 #: not whether the card appears — so it is a separate declaration rather than a
 #: reuse.
-ACTION_THRESHOLD_GRADES: frozenset[str] = frozenset({"high", "moderate"})
+ACTION_THRESHOLD_GRADES: frozenset[str] = ACTION_THRESHOLD_STRENGTHS
 
 #: The legal transition graph, as data. A status absent as a key has no legal
 #: outgoing move: `published`, `rejected` and `stale` are sinks here, and a

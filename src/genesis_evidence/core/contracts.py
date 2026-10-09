@@ -12,9 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # Derived from the one vocabulary (#221); `core.card_lifecycle` owns the statuses.
 from .card_lifecycle import ACTION_THRESHOLD_GRADES, CardStatus
 
+# Derived from the one vocabulary (#238); `core.evidence_strength` owns the grades,
+# so a card's `grade`, a profile's `certainty`, and a finding's `evidence_strength`
+# cannot diverge from the values the store accepts.
+from .evidence_strength import CardGrade, EvidenceStrength
+
 CardContentLayer = Literal["context_only"]
 ActionStatus = Literal["not_available"]
-EvidenceStrength = Literal["high", "moderate", "low", "very_low", "mixed"]
 ReportStatus = Literal[
     "uploaded",
     "extracted",
@@ -88,7 +92,7 @@ class ClaimReference(BaseModel):
 class GradeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    rating: Literal["high", "moderate", "low", "very_low"]
+    rating: CardGrade
     reviewer: str = Field(min_length=1)
     rated_at: datetime
 
@@ -123,7 +127,7 @@ class PatientFinding(BaseModel):
     card_version: str = Field(min_length=1)
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: CardGrade
     needs_recheck: bool
     department: str
     epidemiology_background: str = ""
@@ -224,7 +228,7 @@ class PublishedEvidenceCard(BaseModel):
     scope_key: str = Field(min_length=1)
     version: str
     status: Literal["published"]
-    grade: Literal["high", "moderate", "low", "very_low"]
+    grade: CardGrade
     published_at: datetime
     evidence_profile_id: str
     patient_visible_body: str
@@ -239,7 +243,7 @@ class EvidenceSortingV2(BaseModel):
 
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: CardGrade
     needs_recheck: bool
     department: str
     epidemiology_background: str
@@ -256,7 +260,7 @@ class EvidenceFindingV2(BaseModel):
     source_observation_ids: list[str]
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: CardGrade
     needs_recheck: bool
     department: str
     recheck_direction: str
@@ -285,7 +289,7 @@ class PatientReplyFindingV2(BaseModel):
     condition_name: str
     urgency: Literal["routine", "soon", "urgent", "emergency"]
     abnormality_severity: int = Field(ge=0, le=3)
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: CardGrade
     needs_recheck: bool
     department: str
     recheck_direction: str
@@ -345,7 +349,7 @@ class EvidenceItem(BaseModel):
     metric_code: str
     metric_label: str
     card: PublishedEvidenceCard
-    evidence_strength: Literal["high", "moderate", "low", "very_low"]
+    evidence_strength: CardGrade
     source_observation_ids: list[str] = Field(min_length=1)
     source_observations: list[EvidenceSourceObservation] = Field(min_length=1)
 

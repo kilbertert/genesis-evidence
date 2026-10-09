@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..core.card_lifecycle import AUTONOMOUS_REVIEW_PATH, can_transition, is_patient_visible
 from ..core.components import pooled_by_label
 from ..core.consistency import NEEDS_REVIEW, is_source_based
+from ..core.evidence_strength import CardGrade, strength_for_score, strength_label
 from ..core.methodology import (
     RANDOMIZED_DESIGNS,
     RiskOfBiasTool,
@@ -55,7 +56,7 @@ class RiskOfBiasInput(BaseModel):
 class EvidenceProfileInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    certainty: Literal["high", "moderate", "low", "very_low"]
+    certainty: CardGrade
     scope_key: str | None = Field(default=None, min_length=1, max_length=160)
     # ADR 0007: the component identity a synthesised body pools over. Empty
     # means the body pools no component, which is only reachable for a
@@ -1234,7 +1235,7 @@ def _automatic_profile(
     )
     single_primary_study = is_single_primary_capped(study_count, designs)
     score = min(score, 1 if single_primary_study else 2)
-    certainty = {0: "very_low", 1: "low", 2: "moderate"}[score]
+    certainty = strength_for_score(score)
     target = (
         f"{dimensions['population']}; {dimensions['ingredient_name']} "
         f"({dimensions['ingredient_form']}, {dimensions['dose']}) versus "
@@ -1249,7 +1250,7 @@ def _automatic_profile(
             else "; AI-only synthesis is capped at moderate certainty."
         )
     )
-    certainty_label = {"moderate": "中等", "low": "低", "very_low": "极低"}[certainty]
+    certainty_label = strength_label(certainty)
     conclusion = (
         "结果整体支持上述研究关系。"
         if synthesis == {"supports"}

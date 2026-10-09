@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..core import evidence_strength
 from ..core.card_lifecycle import CARD_TRANSITIONS, CardStatus
 from ..core.store import Database, ObjectStore, PaperStore, ReviewStore
 from .service import (
@@ -338,6 +339,13 @@ def create_app(*, database_path: Path | str, api_key: str, reviewer_id: str) -> 
         # The workbench's buttons come from here, so the page cannot offer a
         # transition the store would refuse (#221).
         return {status: list(targets) for status, targets in CARD_TRANSITIONS.items()}
+
+    @app.get("/api/review/strength-vocabulary", dependencies=[Depends(principal)])
+    def strength_vocabulary() -> dict[str, object]:
+        # The workbench cannot import Python, so it fetches the vocabulary and the
+        # visibility sentence from here — the page's selector and its guidance can
+        # then not contradict the gate that publishes (#238).
+        return evidence_strength.strength_vocabulary()
 
     @app.post("/api/review/cards")
     def create_card(
