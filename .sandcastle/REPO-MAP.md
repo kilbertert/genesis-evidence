@@ -49,6 +49,7 @@ output and run residue omitted)
 artifacts/
   qa/
     evidence-strength-20261009.md
+    observation-disposition-20261009.md
     publication-integrity-20261009.md
   service-host/
     acceptance-20260928.md
