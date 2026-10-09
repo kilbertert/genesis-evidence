@@ -28,7 +28,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 49 test file(s, recursive)
+- tests/ — 50 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -101,6 +101,7 @@ scripts/
   check_review_workbench_layout.py
   check_schema.py
   check_scope.py
+  collect_topics.py
   rebuild_evidence_bodies.py
 src/
   genesis_evidence/
@@ -122,8 +123,7 @@ tests/
   test_condition_catalog_review_fixes.py
   test_conditions.py
   test_connectors.py
-  ... (40 more)
+  ... (41 more)
 acceptance.feature
-AGENTS.md
 ... (truncated — list the rest with `ls`/`find`)
 ```
