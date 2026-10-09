@@ -18,7 +18,9 @@ T9 的目标是 PRD #239 的第 12 条 user story：报告里每一项异常都�
   发请求**之前**就把读不懂的行挑走了。
 - **health-flow** 是名字解析发生的地方，也是读不懂的行变成
   `unknown_metric_code` 的地方。这些行留在 `build_observations_with_unmatched`
-  返回值里，**不跨服务边界**。
+  返回值里，**不跨服务边界**。（**订正 2026-10-09**：本仓适配器原先把同一件事记为
+  `unknown_metric`，而读取方只认 `unknown_metric_code`，两者是不同的拼写。现已收敛为
+  `core.disposition.UNKNOWN_METRIC` 一个名字，见 #261。）
 
 ## 二、本仓能做到的与本仓做不到的
 
@@ -58,5 +60,7 @@ T9 的目标是 PRD #239 的第 12 条 user story：报告里每一项异常都�
    传入本仓的 `patient_reply_v3`，或按同一措辞自行拼装；两者取一，不要各写一套。
 2. **口径**：决定未覆盖计数是否只算异常项。若决定只算，需要先在 health-flow 的
    适配器里补值/区间判定。
-3. **本仓**已就绪的部分：`patient_reply_v3` 的 rider、计数谓词
-   （`_uncovered_count`）、以及与 `unmatched` 的分工，都有测试钉住。
+3. **本仓**已就绪的部分（#261 已收敛为单一 owner）：`patient_reply_v3` 的 rider、
+   计数谓词（`core.disposition.unreadable_count`）、空结果措辞的**分类**判据
+   （`empty_summary`，正常/无法使用/未适用三类），以及 `patient_reply_v2` 现在也能
+   承载同一句 rider，都有测试钉住。

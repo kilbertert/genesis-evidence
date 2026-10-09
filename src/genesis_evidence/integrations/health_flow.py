@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.contracts import EvidenceMatchObservation, EvidenceMatchRequest
+from ..core.disposition import UNKNOWN_METRIC, is_unreadable
 from ..core.metrics import (
     DIMENSIONLESS_METRICS,
     DIMENSIONLESS_UNIT,
@@ -35,7 +36,9 @@ class HealthFlowAdapterResult:
     one: alias lookup happens before the value or reference range is read, so the set
     mixes genuinely abnormal rows with in-range ones and ones that never had a usable
     number. Narrowing it would mean reading each row's value first — a change to how
-    the adapter decides, not to how the reply is worded, and out of scope here.
+    the adapter decides, not to how the reply is worded; the wording it produces is
+    correspondingly "N items outside the current reading scope", never "N abnormal
+    items". See `docs/uncovered-reach-decision-2026-10-07.md` §4.
     """
 
     request: EvidenceMatchRequest
@@ -43,7 +46,15 @@ class HealthFlowAdapterResult:
 
     @property
     def uncovered(self) -> tuple[dict[str, str], ...]:
-        return tuple(item for item in self.skipped if item.get("reason") == "unknown_metric")
+        """The rows this service could not identify, by the one shared predicate.
+
+        The reader that consumes these (`patient_reply_v3`'s rider) asks the same
+        predicate, so the producer and the reader cannot test different spellings
+        of one idea — which is how the rider came to be unreachable from the
+        adapter's own rows.
+        """
+
+        return tuple(item for item in self.skipped if is_unreadable(str(item["reason"])))
 
 
 def build_evidence_request(
@@ -73,7 +84,7 @@ def build_evidence_request(
         name = _text(record.get("metric_name"))
         code = normalized_aliases.get(normalize_metric_name(name)) if name else None
         if not code:
-            skipped.append(_skip(position, "unknown_metric"))
+            skipped.append(_skip(position, UNKNOWN_METRIC))
             continue
 
         page = _positive_int(record.get("page_number"))

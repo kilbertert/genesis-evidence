@@ -1,3 +1,4 @@
+from genesis_evidence.core.disposition import UNKNOWN_METRIC
 from genesis_evidence.integrations.health_flow import build_evidence_request
 
 
@@ -75,7 +76,7 @@ def test_adapter_drops_unknown_or_unverifiable_rows() -> None:
 
     assert result.request.observations == []
     assert result.skipped == (
-        {"record_index": "1", "reason": "unknown_metric"},
+        {"record_index": "1", "reason": UNKNOWN_METRIC},
         {"record_index": "2", "reason": "missing_source_reference"},
     )
 

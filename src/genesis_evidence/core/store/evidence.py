@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 
 from ..card_lifecycle import patient_visible_sql
@@ -11,6 +11,7 @@ from ..contracts import (
     EvidenceMatchObservation,
     card_capabilities_summary,
 )
+from ..disposition import urgency_rank
 from ..evidence_strength import evidence_strength_summary
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
@@ -25,6 +26,7 @@ from ..matching import (
     finding_evidence_rank,
     patient_reply_v3,
     project_observation,
+    v2_patient_summary,
     validate_observation,
 )
 from ..metrics import METRIC_LABELS
@@ -121,7 +123,7 @@ class EvidenceStore:
             findings = sorted(
                 result.findings.values(),
                 key=lambda item: (
-                    {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
+                    urgency_rank(str(item["urgency"])),
                     -int(item["abnormality_severity"]),
                     finding_evidence_rank(item),
                     item["department"],
@@ -225,36 +227,19 @@ def _published_cards(connection) -> dict[tuple[str, str], dict[str, object]]:
 def _v2_patient_reply(
     patient_findings: list[dict[str, object]],
     unmatched: list[dict[str, object]],
-    skipped: object,
+    skipped: Iterable[Mapping[str, object]],
 ) -> dict[str, object]:
-    """The v2 patient envelope, including the unreadable rider (T9).
+    """The v2 patient envelope, including the unreadable rider.
 
-    Same fact set as v3, expressed with v2's flatter finding shape. The rider goes
-    on every branch for the same reason as v3, and lives in `summary` for the same
-    reason: `patient_reply` is parsed by health-flow under `extra="forbid"`.
+    Same fact set as v3, expressed with v2's flatter finding shape. The summary
+    comes from `v2_patient_summary`, which `patient_reply_v2` also calls — two v2
+    callers must not word the same result differently, which is how the rider came
+    to exist on one v2 path and not the other.
     """
 
-    uncovered = sum(
-        1
-        for item in (skipped or ())  # type: ignore[union-attr]
-        if str(item.get("reason", "")) == "unknown_metric_code"
-    )
-    if patient_findings:
-        summary = (
-            f"根据已确认的报告指标，发现 {len(patient_findings)} 个有正式知识卡支持的健康问题。"
-        )
-    elif unmatched:
-        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
-    else:
-        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
-    if uncovered:
-        summary += (
-            f"报告另有 {uncovered} 项不在当前解读范围内，"
-            "本次未作解读，需要时可请医生一同查看。"
-        )
     return {
         "title": "体检报告解读与健康风险提示",
-        "summary": summary,
+        "summary": v2_patient_summary(len(patient_findings), len(unmatched), skipped),
         "findings": patient_findings,
         "unmatched_count": len(unmatched),
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",

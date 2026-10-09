@@ -23,6 +23,7 @@ from ...reports.extraction import (
 )
 from ..card_lifecycle import patient_visible_sql
 from ..contracts import EvidenceMatchObservation, card_capabilities
+from ..disposition import urgency_rank
 from ..evidence_strength import rank
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
@@ -717,7 +718,7 @@ class ReportStore:
             findings = sorted(
                 result.findings.values(),
                 key=lambda item: (
-                    {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
+                    urgency_rank(str(item["urgency"])),
                     -int(item["abnormality_severity"]),
                     rank(str(item["evidence_strength"])),
                     item["department"],
@@ -737,7 +738,7 @@ class ReportStore:
                 "skipped": result.skipped,
                 "message": "" if result_findings else "暂无已审核内容",
             }
-            patient_reply = patient_reply_v2(result_findings, result.unmatched)
+            patient_reply = patient_reply_v2(result_findings, result.unmatched, result.skipped)
             result_payload["patient_reply"] = patient_reply
             for finding in result_findings:
                 finding["sorting"] = {
@@ -795,9 +796,8 @@ class ReportStore:
 
 
 def _finding_sort_key(item: dict[str, object]) -> tuple[object, ...]:
-    urgency_rank = {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}
     return (
-        urgency_rank[item["urgency"]],
+        urgency_rank(str(item["urgency"])),
         -int(item["severity"]),
         rank(str(item["card"]["grade"])),  # type: ignore[index]
         not bool(item["needs_recheck"]),

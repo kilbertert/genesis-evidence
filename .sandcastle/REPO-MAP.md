@@ -28,7 +28,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 52 test file(s, recursive)
+- tests/ — 53 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -49,6 +49,7 @@ output and run residue omitted)
 artifacts/
   qa/
     evidence-strength-20261009.md
+    observation-disposition-20261009.md
     publication-integrity-20261009.md
   service-host/
     acceptance-20260928.md
@@ -126,6 +127,6 @@ tests/
   test_condition_catalog_review_fixes.py
   test_conditions.py
   test_connectors.py
-  ... (43 more)
+  ... (44 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```

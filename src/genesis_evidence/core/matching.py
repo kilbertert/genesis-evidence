@@ -11,10 +11,16 @@ card source, scope strictness, and result projection.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from .conditions import CONDITION_BY_CODE, CONDITIONS
+from .disposition import (
+    NO_CARD_SUMMARY,
+    NO_PUBLISHED_CARD,
+    empty_summary,
+    with_rider,
+)
 from .evidence_strength import rank
 from .metrics import METRIC_LABELS, evidence_contains_value
 
@@ -139,7 +145,6 @@ def patient_reply_v3(
             "evidence_items": finding["evidence_items"],
         }
         visible_findings.append(visible)
-    uncovered = _uncovered_count(skipped)
     if visible_findings:
         metric_count = len(
             {
@@ -157,22 +162,9 @@ def patient_reply_v3(
     elif unmatched:
         summary = "发现异常指标，但当前没有对应的已审核知识卡。"
     else:
-        summary = _empty_summary(skipped)
-    # The unreadable rider goes on **every** branch, not just the empty one. A report
-    # can produce three findings and forty unreadable rows; before this the patient
-    # was told about the three and never the forty, which reads as "the rest was fine".
-    #
-    # It is folded into the existing `summary` rather than added as a
-    # `patient_reply.uncovered_count` field: `patient_reply` is parsed by health-flow
-    # under `extra="forbid"`, so a new field there is a **breaking** change to a live
-    # consumer. Prose degrades gracefully — an older consumer shows the sentence and
-    # ignores it — and the machine-readable form the AC asks for already exists in
-    # `skipped`, the moment the adapter's `unknown_metric` rows are carried across.
-    if uncovered:
-        summary += (
-            f"报告另有 {uncovered} 项不在当前解读范围内，"
-            "本次未作解读，需要时可请医生一同查看。"
-        )
+        summary = empty_summary(skipped)
+    # The rider goes on every branch, from the one place that owns it.
+    summary = with_rider(summary, skipped)
     return {
         "title": "体检报告解读与健康风险提示",
         "summary": summary,
@@ -182,44 +174,43 @@ def patient_reply_v3(
     }
 
 
-def _uncovered_count(skipped: Iterable[dict[str, object]]) -> int:
-    """How many confirmed abnormalities this service could not read.
+def v2_patient_summary(
+    finding_count: int,
+    unmatched_count: int,
+    skipped: Iterable[Mapping[str, object]] | None = None,
+) -> str:
+    """The v2 patient sentence, plus the unreadable rider on every branch.
 
-    ``unknown_metric_code`` is the one skip reason that means "we have no idea what
-    this is", as opposed to "we know what it is and could not use it right now".
-    The count is what the patient side needs; the reason breakdown stays internal.
+    The one place the v2 copy is decided. `patient_reply_v2` and
+    `core.store.evidence._v2_patient_reply` are two callers of it — the second
+    projects a flatter finding shape but must not word the same result
+    differently, which is how the rider came to exist on one v2 path and not the
+    other.
     """
 
-    return sum(1 for item in skipped if str(item.get("reason", "")) == "unknown_metric_code")
-
-
-def _empty_summary(skipped: Iterable[dict[str, object]]) -> str:
-    """Say why nothing was shown, when the caller knows.
-
-    Only ``within_reference_range`` among the skip reasons means an abnormal indicator
-    was genuinely absent. Every other reason means the service **could not use** an
-    indicator, and saying "没有发现" there tells the patient their report was clear when
-    it was not — the assurance is the opposite of the truth.
-    """
-
-    # Already materialized by the caller; kept tolerant of an iterable for direct use.
-    items = list(skipped)
-    reasons = {str(item.get("reason", "")) for item in items}
-    if not reasons:
-        return "当前没有发现可由已发布知识卡支持的异常指标。"
-    if reasons == {"within_reference_range"}:
-        return "已确认的指标均在参考范围内，没有需要提示的异常。"
-    if reasons == {"unknown_metric_code"}:
-        # The "还有 N 项…" rider is appended by the caller; keep this sentence about
-        # what was readable so the two do not say the same thing twice.
-        return ""
-    return f"已确认的指标中有 {len(items)} 项无法参与匹配，因此本次未生成健康提示。"
+    if finding_count:
+        summary = f"根据已确认的报告指标，发现 {finding_count} 个有正式知识卡支持的健康问题。"
+    elif unmatched_count:
+        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
+    else:
+        # v2's own no-findings sentence, not v3's: see `disposition.NO_CARD_SUMMARY`.
+        # v2 is a live external contract, and the honest generic sentence it already
+        # shipped must not change as a side effect of #261.
+        summary = NO_CARD_SUMMARY
+    return with_rider(summary, skipped)
 
 
 def patient_reply_v2(
-    findings: list[dict[str, object]], unmatched: list[dict[str, object]]
+    findings: list[dict[str, object]],
+    unmatched: list[dict[str, object]],
+    skipped: Iterable[Mapping[str, object]] = (),
 ) -> dict[str, object]:
-    """Build a patient-facing envelope from stored card fields only."""
+    """Build a patient-facing envelope from stored card fields only.
+
+    ``skipped`` was absent until it was the one builder that structurally could not
+    warn a patient about rows the service could not read — and the report path is
+    exactly the one that calls it.
+    """
 
     visible_findings = []
     for finding in findings:
@@ -246,14 +237,7 @@ def patient_reply_v2(
                 "action_message": finding["action_message"],
             }
         )
-    if visible_findings:
-        summary = (
-            f"根据已确认的报告指标，发现 {len(visible_findings)} 个有正式知识卡支持的健康问题。"
-        )
-    elif unmatched:
-        summary = "发现异常指标，但当前没有对应的已审核知识卡。"
-    else:
-        summary = "当前没有发现可由已发布知识卡支持的异常指标。"
+    summary = v2_patient_summary(len(visible_findings), len(unmatched), skipped)
     return {
         "title": "体检报告解读与健康风险提示",
         "summary": summary,
@@ -350,7 +334,7 @@ def _is_v3_unmatched(
         "metric_label": METRIC_LABELS[inp.metric_code],
         "condition_codes": missing,
         "condition_names": [CONDITION_BY_CODE[code].name for code in missing],
-        "reason": "no_published_knowledge_card",
+        "reason": NO_PUBLISHED_CARD,
     }
 
 
@@ -365,7 +349,7 @@ def _is_v2_unmatched(
         "metric_code": inp.metric_code,
         "metric_label": METRIC_LABELS.get(inp.metric_code, inp.metric_code),
         "condition_codes": missing,
-        "reason": "no_published_knowledge_card",
+        "reason": NO_PUBLISHED_CARD,
     }
 
 
