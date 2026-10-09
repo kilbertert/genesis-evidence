@@ -31,6 +31,7 @@ from genesis_evidence.core.evidence_strength import (
     EVIDENCE_RANK,
     EVIDENCE_STRENGTHS,
     MIXED,
+    NON_PATIENT_VISIBLE_STRENGTHS,
     PATIENT_VISIBLE_STRENGTHS,
     STRENGTH_LABELS,
     CardGrade,
@@ -108,6 +109,13 @@ def test_the_two_thresholds_are_nested_and_the_gap_is_the_context_slice() -> Non
     assert set(EVIDENCE_STRENGTHS) - PATIENT_VISIBLE_STRENGTHS == {"very_low"}
     assert CONTEXT_ONLY_STRENGTHS == PATIENT_VISIBLE_STRENGTHS - ACTION_THRESHOLD_STRENGTHS
     assert {"low"} == CONTEXT_ONLY_STRENGTHS
+    assert {"very_low"} == NON_PATIENT_VISIBLE_STRENGTHS
+    # The three slices partition the vocabulary, so the coverage ladder's branches
+    # are exhaustive and mutually exclusive by construction.
+    assert set(EVIDENCE_STRENGTHS) == (
+        CONTEXT_ONLY_STRENGTHS | ACTION_THRESHOLD_STRENGTHS | NON_PATIENT_VISIBLE_STRENGTHS
+    )
+    assert not (CONTEXT_ONLY_STRENGTHS & NON_PATIENT_VISIBLE_STRENGTHS)
 
 
 def test_the_lifecycle_thresholds_are_views_of_the_one_vocabulary() -> None:

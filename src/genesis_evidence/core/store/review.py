@@ -31,7 +31,7 @@ from ..consistency import NEEDS_REVIEW, is_source_based
 from ..evidence_strength import (
     ACTION_THRESHOLD_STRENGTHS,
     CONTEXT_ONLY_STRENGTHS,
-    PATIENT_VISIBLE_STRENGTHS,
+    NON_PATIENT_VISIBLE_STRENGTHS,
 )
 from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
@@ -1391,7 +1391,7 @@ class ReviewStore:
                         row["status"] == "approved" and str(row["id"]) not in publishable_approved
                         for row in card_rows
                     )
-                    if published and published["grade"] not in ACTION_THRESHOLD_STRENGTHS:
+                    if published and published["grade"] in CONTEXT_ONLY_STRENGTHS:
                         coverage_status = "published_context"
                         next_action = "已发布证据背景卡；补充证据达到中等或高确定性后再开放行动建议"
                     elif published:
@@ -1404,7 +1404,7 @@ class ReviewStore:
                         next_action = "发布为证据背景卡；行动建议仍需中等或高确定性"
                     elif any(
                         row["status"] == "approved"
-                        and row["grade"] not in PATIENT_VISIBLE_STRENGTHS
+                        and row["grade"] in NON_PATIENT_VISIBLE_STRENGTHS
                         for row in card_rows
                     ):
                         coverage_status = "blocked_very_low_certainty"

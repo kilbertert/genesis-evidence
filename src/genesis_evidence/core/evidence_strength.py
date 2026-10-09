@@ -77,6 +77,15 @@ ACTION_THRESHOLD_STRENGTHS: frozenset[str] = frozenset({"high", "moderate"})
 #: sentence mean — and widening either threshold must move this one with it.
 CONTEXT_ONLY_STRENGTHS: frozenset[str] = PATIENT_VISIBLE_STRENGTHS - ACTION_THRESHOLD_STRENGTHS
 
+#: The complement of `PATIENT_VISIBLE_STRENGTHS` within the vocabulary: strengths a
+#: card may hold and still not reach a patient. Named so the coverage ladder's
+#: "blocked" branch is a membership test over the vocabulary rather than a literal,
+#: and so it cannot be widened by accident to a grade the vocabulary does not
+#: contain.
+NON_PATIENT_VISIBLE_STRENGTHS: frozenset[str] = (
+    frozenset(EVIDENCE_STRENGTHS) - PATIENT_VISIBLE_STRENGTHS
+)
+
 #: Display names. The one place the labels are spelled, so the workbench and any
 #: later patient-copy surface cannot disagree about what a strength is called.
 STRENGTH_LABELS: Mapping[str, str] = {
@@ -197,6 +206,10 @@ def demo() -> None:
     # Thresholds are nested, and visibility is the narrower question.
     assert ACTION_THRESHOLD_STRENGTHS < PATIENT_VISIBLE_STRENGTHS
     assert set(EVIDENCE_STRENGTHS) - PATIENT_VISIBLE_STRENGTHS == {"very_low"}
+    assert {"very_low"} == NON_PATIENT_VISIBLE_STRENGTHS
+    assert set(EVIDENCE_STRENGTHS) == (
+        CONTEXT_ONLY_STRENGTHS | ACTION_THRESHOLD_STRENGTHS | NON_PATIENT_VISIBLE_STRENGTHS
+    )
     # The aggregate is not a grade, and asking for its rank is refused by name.
     assert MIXED not in EVIDENCE_STRENGTHS
     try:
