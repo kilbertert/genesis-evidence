@@ -58,6 +58,7 @@ artifacts/
     acceptance-20261001-health-entry.md
     acceptance-20261001-mall-order-loop.md
     acceptance-20261009.md
+    acceptance-20261009b-collection.md
 docs/
   adr/
     0002-trusted-pr-control-plane.md
