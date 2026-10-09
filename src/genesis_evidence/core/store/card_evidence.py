@@ -34,12 +34,20 @@ CARD_CLAIM_TYPE = "intervention_effect"
 # high or moderate certainty does not, and the publish gate rejects them outright.
 UNRESOLVED_RISK_LEVELS: tuple[str, ...] = ("high", "critical", "uncertain")
 
-# Deliberately NOT owned here: the paper-level statuses `clear`, `formal`, and
-# `internally_admitted`. They are single-token values that also appear in the admission
+# `clear` is no longer left unowned here: the paper-level integrity vocabulary — which
+# statuses admit a paper and which forbid durable evidence — is owned by
+# `core.publication_integrity` (#264), which every eligibility site interpolates. The
+# remaining paper-level token below is a *documented shared duplicate*.
+#
+# Deliberately NOT owned here: the publication status `formal` and the admission status
+# `internally_admitted`. Both are single-token values that also appear in the admission
 # state machine, the workbench guidance, and the extraction worker — not only in card
 # eligibility. Declaring them here without rewiring all of those would be a claim of
 # ownership that changing the constant would not honour, which is worse than leaving them
-# where they are. The admission and full-text status vocabulary is owned by #160.
+# where they are. `formal` travels beside integrity in the same queries; `#264` explicitly
+# leaves the `formal`/`preprint`/`unknown` vocabulary to its own owner, and those four
+# `= 'formal'` sites are guarded by the eligibility sites that render eligibility from
+# this module instead of restating the whole predicate.
 
 
 def sql_values(values: tuple[str, ...]) -> str:

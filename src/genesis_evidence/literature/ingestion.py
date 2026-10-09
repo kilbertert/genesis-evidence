@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..core.publication_integrity import forbids_durable_evidence
 from ..core.store.papers import ObjectStore, PaperRetracted, PaperStore
 from .connectors.base import LiteratureConnector
 from .downloader import FullTextDownloader
@@ -292,7 +293,9 @@ class LiteratureIngestionService:
         # Raised, not returned as ``None``: every other ``None`` from here means a rights or
         # format refusal, and a caller recording a retracted paper as "the licence does not
         # permit processing" writes a false reason into the retrieval ledger.
-        if self._store.integrity_status(paper_id) == IntegrityStatus.RETRACTED.value:
+        # The stored status is asked through the one predicate, so this backstop and
+        # the store's own three refusals cannot come to mean different things.
+        if forbids_durable_evidence(self._store.integrity_status(paper_id)):
             raise PaperRetracted("paper is retracted")
         if candidate.format != FullTextFormat.JATS_XML:
             return None

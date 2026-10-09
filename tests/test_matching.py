@@ -393,7 +393,7 @@ def test_evidence_strength_summary_mixed_grade_set() -> None:
         collect_unmatched=_is_v3_unmatched,
         validate=validate_observation,
     )
-    from genesis_evidence.core.matching import evidence_strength_summary
+    from genesis_evidence.core.evidence_strength import evidence_strength_summary
 
     assert (
         evidence_strength_summary(

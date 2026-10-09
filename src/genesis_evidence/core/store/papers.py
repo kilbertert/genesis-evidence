@@ -14,6 +14,14 @@ from pathlib import Path
 
 from ...literature.ai_extraction import CheckedPaperExtraction
 from ...literature.models import PaperRecord, SourceName
+from ..publication_integrity import (
+    INTEGRITY_STATUSES,
+    admits_paper,
+    forbids_durable_evidence,
+)
+from ..publication_integrity import (
+    UNKNOWN as UNKNOWN_INTEGRITY,
+)
 from .database import Database
 from .retirement import retire_cards_for_paper
 from .screening import (
@@ -1031,24 +1039,22 @@ class PaperStore:
         """Return the stored integrity status, or ``unknown`` when the paper has none.
 
         Readers that must refuse to process a retracted paper ask here rather than each
-        re-querying the column, so a new acquisition path cannot forget the gate.
+        re-querying the column, so a new acquisition path cannot forget the gate. The
+        question itself is `core.publication_integrity.forbids_durable_evidence`, which
+        every store write path also asks — so this reader and those refusals cannot
+        come to mean different things.
         """
 
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
             ).fetchone()
-        return str(row["integrity_status"] or "unknown") if row is not None else "unknown"
+        if row is None:
+            return UNKNOWN_INTEGRITY
+        return str(row["integrity_status"] or UNKNOWN_INTEGRITY)
 
     def update_integrity(self, paper_id: str, status: str, *, detail: dict[str, object]) -> None:
-        if status not in {
-            "clear",
-            "updated",
-            "corrected",
-            "expression_of_concern",
-            "retracted",
-            "unknown",
-        }:
+        if status not in INTEGRITY_STATUSES:
             raise ValueError(f"Unsupported integrity status: {status}")
         with self.database.transaction() as connection:
             paper = connection.execute(
@@ -1061,7 +1067,8 @@ class PaperStore:
                 (status, paper_id),
             )
             stale_cards = 0
-            if status != "clear":
+            # Every status that does not admit a paper retires the cards citing it.
+            if not admits_paper(status):
                 stale_cards = retire_cards_for_paper(connection, paper_id)
             self._audit(
                 connection,
@@ -1094,7 +1101,9 @@ class PaperStore:
             status_row = connection.execute(
                 "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
             ).fetchone()
-            if status_row is not None and status_row["integrity_status"] == "retracted":
+            if status_row is not None and forbids_durable_evidence(
+                str(status_row["integrity_status"])
+            ):
                 raise PaperRetracted("full text cannot be stored for a retracted paper")
             connection.execute(
                 """
@@ -1137,7 +1146,9 @@ class PaperStore:
             status_row = connection.execute(
                 "SELECT integrity_status FROM papers WHERE id = ?", (paper_id,)
             ).fetchone()
-            if status_row is not None and status_row["integrity_status"] == "retracted":
+            if status_row is not None and forbids_durable_evidence(
+                str(status_row["integrity_status"])
+            ):
                 raise PaperRetracted("extraction cannot be queued for a retracted paper")
             full_text = connection.execute(
                 "SELECT 1 FROM full_texts WHERE paper_id = ?", (paper_id,)
@@ -1475,7 +1486,9 @@ class PaperStore:
             ).fetchone()
             if paper is None:
                 raise ValueError("Paper does not exist")
-            if paper["integrity_status"] == "retracted":
+            if forbids_durable_evidence(str(paper["integrity_status"])):
+                # This path's own error policy: ValueError, not PaperRetracted. The
+                # rule is shared; the consequence is the caller's to choose.
                 raise ValueError("Candidate claims cannot be stored for a retracted paper")
             existing = connection.execute(
                 """

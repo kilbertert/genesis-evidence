@@ -11,6 +11,7 @@ from ..contracts import (
     EvidenceMatchObservation,
     card_capabilities_summary,
 )
+from ..evidence_strength import evidence_strength_summary
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
     CONDITIONS_BY_METRIC,
@@ -21,7 +22,6 @@ from ..matching import (
     MatchResult,
     _is_v3_unmatched,
     append_unique,
-    evidence_strength_summary,
     finding_evidence_rank,
     patient_reply_v3,
     project_observation,
