@@ -323,6 +323,32 @@ def test_the_two_v2_paths_word_the_same_result_identically() -> None:
     assert "3 项" in projected["summary"]
 
 
+def test_the_v2_no_findings_sentence_is_unchanged_by_this_change() -> None:
+    """v2 is a live external contract; #261 must not rewrite its copy.
+
+    v2's no-findings sentence is generic — honest both when no rows were passed and
+    when every row was in range. Substituting v3's all-in-range sentence would be a
+    contract change arriving as a side effect, which the issue's acceptance forbids.
+    Measured against `main` on the live API: identical for both the no-rows and the
+    all-in-range case.
+    """
+
+    assert patient_reply_v2([], [])["summary"] == NO_CARD_SUMMARY
+    assert (
+        patient_reply_v2([], [], [{"reason": "within_reference_range"}])["summary"]
+        == NO_CARD_SUMMARY
+    )
+    # v3, which owns the empty-case classification, does distinguish them.
+    assert (
+        patient_reply_v3([], [], [{"reason": "within_reference_range"}])["summary"]
+        == ALL_IN_RANGE_SUMMARY
+    )
+    # The rider is still the one thing v2 gained.
+    assert "不在当前解读范围内" in patient_reply_v2(
+        [], [], [{"reason": UNKNOWN_METRIC}]
+    )["summary"]
+
+
 def test_patient_reply_v2_carries_the_rider_it_structurally_could_not_before() -> None:
     """The report path is the one caller of this builder; it must be able to warn."""
 

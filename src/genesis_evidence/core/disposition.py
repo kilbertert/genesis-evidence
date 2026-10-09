@@ -81,6 +81,13 @@ _DISPOSITION_CLASSES: Mapping[str, str] = {
 #: The empty-summary sentences and the rider. They live here rather than in a caller
 #: because their *choice* is the rule — which class of dropped row licenses which
 #: sentence — and three builders used to make that choice independently.
+#:
+#: `NO_CARD_SUMMARY` is also the v2 contract's no-findings sentence, and it is
+#: deliberately *not* the v3 `empty_summary` result: v2's copy is generic ("no
+#: published-card-supported abnormal indicator was found"), which is honest both when
+#: no rows were passed and when every row was in range. Swapping it for v3's
+#: all-in-range sentence would change a live external response contract, which this
+#: module's own change must not do as a side effect.
 NO_CARD_SUMMARY = "当前没有发现可由已发布知识卡支持的异常指标。"
 ALL_IN_RANGE_SUMMARY = "已确认的指标均在参考范围内，没有需要提示的异常。"
 DEFERRED_SUMMARY = "本次没有已确认的指标参与解读，因此未生成健康提示。"

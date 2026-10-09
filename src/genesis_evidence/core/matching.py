@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from .conditions import CONDITION_BY_CODE, CONDITIONS
 from .disposition import (
+    NO_CARD_SUMMARY,
     NO_PUBLISHED_CARD,
     empty_summary,
     with_rider,
@@ -192,7 +193,10 @@ def v2_patient_summary(
     elif unmatched_count:
         summary = "发现异常指标，但当前没有对应的已审核知识卡。"
     else:
-        summary = empty_summary(list(skipped or ()))
+        # v2's own no-findings sentence, not v3's: see `disposition.NO_CARD_SUMMARY`.
+        # v2 is a live external contract, and the honest generic sentence it already
+        # shipped must not change as a side effect of #261.
+        summary = NO_CARD_SUMMARY
     return with_rider(summary, skipped)
 
 
