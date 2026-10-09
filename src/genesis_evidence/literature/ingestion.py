@@ -29,6 +29,16 @@ class IngestionSummary:
     queued_extractions: int
     skipped_full_texts: int
     failed_full_texts: int
+    #: Papers whose integrity check failed, so their retraction status is unknown.
+    #:
+    #: They stay in the collection with no verdict. That is not a smaller version of
+    #: `failed_full_texts`: it means the **retraction gate was never applied**, and
+    #: the pipeline's own rule is that unknown is not clear. Reported separately so
+    #: an operator sees the gap in the run summary instead of reading a bare
+    #: "completed". Resolving them is a batch job, not a per-run one — retrying
+    #: inside the run re-hits the same upstream and spends the whole record budget
+    #: on papers the provider is refusing to answer about.
+    unchecked_integrity: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +90,7 @@ class LiteratureIngestionService:
             "queued_extractions": 0,
             "skipped_full_texts": 0,
             "failed_full_texts": 0,
+            "unchecked_integrity": 0,
         }
         cursor: str | None = None
         try:
@@ -106,7 +117,21 @@ class LiteratureIngestionService:
                         paper_id,
                         position=counts["discovered"],
                     )
-                    integrity = self._integrity.check(record.to_dict(include_raw=False))
+                    try:
+                        integrity = self._integrity.check(record.to_dict(include_raw=False))
+                    except Exception as exc:
+                        # One paper's integrity check failing must not discard the
+                        # whole run. The paper keeps no verdict — which the pipeline
+                        # treats as "not clear", so it cannot admit evidence — and
+                        # the run records the gap instead of failing.
+                        counts["unchecked_integrity"] += 1
+                        self._store.record_event(
+                            "paper",
+                            paper_id,
+                            "integrity_check_failed",
+                            {"error": f"{type(exc).__name__}: {exc}"},
+                        )
+                        continue
                     if integrity.checked_sources:
                         self._store.update_integrity(
                             paper_id,

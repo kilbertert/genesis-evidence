@@ -1314,3 +1314,71 @@ def test_enqueue_rechecks_retraction(tmp_path) -> None:
 
     with database.connect() as connection:
         assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
+
+
+def test_one_uncheckable_paper_does_not_discard_the_whole_collection_run(tmp_path) -> None:
+    """A single integrity failure must cost that paper, not the run.
+
+    The upstream's tail latency was measured at 45 s against a 30 s timeout, and
+    `collect()` used to let that propagate: the run was marked `failed` and the
+    papers already stored kept no verdict. The budget is fixed, so an hourly retry
+    landed on the same early papers and hung in the same place.
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    store = PaperStore(database)
+    service = LiteratureIngestionService(
+        store=store,
+        objects=ObjectStore(tmp_path / "objects"),
+        downloader=FakeDownloader(),  # type: ignore[arg-type]
+        integrity=FailingIntegrityChecker(),  # type: ignore[arg-type]
+    )
+
+    summary = service.collect(
+        topic_id=_locked_topic(store),
+        connector=FakeConnector(_record()),  # type: ignore[arg-type]
+        query="sarcopenia AND protein",
+        limit=5,
+    )
+
+    assert summary.discovered == 1
+    assert summary.unchecked_integrity == 1
+    # Nothing downstream of the integrity gate ran for this paper.
+    assert summary.downloaded_full_texts == 0
+    assert summary.queued_extractions == 0
+    with database.connect() as connection:
+        assert connection.execute("SELECT status FROM collection_runs").fetchone()[0] == (
+            "completed"
+        )
+        # No verdict reaches the row: the schema default is `unknown`, and the
+        # pipeline treats unknown as "not clear", so no evidence follows.
+        assert (
+            connection.execute("SELECT integrity_status FROM papers").fetchone()[0] == "unknown"
+        )
+        assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
+        )
+        # The run finishes after this event, so it is not the *last* one; ask for it
+        # by name rather than by position.
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM audit_events WHERE action = 'integrity_check_failed'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_an_unchecked_paper_cannot_become_durable_evidence(tmp_path) -> None:
+    """The gap this leaves is bounded: unknown does not admit a paper.
+
+    This is why skipping is a real answer rather than a deferral — the paper stays
+    out of the evidence chain until something checks it, and the gate that keeps it
+    out is the one the whole pipeline already agreed on.
+    """
+
+    from genesis_evidence.core.publication_integrity import admits_paper
+
+    assert admits_paper("unknown") is False
+    assert admits_paper("clear") is True

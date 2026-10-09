@@ -162,6 +162,13 @@ def main() -> None:
                 f"queued extractions {summary.queued_extractions}, "
                 f"skipped {summary.skipped_full_texts}, failed {summary.failed_full_texts}"
             )
+            if summary.unchecked_integrity:
+                print(
+                    f"{plan.code}: {summary.unchecked_integrity} paper(s) could not be "
+                    "integrity-checked and keep no verdict — they cannot enter the "
+                    "evidence chain. That is a gap in the retraction gate, not a "
+                    "smaller success; do not read this run as clean."
+                )
 
 
 if __name__ == "__main__":
