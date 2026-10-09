@@ -53,6 +53,7 @@ artifacts/
     acceptance-20260930-mall-loop.md
     acceptance-20261001-health-entry.md
     acceptance-20261001-mall-order-loop.md
+    acceptance-20261009.md
 docs/
   adr/
     0002-trusted-pr-control-plane.md
@@ -124,6 +125,5 @@ tests/
   ... (40 more)
 acceptance.feature
 AGENTS.md
-... (10 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```
