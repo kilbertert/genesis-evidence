@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from .conditions import CONDITION_BY_CODE, CONDITIONS
+from .evidence_strength import rank
 from .metrics import METRIC_LABELS, evidence_contains_value
 
 METRIC_CODES = frozenset(metric for condition in CONDITIONS for metric in condition.metrics)
@@ -22,7 +23,6 @@ CONDITIONS_BY_METRIC = {
     metric: tuple(condition for condition in CONDITIONS if metric in condition.metrics)
     for metric in METRIC_CODES
 }
-EVIDENCE_RANK = {"high": 0, "moderate": 1, "low": 2, "very_low": 3}
 ASSESSMENT_SORTING_VERSION = "published-card-reference-range-v1"
 
 
@@ -98,14 +98,9 @@ def append_unique(items: list[object], value: object) -> None:
         items.append(value)
 
 
-def evidence_strength_summary(grades: Iterable[str]) -> str:
-    unique = set(grades)
-    return next(iter(unique)) if len(unique) == 1 else "mixed"
-
-
 def finding_evidence_rank(finding: dict[str, object]) -> int:
     items = finding.get("_evidence_items", {}).values()
-    return max(EVIDENCE_RANK[item["evidence_strength"]] for item in items)
+    return max(rank(str(item["evidence_strength"])) for item in items)
 
 
 def patient_reply_v3(

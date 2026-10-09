@@ -28,6 +28,11 @@ from ...review.scope import (
 from ..card_lifecycle import CARD_STATUSES, can_transition, is_patient_visible
 from ..components import pool_token
 from ..consistency import NEEDS_REVIEW, is_source_based
+from ..evidence_strength import (
+    ACTION_THRESHOLD_STRENGTHS,
+    CONTEXT_ONLY_STRENGTHS,
+    PATIENT_VISIBLE_STRENGTHS,
+)
 from ..methodology import risk_of_bias_tool_for
 from ..metrics import METRIC_LABELS
 from ..patient_copy import validate_patient_copy
@@ -534,7 +539,7 @@ class ReviewStore:
                 raise ValueError(
                     "only direct intervention-effect results can support a patient-visible card"
                 )
-            if profile["certainty"] in {"high", "moderate"} and any(
+            if profile["certainty"] in ACTION_THRESHOLD_STRENGTHS and any(
                 json.loads(row["risk_of_bias_json"])["overall"] in UNRESOLVED_RISK_LEVELS
                 for row in rows
             ):
@@ -1374,18 +1379,19 @@ class ReviewStore:
                     }
                     action_publishable_approved = any(
                         str(row["id"]) in publishable_approved
-                        and row["grade"] in {"high", "moderate"}
+                        and row["grade"] in ACTION_THRESHOLD_STRENGTHS
                         for row in card_rows
                     )
                     context_publishable_approved = any(
-                        str(row["id"]) in publishable_approved and row["grade"] == "low"
+                        str(row["id"]) in publishable_approved
+                        and row["grade"] in CONTEXT_ONLY_STRENGTHS
                         for row in card_rows
                     )
                     approved_gate_blocked = any(
                         row["status"] == "approved" and str(row["id"]) not in publishable_approved
                         for row in card_rows
                     )
-                    if published and published["grade"] == "low":
+                    if published and published["grade"] not in ACTION_THRESHOLD_STRENGTHS:
                         coverage_status = "published_context"
                         next_action = "已发布证据背景卡；补充证据达到中等或高确定性后再开放行动建议"
                     elif published:
@@ -1397,7 +1403,8 @@ class ReviewStore:
                         coverage_status = "ready_to_publish_context"
                         next_action = "发布为证据背景卡；行动建议仍需中等或高确定性"
                     elif any(
-                        row["status"] == "approved" and row["grade"] == "very_low"
+                        row["status"] == "approved"
+                        and row["grade"] not in PATIENT_VISIBLE_STRENGTHS
                         for row in card_rows
                     ):
                         coverage_status = "blocked_very_low_certainty"
@@ -1591,7 +1598,7 @@ class ReviewStore:
             or not str(scope_key or "").strip()
         ):
             raise ValueError("knowledge card has ineligible evidence")
-        if card["grade"] == "low":
+        if card["grade"] in CONTEXT_ONLY_STRENGTHS:
             high_risk = connection.execute(
                 f"""
                 SELECT 1

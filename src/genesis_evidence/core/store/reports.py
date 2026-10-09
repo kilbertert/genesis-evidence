@@ -23,10 +23,10 @@ from ...reports.extraction import (
 )
 from ..card_lifecycle import patient_visible_sql
 from ..contracts import EvidenceMatchObservation, card_capabilities
+from ..evidence_strength import rank
 from ..matching import (
     ASSESSMENT_SORTING_VERSION,
     CONDITIONS_BY_METRIC,
-    EVIDENCE_RANK,
     CardAdapter,
     CardScopeResolver,
     EvidenceMatcher,
@@ -719,7 +719,7 @@ class ReportStore:
                 key=lambda item: (
                     {"emergency": 0, "urgent": 1, "soon": 2, "routine": 3}[item["urgency"]],
                     -int(item["abnormality_severity"]),
-                    EVIDENCE_RANK[item["evidence_strength"]],
+                    rank(str(item["evidence_strength"])),
                     item["department"],
                 ),
             )
@@ -799,7 +799,7 @@ def _finding_sort_key(item: dict[str, object]) -> tuple[object, ...]:
     return (
         urgency_rank[item["urgency"]],
         -int(item["severity"]),
-        EVIDENCE_RANK[item["card"]["grade"]],  # type: ignore[index]
+        rank(str(item["card"]["grade"])),  # type: ignore[index]
         not bool(item["needs_recheck"]),
         item["condition"].department,  # type: ignore[union-attr]
         not bool(item["epidemiology"]),

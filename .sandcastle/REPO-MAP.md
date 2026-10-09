@@ -48,7 +48,7 @@ output and run residue omitted)
 .sandcastle/  (the AFK scaffold — see its README)
 artifacts/
   qa/
-    publication-integrity-20261009.md
+    evidence-strength-20261009.md
   service-host/
     acceptance-20260928.md
     acceptance-20260929-mall-readonly-goods.md
