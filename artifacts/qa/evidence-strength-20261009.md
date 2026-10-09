@@ -1,6 +1,8 @@
 # 证据强度词表收敛为单一 owner（#238）：运行服务验收（2026-10-09）
 
-**提交**：`refactor/evidence-strength-vocabulary`（基于 `ec9e451`）
+**提交**：`refactor/evidence-strength-vocabulary`
+**被验证的源码提交**：`33a1ba1`（rebase 到 `main` 后重跑）。该提交之后本分支只有
+本次记录本身的改写，源码未再变动。
 **环境**：开发宿主，临时 SQLite + 临时对象存储，真实 `genesis-evidence-review`
 进程（`127.0.0.1:8199`），真实浏览器（Playwright/chromium，1440×900）
 **驱动脚本**：`var/verify-238.py`（gitignored，属脚手架；取证产物见下）
