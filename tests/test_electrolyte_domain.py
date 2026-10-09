@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from genesis_evidence.core.conditions import CONDITION_BY_CODE
+from genesis_evidence.core.disposition import UNKNOWN_METRIC
 from genesis_evidence.core.matching import CONDITIONS_BY_METRIC
 from genesis_evidence.core.metrics import METRIC_ALIASES, normalize_metric_name
 from genesis_evidence.integrations.health_flow import build_evidence_request
@@ -97,4 +98,4 @@ def test_adapter_still_rejects_a_name_outside_this_domain() -> None:
     )
 
     assert list(result.request.observations) == []
-    assert result.skipped[0]["reason"] == "unknown_metric"
+    assert result.skipped[0]["reason"] == UNKNOWN_METRIC

@@ -9,8 +9,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Derived from the one vocabulary (#221); `core.card_lifecycle` owns the statuses.
 from .card_lifecycle import ACTION_THRESHOLD_GRADES, CardStatus
+
+# Derived from the one vocabulary (#221); `core.card_lifecycle` owns the statuses.
+from .disposition import NO_PUBLISHED_CARD, SKIP_REASONS, Urgency
 
 # Derived from the one vocabulary (#238); `core.evidence_strength` owns the grades,
 # so a card's `grade`, a profile's `certainty`, and a finding's `evidence_strength`
@@ -125,7 +127,7 @@ class PatientFinding(BaseModel):
     condition_code: str
     card_id: str = Field(min_length=1)
     card_version: str = Field(min_length=1)
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: CardGrade
     needs_recheck: bool
@@ -241,7 +243,7 @@ class PublishedEvidenceCard(BaseModel):
 class EvidenceSortingV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: CardGrade
     needs_recheck: bool
@@ -258,7 +260,7 @@ class EvidenceFindingV2(BaseModel):
     condition_name: str
     card: PublishedEvidenceCard
     source_observation_ids: list[str]
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: CardGrade
     needs_recheck: bool
@@ -279,7 +281,7 @@ class EvidenceUnmatchedV2(BaseModel):
     metric_code: str
     metric_label: str
     condition_codes: list[str]
-    reason: Literal["no_published_knowledge_card"]
+    reason: Literal[NO_PUBLISHED_CARD]
 
 
 class PatientReplyFindingV2(BaseModel):
@@ -287,7 +289,7 @@ class PatientReplyFindingV2(BaseModel):
 
     condition_code: str
     condition_name: str
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: CardGrade
     needs_recheck: bool
@@ -333,7 +335,7 @@ class EvidenceMatchResponseV2(BaseModel):
 class EvidenceSorting(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: EvidenceStrength
     needs_recheck: bool
@@ -367,7 +369,7 @@ class EvidenceFinding(BaseModel):
     condition_code: str
     condition_name: str
     source_observation_ids: list[str]
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: EvidenceStrength
     needs_recheck: bool
@@ -390,7 +392,7 @@ class EvidenceUnmatched(BaseModel):
     metric_label: str
     condition_codes: list[str]
     condition_names: list[str] = Field(default_factory=list)
-    reason: Literal["no_published_knowledge_card"]
+    reason: Literal[NO_PUBLISHED_CARD]
 
     @model_validator(mode="after")
     def align_condition_names(self) -> EvidenceUnmatched:
@@ -403,15 +405,7 @@ class EvidenceSkipped(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     observation_id: str
-    reason: Literal[
-        "missing_reference_range",
-        "within_reference_range",
-        "missing_source_evidence",
-        "missing_source_page",
-        "missing_unit",
-        "invalid_value",
-        "unknown_metric_code",
-    ]
+    reason: Literal[*SKIP_REASONS]
 
 
 class PatientReplyFinding(BaseModel):
@@ -419,7 +413,7 @@ class PatientReplyFinding(BaseModel):
 
     condition_code: str
     condition_name: str
-    urgency: Literal["routine", "soon", "urgent", "emergency"]
+    urgency: Urgency
     abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: EvidenceStrength
     needs_recheck: bool

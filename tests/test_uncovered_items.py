@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from genesis_evidence.core.disposition import UNKNOWN_METRIC
 from genesis_evidence.core.matching import patient_reply_v3
 from genesis_evidence.integrations.health_flow import build_evidence_request
 
@@ -40,7 +41,7 @@ _UNMATCHED = [
 
 
 def _uncovered(n: int) -> list[dict[str, str]]:
-    return [{"observation_id": f"u{i}", "reason": "unknown_metric_code"} for i in range(n)]
+    return [{"observation_id": f"u{i}", "reason": UNKNOWN_METRIC} for i in range(n)]
 
 
 def test_unreadable_rows_are_reported_alongside_findings() -> None:
@@ -94,7 +95,7 @@ def test_summary_leaks_no_internal_identifiers() -> None:
 def test_an_unreadable_item_is_counted_but_never_becomes_a_finding() -> None:
     """端到端：读不懂的项目名既不产生 finding，也不归属任何 condition。
 
-    适配器把它记为 `unknown_metric`（显式，不静默），请求里没有它的观测；
+    适配器把它记为 `UNKNOWN_METRIC`（显式，不静默），请求里没有它的观测；
     患者侧得到的是条数，而不是某项被硬塞进某个健康问题。文案不点名——具体是
     哪几项由患者对着手上的报告看，服务侧不下断言。
     """
@@ -113,11 +114,11 @@ def test_an_unreadable_item_is_counted_but_never_becomes_a_finding() -> None:
         confirmed=True,
     )
 
-    assert result.skipped[0]["reason"] == "unknown_metric"
+    assert result.skipped[0]["reason"] == UNKNOWN_METRIC
     assert list(result.request.observations) == []
     assert "condition" not in str(result.skipped[0])
 
-    reply = patient_reply_v3([], [], [{"reason": "unknown_metric_code"}])
+    reply = patient_reply_v3([], [], [{"reason": UNKNOWN_METRIC}])
 
     assert "1 项" in reply["summary"]
     assert "不在当前解读范围内" in reply["summary"]
