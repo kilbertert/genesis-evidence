@@ -237,3 +237,6 @@ node_modules/
 # code map. Repository metadata, service topology and the auth baseline are
 # internal records and must never enter this public repository.
 .scratch/
+
+# AFK sandbox worktrees (one per run; residue if not ignored)
+.sandcastle/worktrees/
