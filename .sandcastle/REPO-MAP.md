@@ -51,8 +51,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 20 markdown file(s)
-- docs/adr/ — 5 markdown file(s)
+- docs/ — 21 markdown file(s)
+- docs/adr/ — 6 markdown file(s)
 - docs/agents/ — 4 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -75,6 +75,7 @@ artifacts/
     acceptance-20261009b-collection.md
 docs/
   adr/
+    0002-adr-check-scope-and-self-application.md
     0002-trusted-pr-control-plane.md
     0005-review-workbench-independent-reading-regions.md
     0006-retire-product-capability-and-move-goods-authority-to-the-mall.md
