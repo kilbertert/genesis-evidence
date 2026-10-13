@@ -90,7 +90,7 @@ disjoint and sum to 57:
 | No stored full text | 22 | data — the collection path that would fetch it is paused |
 | Full text present but never extracted | 2 | a retry |
 | Refusal superseded — an extraction postdates the refusal | 11 | nothing; already drained |
-| Capability boundary — full text present, extraction present, still refused | 18 | a better adjudication, not more data |
+| Still refused — full text present, extraction present | 18 | see decision 5: mostly a pipeline gap, not a capability limit |
 | Held by a person's earlier rejection | 3 | a person's decision, by design |
 | Other standing refusal | 1 | — |
 
@@ -114,11 +114,11 @@ Three of those buckets are worth separating from the rest:
   the capability question is moot until a person moves first. They must not be
   counted as capability work.
 
-The capability papers are not untouched: `_source_adjudication` already reads the
-full text and
-attempts the adjudication (`ai:source-adjudicator`), and its fallback reason
+These papers are not untouched: `_source_adjudication` already reads the full text
+and attempts the adjudication (`ai:source-adjudicator`), and its fallback reason
 states explicitly that full-text evidence could not support an autonomous
-verdict. It succeeds on 5 and declines on 20.
+verdict. Decision 5 is where that reason is taken apart — it is a pipeline gap far
+more often than it is a limit of what can be known.
 
 Extraction is the one stage with no autonomous HTTP path at all. The deployed
 service host runs no extraction worker (`docs/deployment.md`), and the deployed
@@ -172,19 +172,44 @@ cap is the control.**
    re-adjudicated as part of this record, and they do not become the precedent
    that skips decision 5 for future cards.
 
-5. **The gate for new `action`-threshold machine signatures is the one that does
-   not exist yet.** "A machine may sign a card that carries an action message"
-   currently rests on a cap, not on measured accuracy. Before that is relied on
-   for new cards, the capability-boundary papers are re-adjudicated with a
-   stronger model:
-   - If the stronger model resolves them **with quotable source evidence**, the
-     boundary was model capability, and the evidence requirement is what admits
-     a machine signature at the action threshold.
-   - If it **still declines**, the ambiguity is in the source text, and no model
-     may auto-adjudicate it — those papers stay human-signed permanently, and the
-     correct output is an explicit "cannot be decided from this text", not a
-     forced verdict.
-   - **Zero errors is the bar for a verdict that changes patient-facing
+5. **The capability boundary is a pipeline gap before it is a model limit, and
+   must be closed on that basis.** `_source_adjudication` is **deterministic — it
+   calls no model at all** (it parses the stored full text, attests the issue's
+   quoted evidence against it, and cross-checks Claim/Result structure). An
+   earlier draft of this record said to re-adjudicate the boundary papers "with a
+   stronger model"; that is incoherent, because the step has no model to
+   strengthen.
+
+   Measured on 2026-10-13, over every material (`must_resolve`) issue across the
+   168 papers carrying a consistency report:
+
+   | Disposition | Issues |
+   | --- | ---: |
+   | Adjudication proceeds | 22 |
+   | Declines — the issue's `evidence` is **not a verbatim quote** from the full text | **43** |
+   | Declines — the issue's `evidence` carries no source quote at all | 15 |
+
+   The dominant decline is the second row, and it is not a disagreement about
+   meaning — it is the same complaint, one stage later. `_EXTRACTION_PROMPT`
+   already requires that "每个 evidence 必须从全文复制一段连续、逐字原文", and
+   `ai_extraction.py` **enforces exactly that for the extraction's own evidence**
+   — the `attest(...)` call at line 515, whose `missing` non-empty case raises
+   `PaperAnalysisError` — and the codebase's only `attest(` call is that one. The
+   consistency stage imposes the same requirement in the prompt but **never
+   attests `issue.evidence`**, so a model that paraphrases when it reports a
+   difference blocks the deterministic adjudicator that was built to resolve it.
+
+   Therefore, before any accuracy question is asked of these papers:
+   - **Attest `issue.evidence` (or the fields of `ConsistencyReport` that carry
+     it) the way the extraction path already does**, and test how many of the 43
+     the deterministic adjudicator then clears. That is a repair carrying no
+     epistemic risk: it makes the machine check itself, not assert more.
+   - Only the residue — material issues that quote the source verbatim and still
+     cannot be adjudicated — is a genuine capability boundary, and that residue is
+     the population a person must handle.
+   - **Do not build a "stronger model" harness for this step.** There is nothing
+     for it to answer.
+   - **Zero errors remains the bar for a verdict that changes patient-facing
      direction.** Every other unresolved difference must quote the source that
      decides it.
 
@@ -236,29 +261,34 @@ declines to claim the standard. It loses for a reason this record cannot fix:
 extraction here is *already* dual-channel (A + B + consistency), and the measured
 result is that **all 8 papers in the 2026-10-13 acceptance run returned
 `needs_review`**. A second channel reproduces the disagreement rate; it does not
-remove it. A third channel triples cost to move the same unresolved differences,
-whose cause is the source text — which is exactly what decision 5 tests.
+remove it. A third channel triples cost to move the same unresolved differences —
+and decision 5 shows that the differences are unresolved mostly because the
+pipeline does not yet attest the consistency stage's own evidence, not because
+the source is ambiguous. Adding a channel would multiply a defect it does not
+address.
 
 ## Consequences
 
 **Easier.** "Who decided this, on what grade, under which policy version" becomes
 answerable per row. The no-full-text and never-extracted papers become ordinary
-data work with no judgement attached. The capability experiment is cheap,
-bounded, falsifiable, and produces a fact about the corpus rather than an argument
-about models.
+data work with no judgement attached. Decision 5's repair is cheap, bounded, and
+falsifiable, and if it clears the bulk of the 43 it converts what looked like a
+human-throughput ceiling into an ordinary bug fix.
 
 **Harder, and now capped.** The pipeline's throughput ceiling for *contributing
 new grades* is not the model's rate: an AI-only path cannot lift a topic to
 `high` or clear the action threshold, so topics whose evidence deserves an action
-message need a human in the loop by construction. If decision 5 returns "still
-declines", that ceiling is **permanent for the capability papers** — they are
-undecidable from their text, and no future model change lifts it. The
-`needs_review` verdict is therefore not a backlog to drain but a standing
-population that needs a human channel sized for it. Note the distinction: a
-`needs_review` verdict marks two very different things — "the channels disagree"
-(which the pipeline handles by reading the source and adjudicating, and which
-cleared 5 of 25) and "the source could not decide it" (which only a person
-resolves). The second is the standing population; the first drains itself, and
+message need a human in the loop by construction. The residue after decision 5 —
+material issues that quote the source verbatim and still cannot be adjudicated —
+is **permanent for those papers**: undecidable from their text, with nothing a
+stronger model could do because no model is involved. The `needs_review` verdict
+is therefore not a backlog to drain but a standing population that needs a human
+channel sized for it. Note the distinction: a `needs_review` verdict marks two
+very different things — "the channels disagree" (which the pipeline handles by
+attesting the difference against the source and adjudicating, and which cleared
+22 of 65 quotable material issues) and "the source could not decide it" (which
+only a person resolves). The second is the standing population; the first drains
+itself, and
 the 11 superseded refusals above are that draining observed.
 
 **A risk this record accepts, explicitly.** 5 `moderate` cards are live on machine
