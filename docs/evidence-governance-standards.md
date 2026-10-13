@@ -28,10 +28,27 @@ otherwise it is derived from the locked PICOTS outcome text. Study-specific popu
 form, dose, comparator wording and timepoint remain attached to each Result and do not
 split semantically equivalent outcome evidence into separate profiles.
 
-The first-stage product intentionally uses one authenticated human reviewer. It therefore
-does not implement Cochrane MECIR C39's two-person independent full-text selection and must
-not be represented as a Cochrane review. The persisted decisions and reasons preserve the
-audit trail needed to add an independent second selection later if that scope is approved.
+The review pipeline is **machine-executed, with a recorded actor per decision**, and it
+does not claim an authenticated human examiner of each paper. As of 2026-10-13 the `actor`
+on production review events is `ai:deepseek-v4-*` / `ai:screening-ledger` /
+`ai:retrieval-ledger`; a person's identity appears only where a person acted. The human's
+standing role is upstream of correctness — choosing and locking topics — not approving each
+verdict.
+
+It therefore does not implement Cochrane MECIR C39's two-person independent full-text
+selection and must not be represented as a Cochrane review. Note that extraction here is
+nevertheless dual-channel (extraction A + extraction B + consistency check); the measured
+result is that the two channels disagree often enough that every paper in the 2026-10-13
+acceptance run returned `needs_review`. A second channel reproduces the disagreement rate;
+it does not remove it.
+
+Patient-visible card publication is machine-executed behind a **grade boundary**, not a
+human click: `PATIENT_VISIBLE_STRENGTHS` admits `high`/`moderate`/`low`, while
+`ACTION_THRESHOLD_STRENGTHS` admits only `high`/`moderate`, so a `low` card is context only.
+The human content guarantee is the AI-only certainty cap — `min(score, 2)` in
+`_profile_suggestion`, i.e. a machine-only path cannot reach `high`. That cap is
+load-bearing and ADR 0012 owns it. The persisted decisions and reasons preserve the audit
+trail needed to add an independent second selection later if that scope is approved.
 
 Authoritative sources:
 
