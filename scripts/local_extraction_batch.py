@@ -44,6 +44,7 @@ from genesis_evidence.core.store.review import ReviewStore  # noqa: E402
 from genesis_evidence.literature.ai_extraction import (  # noqa: E402
     ArkPaperAnalyzer,
     PaperAnalysisError,
+    _api_key_from_file,
 )
 from genesis_evidence.literature.extraction_worker import LiteratureExtractionWorker  # noqa: E402
 from genesis_evidence.review.service import EvidenceReviewService  # noqa: E402
@@ -124,10 +125,91 @@ def _claim_count(database: Database, paper_id: str) -> int:
         )
 
 
+def _job_failure(database: Database, paper_id: str) -> tuple[str, str] | None:
+    """Why the job left un-finished, if it did.
+
+    `LiteratureExtractionWorker.run_job` catches every exception, records it on the
+    job and **returns normally** — right for a long-running worker, wrong for a
+    harness whose whole purpose is to report what the provider did. Without this,
+    a provider failure surfaces as "no extraction was written", which is the
+    harness hiding the exact thing it exists to measure.
+    """
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT error_class, error_message FROM paper_extraction_jobs
+            WHERE paper_id = ? ORDER BY created_at DESC LIMIT 1
+            """,
+            (paper_id,),
+        ).fetchone()
+    if row is None or row["error_class"] is None:
+        return None
+    return str(row["error_class"]), str(row["error_message"] or "")
+
+
+def _key_present() -> bool:
+    """Whether a key is configured, without validating it.
+
+    A preview only reports this; `_resolve_key` is what actually reads the file.
+    Kept separate so "is it configured" cannot throw, and "give me the key" can.
+    """
+
+    for name in ("PAPER_AI_API_KEY_FILE", "ARK_API_KEY_FILE", "PAPER_AI_API_KEY", "ARK_API_KEY"):
+        if os.getenv(name, "").strip():
+            return True
+    return False
+
+
+def _resolve_key() -> str:
+    """The provider key, from the same places `ArkPaperAnalyzer.from_env` reads.
+
+    Reusing that resolution rather than hand-rolling it is the point: the working
+    configuration on this host uses a **key file** (`PAPER_AI_API_KEY_FILE`, a CSV
+    with an `apiKey` column), and a harness that only understood inline keys would
+    report "key missing" for a machine that is in fact configured.
+    """
+
+    key_file = (
+        os.getenv("PAPER_AI_API_KEY_FILE", "").strip()
+        or os.getenv("ARK_API_KEY_FILE", "").strip()
+    )
+    if key_file:
+        return _api_key_from_file(key_file)
+    return os.getenv("PAPER_AI_API_KEY", "").strip() or os.getenv("ARK_API_KEY", "").strip()
+
+
+def _copy_corpus(source: Path, destination: Path) -> None:
+    """Copy a SQLite database without racing a concurrent writer.
+
+    `shutil.copy2` is a filesystem copy: it takes no database read transaction and
+    ignores the rollback journal and WAL, so a copy taken while another process is
+    writing can combine pages from before and after a commit. Every change here is
+    read off a copy, so a torn one would make the batch report failures that never
+    happened — or miss ones that did.
+
+    `VACUUM INTO` runs inside a read transaction and writes a consistent snapshot,
+    and it is the one form SQLite provides for exactly this.
+    """
+
+    import sqlite3
+
+    if destination.exists():
+        destination.unlink()
+    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as connection:
+        connection.execute("VACUUM INTO ?", (str(destination),))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help="model id to send to the provider")
-    parser.add_argument("--limit", type=int, default=3, help="papers to extract (small!)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=3,
+        help="papers to extract (small!). Must be positive: SQLite reads LIMIT -1 as "
+        "unlimited, so a negative value would send every eligible paper to the provider.",
+    )
     parser.add_argument("--apply", action="store_true", help="run; default is a preview")
     parser.add_argument(
         "--database",
@@ -141,24 +223,34 @@ def main() -> None:
         "--keep", action="store_true", help="keep the throwaway corpus for inspection"
     )
     parser.add_argument(
+        "--report",
+        default="var/local-extraction-batch-report.json",
+        help="where the JSON result goes; kept even when the throwaway corpus is removed",
+    )
+    parser.add_argument(
         "--queued-jobs",
         action="store_true",
         help="run the jobs already queued in the corpus, instead of unextracted papers",
     )
     args = parser.parse_args()
 
-    key = (
-        os.getenv("PAPER_AI_API_KEY", "").strip()
-        or os.getenv("ARK_API_KEY", "").strip()
-    )
+    if args.limit < 1:
+        # SQLite reads `LIMIT -1` as "no limit", so a negative value would not mean
+        # "none" — it would send every eligible paper to the provider.
+        parser.error(f"--limit must be at least 1 (got {args.limit})")
+
     endpoint = (
         os.getenv("PAPER_AI_BASE_URL", "").strip()
         or os.getenv("ARK_BASE_URL", "").strip()
     )
     if not args.apply:
+        # A preview must not need a working key: resolving one here would make a
+        # dry run fail on a machine whose key is absent or misconfigured, which is
+        # a reason to run the preview in the first place.
+        key_state = "present" if _key_present() else "absent (needed only with --apply)"
         print(f"model      : {args.model}")
         print(f"endpoint   : {endpoint or '(not set — needed only with --apply)'}")
-        print(f"key present: {'yes' if key else 'no (needed only with --apply)'}")
+        print(f"key        : {key_state}")
         print(f"limit      : {args.limit} paper(s)")
         print()
         print("preview only: nothing copied, nothing run. Re-run with --apply.")
@@ -166,7 +258,7 @@ def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="genesis-extract-"))
     corpus = work / "genesis-evidence.sqlite3"
     objects = work / "objects"
-    shutil.copy2(args.database, corpus)
+    _copy_corpus(Path(args.database), corpus)
     shutil.copytree(args.objects, objects)
     print(f"throwaway corpus: {work}")
     print()
@@ -192,9 +284,16 @@ def main() -> None:
             shutil.rmtree(work, ignore_errors=True)
         return
 
+    # Only now is the key actually read — and reading it can fail (missing file, no
+    # apiKey field), which is a real failure worth raising rather than reporting as
+    # "no key configured".
+    key = _resolve_key()
     if not key:
         shutil.rmtree(work, ignore_errors=True)
-        raise SystemExit("PAPER_AI_API_KEY (or ARK_API_KEY) is required with --apply")
+        raise SystemExit(
+            "no provider key: set PAPER_AI_API_KEY_FILE / ARK_API_KEY_FILE to a CSV with "
+            "an api_key column, or PAPER_AI_API_KEY / ARK_API_KEY"
+        )
     if not endpoint:
         shutil.rmtree(work, ignore_errors=True)
         raise SystemExit("PAPER_AI_BASE_URL (or ARK_BASE_URL) is required with --apply")
@@ -237,7 +336,12 @@ def main() -> None:
         extracted = _already_extracted(database, paper_id)
         claims = _claim_count(database, paper_id)
         if status == "completed" and not extracted:
-            status, detail = "no_extraction_written", "worker returned without persisting one"
+            # `run_job` swallows the exception, so the reason is on the job row.
+            failure = _job_failure(database, paper_id)
+            if failure is not None:
+                status, detail = "provider_error", f"{failure[0]}: {failure[1][:140]}"
+            else:
+                status, detail = "no_extraction_written", "worker returned without persisting one"
         outcomes.append(
             PaperOutcome(
                 paper_id=paper_id,
@@ -259,7 +363,10 @@ def main() -> None:
     if ok:
         print(f"claims written: {sum(o.claims for o in ok)} across {len(ok)} paper(s)")
 
-    report = work / "batch-report.json"
+    # Written OUTSIDE `work`: the report is the durable result of a batch, and
+    # deleting the throwaway corpus must not take it along.
+    report = Path(args.report)
+    report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(
         json.dumps([o.__dict__ for o in outcomes], ensure_ascii=False, indent=2),
         encoding="utf-8",
