@@ -55,9 +55,7 @@ class EvidenceStore:
 
             adapter = CardAdapter(
                 condition_codes_for_metric=lambda metric_code: CONDITIONS_BY_METRIC[metric_code],
-                lookup=lambda condition_code, scope_key: cards.get(
-                    (condition_code, scope_key), ()
-                ),
+                lookup=lambda condition_code, scope_key: cards.get((condition_code, scope_key), ()),
             )
             resolver = CardScopeResolver(strict=False)
             entries = [project_observation(observation) for observation in observations]

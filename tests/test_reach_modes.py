@@ -32,9 +32,7 @@ POPULATION_RESTRICTED = (
 )
 
 
-@pytest.mark.parametrize(
-    ("report_name", "expected"), sorted(BODY_COMPOSITION_NAMES.items())
-)
+@pytest.mark.parametrize(("report_name", "expected"), sorted(BODY_COMPOSITION_NAMES.items()))
 def test_body_composition_report_names_resolve(report_name: str, expected: str) -> None:
     assert METRIC_ALIASES.get(normalize_metric_name(report_name)) == expected
 

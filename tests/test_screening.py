@@ -184,8 +184,7 @@ def test_conflict_sql_and_python_agree_on_every_reachable_matrix() -> None:
             }
             by_python = len(conclusions) > 1
             assert bool(by_sql) == by_python, (
-                f"SQL says {bool(by_sql)}, Python says {by_python} for "
-                f"{left} vs {right}"
+                f"SQL says {bool(by_sql)}, Python says {by_python} for {left} vs {right}"
             )
             checked += 1
     assert checked == 81
@@ -310,10 +309,19 @@ def test_structured_results_treats_whitespace_only_as_empty() -> None:
                 "result_id": "r",
                 "evidence_text": "ev",
                 "locator": "loc",
-                **{field: "v" for field in (
-                    "ingredient_name", "ingredient_form", "dose", "comparator",
-                    "outcome", "timepoint", "effect_estimate", "statistical_details",
-                )},
+                **{
+                    field: "v"
+                    for field in (
+                        "ingredient_name",
+                        "ingredient_form",
+                        "dose",
+                        "comparator",
+                        "outcome",
+                        "timepoint",
+                        "effect_estimate",
+                        "statistical_details",
+                    )
+                },
                 "population": "\t\n ",
             }
         ]

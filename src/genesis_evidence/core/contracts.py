@@ -62,9 +62,7 @@ def card_capabilities_summary(grades: Iterable[str]) -> dict[str, str]:
     return {
         "content_layer": "context_only",
         "action_status": "not_available",
-        "action_message": (
-            "这些证据的确定性并不一致，行动建议需要分别看待，当前不作为统一结论。"
-        ),
+        "action_message": ("这些证据的确定性并不一致，行动建议需要分别看待，当前不作为统一结论。"),
     }
 
 

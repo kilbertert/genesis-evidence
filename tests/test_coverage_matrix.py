@@ -80,8 +80,7 @@ def test_coverage_matrix_counts_claim_with_paper_population_context(tmp_path) ->
             (paper_id,),
         ).fetchone()[0]
         connection.execute(
-            "UPDATE evidence_topics SET condition_code = 'COND_CHRONIC_CONSTIPATION' "
-            "WHERE id = ?",
+            "UPDATE evidence_topics SET condition_code = 'COND_CHRONIC_CONSTIPATION' WHERE id = ?",
             (topic_id,),
         )
     service = EvidenceReviewService(ReviewStore(database), PaperStore(database))
@@ -92,8 +91,7 @@ def test_coverage_matrix_counts_claim_with_paper_population_context(tmp_path) ->
     row = next(
         item
         for item in ReviewStore(database).list_coverage_matrix()
-        if item["condition_code"] == "COND_CHRONIC_CONSTIPATION"
-        and item["metric_code"] is None
+        if item["condition_code"] == "COND_CHRONIC_CONSTIPATION" and item["metric_code"] is None
     )
     assert row["approved_claim_count"] == 1
 

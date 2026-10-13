@@ -231,6 +231,27 @@ cap is the control.**
      repairable rather than permanent.
    - **Do not build a "stronger model" harness for this step.** There is nothing
      for it to answer.
+   - **Measured outcome, 2026-10-13, on `sodium-reduction-blood-pressure` (10
+     papers, one topic, replaying only the consistency stage over stored A/B).**
+     The contract works as designed and the predicted benefit did not
+     materialise, and both halves matter:
+
+     | | before | after |
+     | --- | ---: | ---: |
+     | material issues reported | 18 | 2 |
+     | of those, adjudicable | 1 (6%) | 2 (100%) |
+     | all issues reported | 230 | 52 |
+     | issues at `high` severity | 17 | 2 |
+
+     So every reported difference is now actionable, which is the contract
+     working. But the 43 non-attesting material issues did **not** become
+     adjudicable — the checker stopped reporting them. All 10 papers stayed
+     `needs_review`, so nothing was hidden behind a `consistent` verdict; the
+     suppression is at the *material* level. Whether those withdrawn differences
+     were real (and are now lost) or padded (and were correctly dropped) is
+     **not settled by this measurement**, and the honest next step is repeated
+     runs comparing what each prompt reports on the same papers — not one before
+     and one after. Do not read this table as "the gap is closed".
    - **Zero errors remains the bar for a verdict that changes patient-facing
      direction.** Every other unresolved difference must quote the source that
      decides it.

@@ -204,8 +204,10 @@ def _require_unique(observations) -> None:
 
 
 def _row_key(item) -> tuple[int, int, str]:
-    return item.source_file_index, item.source_page, re.sub(
-        r"[^a-z0-9\u4e00-\u9fff]+", "", item.name.casefold()
+    return (
+        item.source_file_index,
+        item.source_page,
+        re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", item.name.casefold()),
     )
 
 

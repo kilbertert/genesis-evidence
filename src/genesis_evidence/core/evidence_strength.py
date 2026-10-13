@@ -100,8 +100,7 @@ STRENGTH_LABELS: Mapping[str, str] = {
 #: `moderate`; the derivation covers `high` too, so a future cap change needs no
 #: second edit here.
 STRENGTH_BY_SCORE: Mapping[int, str] = {
-    len(EVIDENCE_STRENGTHS) - 1 - index: strength
-    for strength, index in EVIDENCE_RANK.items()
+    len(EVIDENCE_STRENGTHS) - 1 - index: strength for strength, index in EVIDENCE_RANK.items()
 }
 
 
@@ -173,7 +172,9 @@ def visibility_guidance() -> str:
     if withheld:
         clauses.append(f"{withheld}确定性内容不会发布到患者端")
     if context_only:
-        clauses.append(f"{context_only}确定性内容仅作为证据背景卡发布，行动建议需达到中等或高确定性")
+        clauses.append(
+            f"{context_only}确定性内容仅作为证据背景卡发布，行动建议需达到中等或高确定性"
+        )
     return "；".join(clauses) + "。"
 
 

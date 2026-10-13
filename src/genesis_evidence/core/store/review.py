@@ -137,7 +137,7 @@ class ReviewStore:
                     JOIN collection_runs cr ON cr.id = cp.run_id
                     JOIN evidence_topics et ON et.id = cr.topic_id
                     WHERE cp.paper_id = ? AND cp.title_abstract_decision = 'included'
-                        AND {included_sql('cp.full_text_decision')}
+                        AND {included_sql("cp.full_text_decision")}
                         AND cr.status = 'completed' AND et.status = 'locked'
                     """,
                     (paper_id,),
@@ -508,7 +508,7 @@ class ReviewStore:
                     f"""
                     SELECT DISTINCT cp.paper_id FROM collection_papers cp
                     JOIN collection_runs cr ON cr.id = cp.run_id
-                    WHERE cr.topic_id = ? AND {included_sql('cp.full_text_decision')}
+                    WHERE cr.topic_id = ? AND {included_sql("cp.full_text_decision")}
                     """,
                     (topic_id,),
                 ).fetchall()
@@ -529,9 +529,7 @@ class ReviewStore:
                 raise ValueError(
                     "only verified formal publications can support a patient-visible profile"
                 )
-            if any(
-                row["corrected_study_design"] in EXCLUDED_STUDY_DESIGNS for row in rows
-            ):
+            if any(row["corrected_study_design"] in EXCLUDED_STUDY_DESIGNS for row in rows):
                 raise ValueError(
                     "mechanism and case-report results cannot support a patient-visible card"
                 )
@@ -583,7 +581,7 @@ class ReviewStore:
                         SELECT 1 FROM collection_papers cp
                         JOIN collection_runs cr ON cr.id = cp.run_id
                         WHERE cr.topic_id = ? AND cp.paper_id = p.id
-                            AND {included_sql('cp.full_text_decision')}
+                            AND {included_sql("cp.full_text_decision")}
                     )
                 """,
                 (condition_code, topic_id),
@@ -595,9 +593,7 @@ class ReviewStore:
             # `component_token` can never disagree.
             body_tokens = {_component_token(row) for row in rows}
             if len(body_tokens) != 1 or "" in body_tokens:
-                raise ValueError(
-                    "evidence profile must pool exactly one component identity"
-                )
+                raise ValueError("evidence profile must pool exactly one component identity")
             component_token = body_tokens.pop()
             requested_token = str(profile.get("component_token") or "")
             if requested_token and requested_token != component_token:
@@ -1107,7 +1103,7 @@ class ReviewStore:
                 JOIN conditions condition ON condition.code = et.condition_code
                 JOIN collection_runs run ON run.topic_id = et.id
                 JOIN collection_papers item ON item.run_id = run.id
-                WHERE item.paper_id = ? AND {included_sql('item.full_text_decision')}
+                WHERE item.paper_id = ? AND {included_sql("item.full_text_decision")}
                 ORDER BY et.id
                 """,
                 (paper_id,),
@@ -1152,7 +1148,7 @@ class ReviewStore:
                             SELECT 1 FROM collection_papers cp
                             JOIN collection_runs run ON run.id = cp.run_id
                             WHERE run.topic_id = ? AND cp.paper_id = p.id
-                                AND {included_sql('cp.full_text_decision')}
+                                AND {included_sql("cp.full_text_decision")}
                         )
                     ORDER BY c.id
                     """,
@@ -1279,7 +1275,7 @@ class ReviewStore:
                         run_counts = connection.execute(
                             f"""
                             SELECT count(DISTINCT cr.id) AS completed_runs,
-                                count(DISTINCT CASE WHEN {included_sql('cp.full_text_decision')}
+                                count(DISTINCT CASE WHEN {included_sql("cp.full_text_decision")}
                                     THEN cp.paper_id END) AS full_text_included,
                                 count(DISTINCT CASE WHEN cp.title_abstract_decision IS NULL
                                     THEN cp.paper_id END) AS title_abstract_pending,
@@ -1316,7 +1312,7 @@ class ReviewStore:
                             JOIN papers p ON p.id = c.paper_id
                             JOIN paper_admissions pa ON pa.paper_id = p.id
                             JOIN collection_papers cp ON cp.paper_id = c.paper_id
-                                AND {included_sql('cp.full_text_decision')}
+                                AND {included_sql("cp.full_text_decision")}
                             JOIN collection_runs run ON run.id = cp.run_id
                             JOIN evidence_topics topic ON topic.id = run.topic_id
                             WHERE cr.condition_code = ? AND cr.decision = 'approved'
@@ -1717,8 +1713,8 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
                 ))
             ))
             OR ({
-                excluded_any_stage_sql('cp.full_text_decision', 'cp.title_abstract_decision')
-            } AND (
+            excluded_any_stage_sql("cp.full_text_decision", "cp.title_abstract_decision")
+        } AND (
                 cp.primary_exclusion_reason IS NULL OR NOT EXISTS (
                     SELECT 1 FROM json_each(?) reason
                     WHERE reason.value = cp.primary_exclusion_reason
@@ -1752,7 +1748,7 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         )
         LEFT JOIN paper_admissions pa ON pa.paper_id = cp.paper_id
             WHERE cr.topic_id = ? AND cr.status = 'completed'
-                AND {included_sql('cp.full_text_decision')} AND (
+                AND {included_sql("cp.full_text_decision")} AND (
                 ft.paper_id IS NULL OR pe.id IS NULL OR pa.status <> 'internally_admitted'
                 OR NOT EXISTS (
                     SELECT 1 FROM json_each(pa.condition_codes_json) admitted
@@ -1781,7 +1777,7 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
         SELECT count(DISTINCT cp.paper_id) FROM collection_papers cp
         JOIN collection_runs cr ON cr.id = cp.run_id
         WHERE cr.topic_id = ? AND cr.status = 'completed'
-            AND {included_sql('cp.full_text_decision')}
+            AND {included_sql("cp.full_text_decision")}
         """,
         (topic_id,),
     ).fetchone()[0]
@@ -1802,8 +1798,6 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
     if incomplete_included_paper:
         raise ValueError("every full-text included paper must be extracted, admitted, and reviewed")
     return topic
-
-
 
 
 def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:

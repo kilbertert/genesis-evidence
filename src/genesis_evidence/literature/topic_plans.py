@@ -97,10 +97,7 @@ class TopicPlan:
 def full_query(plan: TopicPlan, *, cutoff: str) -> str:
     """The complete Europe PMC query: the plan's terms plus the shared tail."""
 
-    return (
-        f"({plan.query_core}) AND {PUB_TYPE_CLAUSE} "
-        f"AND FIRST_PDATE:[1900-01-01 TO {cutoff}]"
-    )
+    return f"({plan.query_core}) AND {PUB_TYPE_CLAUSE} AND FIRST_PDATE:[1900-01-01 TO {cutoff}]"
 
 
 def _picots(
@@ -337,9 +334,7 @@ TOPIC_PLANS: tuple[TopicPlan, ...] = (
 )
 
 
-PLANS_BY_CONDITION: dict[str, TopicPlan] = {
-    plan.condition_code: plan for plan in TOPIC_PLANS
-}
+PLANS_BY_CONDITION: dict[str, TopicPlan] = {plan.condition_code: plan for plan in TOPIC_PLANS}
 
 
 def plans_for(condition_codes: list[str]) -> list[TopicPlan]:

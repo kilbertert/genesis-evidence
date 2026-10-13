@@ -64,9 +64,7 @@ def _store(tmp_path) -> tuple[ReportStore, ReportHandle]:
     database = Database(tmp_path / "evidence.sqlite3")
     database.initialize()
     store = ReportStore(database, ObjectStore(tmp_path / "objects"))
-    handle = store.create(
-        (ReportFile(b"first", "page-1.txt"), ReportFile(b"second", "page-2.txt"))
-    )
+    handle = store.create((ReportFile(b"first", "page-1.txt"), ReportFile(b"second", "page-2.txt")))
     return store, handle
 
 

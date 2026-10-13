@@ -331,20 +331,23 @@ def test_ai_extraction_persists_one_result_per_claim(tmp_path) -> None:
         }
     )
 
-    assert store.save_ai_extraction(
-        paper_id,
-        CheckedPaperExtraction(
-            model="model-a",
-            extraction_run_id="run-a",
-            extraction=extraction,
-            second_model="model-b",
-            second_run_id="run-b",
-            second_extraction=extraction,
-            check_model="checker",
-            check_run_id="run-check",
-            consistency=ConsistencyReport(verdict="consistent", issues=[]),
-        ),
-    ) == 2
+    assert (
+        store.save_ai_extraction(
+            paper_id,
+            CheckedPaperExtraction(
+                model="model-a",
+                extraction_run_id="run-a",
+                extraction=extraction,
+                second_model="model-b",
+                second_run_id="run-b",
+                second_extraction=extraction,
+                check_model="checker",
+                check_run_id="run-check",
+                consistency=ConsistencyReport(verdict="consistent", issues=[]),
+            ),
+        )
+        == 2
+    )
 
     with database.connect() as connection:
         rows = connection.execute(
@@ -1353,13 +1356,9 @@ def test_one_uncheckable_paper_does_not_discard_the_whole_collection_run(tmp_pat
         )
         # No verdict reaches the row: the schema default is `unknown`, and the
         # pipeline treats unknown as "not clear", so no evidence follows.
-        assert (
-            connection.execute("SELECT integrity_status FROM papers").fetchone()[0] == "unknown"
-        )
+        assert connection.execute("SELECT integrity_status FROM papers").fetchone()[0] == "unknown"
         assert connection.execute("SELECT count(*) FROM full_texts").fetchone()[0] == 0
-        assert (
-            connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
-        )
+        assert connection.execute("SELECT count(*) FROM paper_extraction_jobs").fetchone()[0] == 0
         # The run finishes after this event, so it is not the *last* one; ask for it
         # by name rather than by position.
         assert (

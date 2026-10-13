@@ -87,12 +87,9 @@ def _material(issues: list[dict[str, object]], claims: list[dict[str, object]]) 
 
 
 def _analyzer() -> ArkPaperAnalyzer:
-    return ArkPaperAnalyzer.from_env(
-        model=os.getenv("PAPER_AI_MODEL", "deepseek/deepseek-v4.1-flash"),
-        second_model=os.getenv("PAPER_AI_SECOND_MODEL", os.getenv("PAPER_AI_MODEL", "")),
-        timeout=float(os.getenv("PAPER_AI_TIMEOUT_SECONDS", "600")),
-        max_tokens=int(os.getenv("PAPER_AI_MAX_TOKENS", "32768")),
-    )
+    """The same construction the extraction worker uses, from the same environment."""
+
+    return ArkPaperAnalyzer.from_env()
 
 
 def _key_present() -> bool:
@@ -217,17 +214,16 @@ def main() -> None:
                     )
                 ]
             old = json.loads(row["consistency_json"]) if row["consistency_json"] else {"issues": []}
+            old_all = old.get("issues") or []
             paper = store.get_analysis_source(paper_id)[0]
             before = [
                 _adjudication_disposition(issue, segments)
                 for issue in _material(old.get("issues") or [], claims)
             ]
             report, _ = analyzer.check(paper, document, extraction, second)
+            new_all = [issue.model_dump(mode="json") for issue in report.issues]
             after = [
-                _adjudication_disposition(issue.model_dump(mode="json"), segments)
-                for issue in _material(
-                    [issue.model_dump(mode="json") for issue in report.issues], claims
-                )
+                _adjudication_disposition(issue, segments) for issue in _material(new_all, claims)
             ]
         except PaperAnalysisError as exc:
             status, detail = "provider_error", str(exc)[:200]
@@ -240,6 +236,9 @@ def main() -> None:
                 "detail": detail,
                 "before": [d.__dict__ for d in before],
                 "after": [d.__dict__ for d in after],
+                "old_issue_count": len(old_all),
+                "new_issue_count": len(new_all),
+                "new_verdict": report.verdict,
             }
         )
         print(

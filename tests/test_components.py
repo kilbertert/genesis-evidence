@@ -225,9 +225,7 @@ def test_a_name_too_coarse_to_be_a_component_fails_closed() -> None:
     while these two do not.
     """
 
-    for too_coarse, why in (
-        ("膳食盐", "names a salt-reduction education programme"),
-    ):
+    for too_coarse, why in (("膳食盐", "names a salt-reduction education programme"),):
         assert resolve_component(too_coarse) is None, f"{too_coarse} {why}"
     # The contrast that keeps this judgement honest: a name that IS one
     # substance stays, even though a row of its evidence is imprecise.

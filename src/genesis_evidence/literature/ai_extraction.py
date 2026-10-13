@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..core.conditions import CONDITION_BY_CODE, CONDITIONS
 from ..core.consistency import CONSISTENT, NEEDS_REVIEW, Verdict
 from ..core.methodology import STUDY_DESIGNS, permits_causal_inference
-from ..core.source_excerpt import Excerpt, _source_evidence_fragments, attest
+from ..core.source_excerpt import (
+    CitationTolerance,
+    Excerpt,
+    _source_evidence_fragments,
+    attest,
+)
 from .models import PaperRecord
 
 DEFAULT_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
@@ -137,20 +142,17 @@ class PaperExtraction(BaseModel):
 #: issue that carries a `field` the checker chose must quote the source.
 SYNTHESIZED_ISSUE_FIELD = "dual_extraction"
 
-#: Tolerances at which the consistency checker's quotes are checked. Two, and both must
-#: hold, because the two ends of the pipeline compare differently:
+#: The tolerance at which the consistency checker's quotes are checked: the same one
+#: `_source_adjudication` uses to decide an issue. The gate and the consumer must agree,
+#: or a quote admitted here fails there and the contract has moved nothing.
 #:
-#: - `strict` is what `_source_adjudication` uses when it decides an issue, so a quote
-#:   admitted here must clear the check that will later read it.
-#: - `citations` is what the extraction path already holds its own evidence to, so a
-#:   publisher-inserted "(Table 2)" inside an otherwise verbatim quote does not fail an
-#:   issue that the extraction stage would have accepted.
-#:
-#: Measured on the stored corpus before this contract existed: of the material issues
-#: whose evidence failed `strict`, none were recovered by `citations` — the failures were
-#: prose summaries, not citation-internal quotes. Both are still checked, so this
-#: predicate is not tuned to that measurement.
-ATTESTATION_TOLERANCES = ("strict", "citations")
+#: `citations` — the extraction path's tolerance, which also survives a publisher-inserted
+#: "(Table 2)" inside the quote — is deliberately NOT accepted here, because the adjudicator
+#: does not use it. Keeping it as a second accepted tolerance would have made no difference:
+#: a quote failing `strict` is rejected either way, so the looser mode would never have
+#: admitted anything. The extraction stage's own evidence keeps `citations`, which is a
+#: different object checked by a different consumer.
+ATTESTATION_TOLERANCE: CitationTolerance = "strict"
 
 
 def _require_verbatim_evidence(report: ConsistencyReport, document: object) -> ConsistencyReport:
@@ -174,16 +176,14 @@ def _require_verbatim_evidence(report: ConsistencyReport, document: object) -> C
         if not fragments:
             missing.append(f"{issue.field}=<no verbatim quote in evidence>")
             continue
-        for tolerance in ATTESTATION_TOLERANCES:
-            unattested = attest(
-                document,
-                [Excerpt(field=issue.field, text=fragment) for fragment in fragments],
-                tolerance=tolerance,
-            ).missing
-            if unattested:
-                quote = json.dumps(unattested[0].text[:200], ensure_ascii=False)
-                missing.append(f"{issue.field}={quote}")
-                break
+        unattested = attest(
+            document,
+            [Excerpt(field=issue.field, text=fragment) for fragment in fragments],
+            tolerance=ATTESTATION_TOLERANCE,
+        ).missing
+        if unattested:
+            quote = json.dumps(unattested[0].text[:200], ensure_ascii=False)
+            missing.append(f"{issue.field}={quote}")
     if missing:
         details = "; ".join(missing[:10])
         if len(missing) > 10:

@@ -1,4 +1,3 @@
-
 from fastapi.testclient import TestClient
 
 from genesis_evidence.core.contracts import EvidenceMatchResponse
@@ -738,11 +737,7 @@ def test_two_components_in_one_scope_serve_both_cards_without_mixing_sources(tmp
     response = client.post("/api/evidence/matches", json=adapted.request.model_dump())
     assert response.status_code == 200, response.json()
 
-    items = [
-        item
-        for finding in response.json()["findings"]
-        for item in finding["evidence_items"]
-    ]
+    items = [item for finding in response.json()["findings"] for item in finding["evidence_items"]]
     served = sorted(item["card"]["id"] for item in items)
     assert served == ["card-a", "card-b"], "both component cards must be served"
 

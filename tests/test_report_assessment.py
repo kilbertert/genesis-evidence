@@ -315,6 +315,4 @@ def test_assessment_matches_the_card_for_the_observations_own_metric(tmp_path) -
 
     result = store.assess(handle.report_id, handle.access_token)
 
-    assert [finding["card_id"] for finding in result["findings"]] == [
-        "card-COND_PREDIABETES-1.0.0"
-    ]
+    assert [finding["card_id"] for finding in result["findings"]] == ["card-COND_PREDIABETES-1.0.0"]

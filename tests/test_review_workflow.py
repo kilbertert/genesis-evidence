@@ -1408,9 +1408,7 @@ def test_profile_eligibility_ignores_a_finally_rejected_matching_result(tmp_path
     paper_id, approved_claim_id = _review_case(database)
     rejected_claim_id = str(uuid.uuid4())
     _admit(service, paper_id)
-    service.review_claim(
-        approved_claim_id, reviewer="reviewer-1", review=_approved_review()
-    )
+    service.review_claim(approved_claim_id, reviewer="reviewer-1", review=_approved_review())
     with database.transaction() as connection:
         connection.execute(
             """

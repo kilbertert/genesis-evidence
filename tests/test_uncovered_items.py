@@ -67,9 +67,7 @@ def test_unreadable_rows_survive_a_report_with_nothing_readable() -> None:
 def test_clean_report_says_nothing_about_unreadable_rows() -> None:
     """全是参考范围内的报告不该出现「不在解读范围内」的提示——那会平白吓人。"""
 
-    reply = patient_reply_v3(
-        [], [], [{"observation_id": "a", "reason": "within_reference_range"}]
-    )
+    reply = patient_reply_v3([], [], [{"observation_id": "a", "reason": "within_reference_range"}])
 
     assert "不在当前解读范围内" not in reply["summary"]
 

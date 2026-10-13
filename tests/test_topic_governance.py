@@ -691,9 +691,7 @@ def test_reconcile_does_not_fabricate_a_full_text_verdict_for_an_unscreened_run(
 
     assert len(result["conflicts"]) == 1
     assert result["normalized_records"] == 0
-    first = next(
-        row for row in store.list_topic_ledger(topic_id) if row["run_id"] == first_run
-    )
+    first = next(row for row in store.list_topic_ledger(topic_id) if row["run_id"] == first_run)
     assert first["full_text_decision"] is None, (
         "reconciliation must not assert a full-text verdict for a run nobody screened"
     )
@@ -733,18 +731,23 @@ def test_the_two_conflict_readers_agree_on_a_divergent_matrix(tmp_path) -> None:
     seen_by_reconcile = bool(store.reconcile_topic_ledger(topic_id, reviewer="r")["conflicts"])
     # Rebuild the divergent state: reconcile left it alone, so it still holds.
     with database.connect() as connection:
-        seen_by_closure = connection.execute(
-            f"""
+        seen_by_closure = (
+            connection.execute(
+                f"""
             SELECT 1 FROM collection_papers cp JOIN collection_runs cr ON cr.id = cp.run_id
             WHERE cr.topic_id = ? AND cr.status = 'completed'
             GROUP BY cp.paper_id
-            HAVING {screening_conflict_sql(
-                "cp.paper_id", "cp.title_abstract_decision", "cp.full_text_decision"
-            )}
+            HAVING {
+                    screening_conflict_sql(
+                        "cp.paper_id", "cp.title_abstract_decision", "cp.full_text_decision"
+                    )
+                }
             LIMIT 1
             """,
-            (topic_id,),
-        ).fetchone() is not None
+                (topic_id,),
+            ).fetchone()
+            is not None
+        )
 
     assert seen_by_reconcile == seen_by_closure is True
 

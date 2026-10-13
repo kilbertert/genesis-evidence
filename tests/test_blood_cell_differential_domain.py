@@ -72,10 +72,7 @@ def test_bare_name_is_absolute_not_percent() -> None:
     """裸名 `Neutrophils` 是绝对值；百分比是另一项。混了会把值挂错指标。"""
 
     assert METRIC_ALIASES[normalize_metric_name("Neutrophils")] == "neutrophils_absolute"
-    assert (
-        METRIC_ALIASES[normalize_metric_name("Neutrophils percentage")]
-        == "neutrophils_percent"
-    )
+    assert METRIC_ALIASES[normalize_metric_name("Neutrophils percentage")] == "neutrophils_percent"
 
 
 def test_urine_leucocytes_is_not_blood_wbc() -> None:

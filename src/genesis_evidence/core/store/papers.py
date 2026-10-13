@@ -724,10 +724,10 @@ class PaperStore:
                                     )
                                 )
                                 values.append(title_exclusion_reason)
-                        if (
-                            retrieval is not None
-                            and record["full_text_retrieval_status"] in {None, "pending"}
-                        ):
+                        if retrieval is not None and record["full_text_retrieval_status"] in {
+                            None,
+                            "pending",
+                        }:
                             assignments.extend(
                                 (
                                     "full_text_retrieval_status = ?",
@@ -929,8 +929,8 @@ class PaperStore:
                         JOIN collection_runs related_run ON related_run.id = cp.run_id
                         WHERE cp.paper_id = job.paper_id
                             AND (? IS NULL OR related_run.topic_id = ?)
-                            AND {not_excluded_sql('cp.title_abstract_decision')}
-                            AND {not_excluded_sql('cp.full_text_decision')}
+                            AND {not_excluded_sql("cp.title_abstract_decision")}
+                            AND {not_excluded_sql("cp.full_text_decision")}
                     )
                 """,
                 (topic_id, topic_id, topic_id, topic_id),
@@ -985,8 +985,8 @@ class PaperStore:
                         WHERE cp.run_id = job.collection_run_id
                             AND cp.paper_id = job.paper_id
                             AND (? IS NULL OR cr.topic_id = ?)
-                            AND {not_excluded_sql('cp.title_abstract_decision')}
-                            AND {not_excluded_sql('cp.full_text_decision')}
+                            AND {not_excluded_sql("cp.title_abstract_decision")}
+                            AND {not_excluded_sql("cp.full_text_decision")}
                     )
                 """,
                 (topic_id, topic_id),
@@ -1198,8 +1198,8 @@ class PaperStore:
                         JOIN collection_runs other_run ON other_run.id = other_item.run_id
                         WHERE other_item.paper_id = paper_extraction_jobs.paper_id
                             AND other_run.topic_id <> ?
-                            AND {not_excluded_sql('other_item.title_abstract_decision')}
-                            AND {not_excluded_sql('other_item.full_text_decision')}
+                            AND {not_excluded_sql("other_item.title_abstract_decision")}
+                            AND {not_excluded_sql("other_item.full_text_decision")}
                     ))
                     AND (NOT EXISTS (
                         SELECT 1 FROM collection_papers cp
@@ -1209,8 +1209,8 @@ class PaperStore:
                         JOIN collection_runs eligible_run ON eligible_run.id = cp.run_id
                         WHERE cp.paper_id = paper_extraction_jobs.paper_id
                             AND (? IS NULL OR eligible_run.topic_id = ?)
-                            AND {not_excluded_sql('cp.title_abstract_decision')}
-                            AND {not_excluded_sql('cp.full_text_decision')}
+                            AND {not_excluded_sql("cp.title_abstract_decision")}
+                            AND {not_excluded_sql("cp.full_text_decision")}
                     ))
                 ORDER BY CASE WHEN EXISTS (
                     SELECT 1 FROM collection_runs run

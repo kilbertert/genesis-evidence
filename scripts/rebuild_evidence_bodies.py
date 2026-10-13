@@ -145,6 +145,7 @@ def main() -> int:
         )
     return 1 if failures else 0
 
+
 def _run(db_path: Path, objects_root: Path, reviewer: str, *, write: bool):
     database = Database(db_path)
     # The additive migration, including the component_token columns.

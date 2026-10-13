@@ -65,7 +65,7 @@ def test_a_paper_that_published_every_card_rebuilt_completely() -> None:
 
 
 def test_a_paper_with_some_cards_published_rebuilt_partially() -> None:
-    """"Not every card published" is a state, not a failure.
+    """ "Not every card published" is a state, not a failure.
 
     A paper covering several topics legitimately has topics with no matching
     PICOTS scope. Counting that as a failure reported 21 of 39 papers as failed

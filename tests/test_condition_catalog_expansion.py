@@ -94,9 +94,11 @@ def test_conditions_by_metric_links_new_metrics_to_their_condition() -> None:
     assert CONDITION_BY_CODE["COND_ELECTROLYTE_DISTURBANCE"] in CONDITIONS_BY_METRIC["sodium"]
     assert CONDITION_BY_CODE["COND_URINARY_ABNORMALITY"] in CONDITIONS_BY_METRIC["urine_protein"]
     # 共享指标要关联到**每一个**认领它的健康问题，不是一个。
-    assert {
-        condition.code for condition in CONDITIONS_BY_METRIC["fasting_glucose"]
-    } >= {"COND_PREDIABETES", "COND_MASLD_RISK", "COND_METABOLIC_SYNDROME"}
+    assert {condition.code for condition in CONDITIONS_BY_METRIC["fasting_glucose"]} >= {
+        "COND_PREDIABETES",
+        "COND_MASLD_RISK",
+        "COND_METABOLIC_SYNDROME",
+    }
 
 
 def test_first_batch_metric_assignments_are_unchanged() -> None:
@@ -174,9 +176,7 @@ def test_new_conditions_produce_no_finding_until_a_card_is_published(tmp_path) -
         confirmation_status="confirmed",
     )
 
-    payload = EvidenceStore(database).match_published_cards(
-        [observation], correlation_id="corr-1"
-    )
+    payload = EvidenceStore(database).match_published_cards([observation], correlation_id="corr-1")
 
     assert payload["findings"] == []
     # 而它确实被认领了——只是没卡可发，所以落进 unmatched 而不是被静默丢弃。

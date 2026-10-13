@@ -146,9 +146,7 @@ def demo() -> None:
             assert target in CARD_STATUSES, target
             assert target != source, f"{source} -> itself is not a move"
     # The autonomous path is a walk of the graph, not a parallel description.
-    for source, target in zip(
-        AUTONOMOUS_REVIEW_PATH, AUTONOMOUS_REVIEW_PATH[1:], strict=False
-    ):
+    for source, target in zip(AUTONOMOUS_REVIEW_PATH, AUTONOMOUS_REVIEW_PATH[1:], strict=False):
         assert can_transition(source, target), f"{source} -> {target}"
     # Sinks offer nothing, and unknown statuses are not wide open.
     for sink in ("published", "rejected", "stale"):

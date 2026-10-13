@@ -58,9 +58,7 @@ def test_profile_scopes_metric_for_prediabetes() -> None:
         "intervention_or_exposure": (
             "Dietary or lifestyle intervention with a defined nutrition component"
         ),
-        "comparator": (
-            "Usual care, minimal intervention, or an alternative dietary intervention"
-        ),
+        "comparator": ("Usual care, minimal intervention, or an alternative dietary intervention"),
         "outcomes": "Fasting glucose and HbA1c",
         "timing": "At least 12 weeks",
     }
@@ -95,8 +93,11 @@ def test_resolve_profile_scope_for_metricless_condition() -> None:
     }
 
     key, label = resolver.resolve_profile_scope(
-        picots, "COND_CHRONIC_CONSTIPATION", [dimensions],
-        requested="", estimate_target="stool frequency",
+        picots,
+        "COND_CHRONIC_CONSTIPATION",
+        [dimensions],
+        requested="",
+        estimate_target="stool frequency",
     )
     assert key == "condition:COND_CHRONIC_CONSTIPATION"
     assert label == "慢性便秘"
@@ -120,8 +121,11 @@ def test_resolve_profile_scope_rejects_inconsistent_requested() -> None:
 
     try:
         resolver.resolve_profile_scope(
-            picots, "COND_CHRONIC_CONSTIPATION", [dimensions],
-            requested="metric:creatinine", estimate_target="stool frequency",
+            picots,
+            "COND_CHRONIC_CONSTIPATION",
+            [dimensions],
+            requested="metric:creatinine",
+            estimate_target="stool frequency",
         )
         raise AssertionError("expected ValueError for inconsistent requested scope")
     except ValueError:

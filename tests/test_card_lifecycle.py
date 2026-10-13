@@ -111,9 +111,7 @@ def test_no_module_restates_the_transition_graph_as_a_dict_literal() -> None:
             if not re.search(r"['\"]draft['\"]\s*:", span):
                 continue
             hits = [
-                status
-                for status in CARD_STATUSES
-                if f"'{status}'" in span or f'"{status}"' in span
+                status for status in CARD_STATUSES if f"'{status}'" in span or f'"{status}"' in span
             ]
             if len(hits) > 1:
                 offenders.append(f"{path.relative_to(SOURCE_ROOT)}: {sorted(hits)}")
@@ -136,7 +134,6 @@ def test_every_transition_target_is_a_real_status_and_a_real_move() -> None:
             assert can_transition(source, target)
     # A target may be terminal: refusing a card moves it to `rejected`, which is
     # a real move and a real end. Only `draft` must never be re-entered.
-
 
 
 def test_the_autonomous_path_is_a_walk_of_the_graph() -> None:
@@ -210,9 +207,7 @@ def test_no_module_restates_the_visibility_rule_in_sql() -> None:
     offenders: list[str] = []
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
         text = path.read_text()
-        for match in re.finditer(
-            r"grade\s+IN\s*\(([^)]*)\)[^\n]*\n?[^\n]*", text
-        ):
+        for match in re.finditer(r"grade\s+IN\s*\(([^)]*)\)[^\n]*\n?[^\n]*", text):
             window = text[max(0, match.start() - 200) : match.end() + 200]
             hits = [grade for grade in PATIENT_VISIBLE_GRADES if f"'{grade}'" in match.group(1)]
             # A card-selection query pairs the grade list with an *equality* on
@@ -234,11 +229,7 @@ def test_the_sql_scan_discriminates() -> None:
     def flags(text: str) -> bool:
         for match in re.finditer(r"grade\s+IN\s*\(([^)]*)\)", text):
             window = text[max(0, match.start() - 200) : match.end() + 200]
-            hits = [
-                grade
-                for grade in PATIENT_VISIBLE_GRADES
-                if f"'{grade}'" in match.group(1)
-            ]
+            hits = [grade for grade in PATIENT_VISIBLE_GRADES if f"'{grade}'" in match.group(1)]
             if (
                 len(hits) > 1
                 and re.search(r"status\s*=\s*'published'", window)

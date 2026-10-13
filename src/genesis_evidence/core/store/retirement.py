@@ -39,9 +39,7 @@ def _in(count: int) -> str:
     return ", ".join("?" * count)
 
 
-def retire_cards_for_claims(
-    connection: sqlite3.Connection, claim_ids: Sequence[str]
-) -> int:
+def retire_cards_for_claims(connection: sqlite3.Connection, claim_ids: Sequence[str]) -> int:
     """Retire every card citing any of ``claim_ids``. Returns the number retired."""
 
     wanted = tuple(str(claim_id) for claim_id in claim_ids)

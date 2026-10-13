@@ -282,9 +282,7 @@ def _migrate_legacy_shared_results(connection: sqlite3.Connection) -> None:
             (old_result_id,),
         ).fetchall()
         try:
-            result_rows = [
-                _legacy_result_row(claim, old_result_id) for claim in claims
-            ]
+            result_rows = [_legacy_result_row(claim, old_result_id) for claim in claims]
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             _record_migration_event_once(
                 connection,
@@ -341,13 +339,9 @@ def _migrate_legacy_shared_results(connection: sqlite3.Connection) -> None:
             }
             for row in result_rows:
                 if not selected_claim_ids or row["claim_id"] in selected_claim_ids:
-                    profile_targets[(profile_id, row["id"])] = str(
-                        profile_ref["interpretation"]
-                    )
+                    profile_targets[(profile_id, row["id"])] = str(profile_ref["interpretation"])
 
-        stale_cards = retire_cards_for_claims(
-            connection, [claim["id"] for claim in claims]
-        )
+        stale_cards = retire_cards_for_claims(connection, [claim["id"] for claim in claims])
 
         for row in result_rows:
             connection.execute(
@@ -461,9 +455,7 @@ def _legacy_result_row(claim: sqlite3.Row, old_result_id: str) -> dict[str, str]
     }
 
 
-def _required_legacy_text(
-    claim: sqlite3.Row, field: str, old_result_id: str
-) -> str:
+def _required_legacy_text(claim: sqlite3.Row, field: str, old_result_id: str) -> str:
     value = claim[field]
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Result {old_result_id} has no {field}")

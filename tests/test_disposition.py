@@ -207,9 +207,7 @@ def test_the_producer_scan_actually_catches_an_unregistered_reason() -> None:
     # is exactly why the declaration exists beside it.
     assert emitted("skipped.append(_skip(position, UNKNOWN_METRIC))") == set()
     # And a fully registered source compares equal.
-    registered = "\n".join(
-        f'rows.append({{"reason": "{reason}"}})' for reason in sorted(declared)
-    )
+    registered = "\n".join(f'rows.append({{"reason": "{reason}"}})' for reason in sorted(declared))
     assert emitted(registered) == declared
 
 
@@ -252,9 +250,16 @@ def test_the_adapter_rows_reach_the_rider_end_to_end() -> None:
     from genesis_evidence.integrations.health_flow import build_evidence_request
 
     result = build_evidence_request(
-        [{"metric_name": "C-Reactive Protein", "metric_value": "12", "unit": "mg/L",
-          "reference_range": "0-5", "evidence_text": "C-Reactive Protein 12 mg/L 0-5 H",
-          "page_number": 1}],
+        [
+            {
+                "metric_name": "C-Reactive Protein",
+                "metric_value": "12",
+                "unit": "mg/L",
+                "reference_range": "0-5",
+                "evidence_text": "C-Reactive Protein 12 mg/L 0-5 H",
+                "page_number": 1,
+            }
+        ],
         confirmed=True,
     )
     assert result.uncovered, "the adapter produced no unreadable row to carry"
@@ -308,8 +313,13 @@ def test_the_two_v2_paths_word_the_same_result_identically() -> None:
         "needs_recheck": True,
         "department": "D",
         "recheck_direction": "R",
-        "card": {"id": "card-1", "version": "1", "evidence_profile_id": "p",
-                 "patient_visible_body": "b", "sources": []},
+        "card": {
+            "id": "card-1",
+            "version": "1",
+            "evidence_profile_id": "p",
+            "patient_visible_body": "b",
+            "sources": [],
+        },
         "source_observation_ids": ["o1"],
         "source_observations": [],
         "content_layer": "context_only",
@@ -344,9 +354,7 @@ def test_the_v2_no_findings_sentence_is_unchanged_by_this_change() -> None:
         == ALL_IN_RANGE_SUMMARY
     )
     # The rider is still the one thing v2 gained.
-    assert "不在当前解读范围内" in patient_reply_v2(
-        [], [], [{"reason": UNKNOWN_METRIC}]
-    )["summary"]
+    assert "不在当前解读范围内" in patient_reply_v2([], [], [{"reason": UNKNOWN_METRIC}])["summary"]
 
 
 def test_patient_reply_v2_carries_the_rider_it_structurally_could_not_before() -> None:

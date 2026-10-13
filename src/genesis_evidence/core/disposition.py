@@ -124,9 +124,7 @@ PRODUCER_ELIGIBLE_REASONS: Mapping[str, frozenset[str]] = {
 URGENCY_LEVELS: tuple[str, ...] = ("emergency", "urgent", "soon", "routine")
 
 #: The one rank order over the urgency levels.
-URGENCY_RANK: Mapping[str, int] = {
-    level: index for index, level in enumerate(URGENCY_LEVELS)
-}
+URGENCY_RANK: Mapping[str, int] = {level: index for index, level in enumerate(URGENCY_LEVELS)}
 
 #: The contract type, derived so the seven contract fields cannot diverge.
 Urgency = Literal[*URGENCY_LEVELS]
@@ -205,10 +203,7 @@ def unreadable_rider(count: int) -> str:
 
     if count <= 0:
         return ""
-    return (
-        f"报告另有 {count} 项不在当前解读范围内，"
-        "本次未作解读，需要时可请医生一同查看。"
-    )
+    return f"报告另有 {count} 项不在当前解读范围内，本次未作解读，需要时可请医生一同查看。"
 
 
 def with_rider(summary: str, skipped: Iterable[Mapping[str, object]] | None) -> str:

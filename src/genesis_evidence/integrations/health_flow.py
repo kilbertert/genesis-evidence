@@ -195,9 +195,7 @@ def _bbox(value: object, *, upper: float | None = 1000) -> list[float] | None:
     except (TypeError, ValueError):
         return None
     if any(
-        not math.isfinite(item)
-        or item < 0
-        or (upper is not None and item > upper)
+        not math.isfinite(item) or item < 0 or (upper is not None and item > upper)
         for item in coordinates
     ):
         return None

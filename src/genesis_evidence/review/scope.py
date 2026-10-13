@@ -690,9 +690,6 @@ def _metric_outcome_matches_text(metric_code: str, value: str) -> bool:
     )
 
 
-
-
-
 def _generic_scope_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     slug = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", normalized).strip("-")
@@ -733,10 +730,9 @@ def _profile_scopes(
         and _metric_outcome_matches_text(metric_code, result_outcome)
     }
     for component in _topic_outcome_components(topic_outcome):
-        if (
-            _metric_outcome_matches("bone_density_t_score", result_outcome)
-            and _compact_text(component) in {"bonemineraldensity", "bmd"}
-        ):
+        if _metric_outcome_matches("bone_density_t_score", result_outcome) and _compact_text(
+            component
+        ) in {"bonemineraldensity", "bmd"}:
             continue
         if condition and any(
             _metric_outcome_matches_text(metric_code, component)
@@ -791,7 +787,6 @@ def _resolve_profile_scope(
         key = target_matches[0]
         return key, scopes[0][key]
     raise ValueError("evidence profile requires one explicit shared outcome scope")
-
 
 
 class EvidenceProfileScopeResolver:

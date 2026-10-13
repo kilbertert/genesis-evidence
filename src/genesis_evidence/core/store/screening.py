@@ -135,8 +135,7 @@ def screening_conflict_sql(
 
     del paper_id_column  # the caller already groups by it
     signature = (
-        f"COALESCE({full_text_column}, '') || '\x1f' || "
-        f"COALESCE({title_abstract_column}, '')"
+        f"COALESCE({full_text_column}, '') || '\x1f' || COALESCE({title_abstract_column}, '')"
     )
     return (
         "count(DISTINCT CASE WHEN "
@@ -269,4 +268,3 @@ def has_structured_results(claims: list[dict[str, object]]) -> bool:
         )
         for claim in claims
     )
-

@@ -24,6 +24,7 @@ from genesis_evidence.core.store.card_evidence import EXCLUDED_STUDY_DESIGNS
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "genesis_evidence"
 
+
 def _sql_check_values(relative_path: str) -> set[str]:
     """The value set of a `corrected_study_design` CHECK, whitespace-insensitively.
 

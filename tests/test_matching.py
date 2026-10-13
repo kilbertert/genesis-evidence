@@ -276,7 +276,7 @@ def test_patient_reply_v2_uses_flat_card_shape() -> None:
                 "content_layer": "context_only",
                 "action_status": "not_available",
                 "action_message": "msg",
-                    }
+            }
         ],
         "unmatched_count": 0,
         "disclaimer": "本提示仅基于已确认指标和已发布知识卡，不构成诊断或治疗建议。",
