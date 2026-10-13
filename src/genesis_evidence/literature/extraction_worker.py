@@ -63,6 +63,23 @@ class LiteratureExtractionWorker:
         job = self._store.claim_next_extraction_job(topic_id=topic_id)
         if job is None:
             return None
+        return self.run_job(job)
+
+    def run_job_id(self, job_id: str) -> str:
+        """Extract one named job.
+
+        The batch harness needs this: `run_once` claims whichever job is next, and
+        the corpus already holds queued jobs from earlier runs, so a per-paper loop
+        built on it would test somebody else's paper and report the mismatch as a
+        failure of this one.
+        """
+
+        job = self._store.claim_extraction_job(job_id)
+        if job is None:
+            raise ValueError(f"extraction job is not claimable: {job_id}")
+        return self.run_job(job)
+
+    def run_job(self, job: dict[str, object]) -> str:
         job_id = str(job["id"])
         try:
             paper, object_key = self._store.get_analysis_source(str(job["paper_id"]))

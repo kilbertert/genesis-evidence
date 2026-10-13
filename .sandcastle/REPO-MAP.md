@@ -126,6 +126,7 @@ scripts/
   check_schema.py
   check_scope.py
   collect_topics.py
+  local_extraction_batch.py
   rebuild_evidence_bodies.py
 src/
   genesis_evidence/
