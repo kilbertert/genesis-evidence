@@ -125,27 +125,34 @@ def _claim_count(database: Database, paper_id: str) -> int:
         )
 
 
-def _job_failure(database: Database, paper_id: str) -> tuple[str, str] | None:
-    """Why the job left un-finished, if it did.
+def _job_failure(database: Database, job_id: str) -> tuple[str, str] | None:
+    """Why *this* job left un-finished, if it did.
 
     `LiteratureExtractionWorker.run_job` catches every exception, records it on the
     job and **returns normally** — right for a long-running worker, wrong for a
     harness whose whole purpose is to report what the provider did. Without this,
     a provider failure surfaces as "no extraction was written", which is the
     harness hiding the exact thing it exists to measure.
+
+    Looked up by `job_id`, not by `paper_id`: a paper can carry more than one job
+    (a retry after a fix), and "the newest job for this paper" would report a
+    different run's error the moment an older failed job sorts later.
     """
 
     with database.connect() as connection:
         row = connection.execute(
-            """
-            SELECT error_class, error_message FROM paper_extraction_jobs
-            WHERE paper_id = ? ORDER BY created_at DESC LIMIT 1
-            """,
-            (paper_id,),
+            "SELECT error_class, error_message FROM paper_extraction_jobs WHERE id = ?",
+            (job_id,),
         ).fetchone()
     if row is None or row["error_class"] is None:
         return None
     return str(row["error_class"]), str(row["error_message"] or "")
+
+
+def _slug(text: str) -> str:
+    """A model name is a path segment, so keep it to characters that are safe there."""
+
+    return "".join(c if c.isalnum() or c in "._-" else "-" for c in text).strip("-") or "run"
 
 
 def _key_present() -> bool:
@@ -171,8 +178,7 @@ def _resolve_key() -> str:
     """
 
     key_file = (
-        os.getenv("PAPER_AI_API_KEY_FILE", "").strip()
-        or os.getenv("ARK_API_KEY_FILE", "").strip()
+        os.getenv("PAPER_AI_API_KEY_FILE", "").strip() or os.getenv("ARK_API_KEY_FILE", "").strip()
     )
     if key_file:
         return _api_key_from_file(key_file)
@@ -215,17 +221,22 @@ def main() -> None:
         "--database",
         default=os.getenv("GENESIS_EVIDENCE_DATABASE", "var/genesis-evidence.sqlite3"),
     )
-    parser.add_argument(
-        "--objects", default=os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects")
-    )
+    parser.add_argument("--objects", default=os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects"))
     parser.add_argument("--timeout", type=float, default=900.0, help="per provider call")
     parser.add_argument(
         "--keep", action="store_true", help="keep the throwaway corpus for inspection"
     )
     parser.add_argument(
         "--report",
-        default="var/local-extraction-batch-report.json",
-        help="where the JSON result goes; kept even when the throwaway corpus is removed",
+        default=None,
+        help="where the JSON result goes; kept even when the throwaway corpus is "
+        "removed. Defaults to a per-run filename, so re-running a model does not "
+        "overwrite the run you are comparing against.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default="var/local-extraction-reports",
+        help="directory for the default per-run report filename",
     )
     parser.add_argument(
         "--queued-jobs",
@@ -239,10 +250,7 @@ def main() -> None:
         # "none" — it would send every eligible paper to the provider.
         parser.error(f"--limit must be at least 1 (got {args.limit})")
 
-    endpoint = (
-        os.getenv("PAPER_AI_BASE_URL", "").strip()
-        or os.getenv("ARK_BASE_URL", "").strip()
-    )
+    endpoint = os.getenv("PAPER_AI_BASE_URL", "").strip() or os.getenv("ARK_BASE_URL", "").strip()
     if not args.apply:
         # A preview must not need a working key: resolving one here would make a
         # dry run fail on a machine whose key is absent or misconfigured, which is
@@ -337,9 +345,12 @@ def main() -> None:
         claims = _claim_count(database, paper_id)
         if status == "completed" and not extracted:
             # `run_job` swallows the exception, so the reason is on the job row.
-            failure = _job_failure(database, paper_id)
+            failure = _job_failure(database, job_id)
             if failure is not None:
-                status, detail = "provider_error", f"{failure[0]}: {failure[1][:140]}"
+                # NOT `provider_error`: the worker also fails on parsing, object
+                # loading and persistence, and calling all of those a provider fault
+                # would send the reader to the wrong layer.
+                status, detail = "job_error", f"{failure[0]}: {failure[1][:140]}"
             else:
                 status, detail = "no_extraction_written", "worker returned without persisting one"
         outcomes.append(
@@ -358,14 +369,21 @@ def main() -> None:
     ok = [o for o in outcomes if o.status == "completed"]
     print(f"completed: {len(ok)}/{len(outcomes)}")
     if outcomes:
-        print(f"wall time: {sum(o.seconds for o in outcomes):.0f}s total, "
-              f"{sum(o.seconds for o in outcomes) / len(outcomes):.0f}s per paper")
+        print(
+            f"wall time: {sum(o.seconds for o in outcomes):.0f}s total, "
+            f"{sum(o.seconds for o in outcomes) / len(outcomes):.0f}s per paper"
+        )
     if ok:
         print(f"claims written: {sum(o.claims for o in ok)} across {len(ok)} paper(s)")
 
     # Written OUTSIDE `work`: the report is the durable result of a batch, and
     # deleting the throwaway corpus must not take it along.
-    report = Path(args.report)
+    report = (
+        Path(args.report)
+        if args.report
+        else Path(args.report_dir)
+        / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{_slug(args.model)}.json"
+    )
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(
         json.dumps([o.__dict__ for o in outcomes], ensure_ascii=False, indent=2),
