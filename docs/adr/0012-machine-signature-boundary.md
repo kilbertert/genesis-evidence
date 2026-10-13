@@ -231,6 +231,18 @@ cap is the control.**
      repairable rather than permanent.
    - **Do not build a "stronger model" harness for this step.** There is nothing
      for it to answer.
+   - **Where the gate lives is a decision with a cost, and it is accepted.** The
+     requirement is enforced in `ArkPaperAnalyzer.check`, which runs *before*
+     the extractions are persisted, so a report that fails after correction fails
+     the whole job and both stored extractions are lost. The alternative --
+     leaving the quote rule unenforced at ingestion and letting
+     `_source_adjudication` decline later -- loses nothing but leaves the 43
+     non-attesting issues permanently undecidable. The accepted cost is bounded:
+     a quote shorter than the 8-character floor counts as "no evidence", so an
+     issue quoting only e.g. `N=5` can fail a paper. Measured over the 10-paper
+     replay this happened 0 times, so the cost is not yet quantified; if a wider
+     run shows it bites, the correct change is to enforce the quote rule for
+     **material** issues only, not to drop the gate.
    - **Measured outcome, 2026-10-13, on `sodium-reduction-blood-pressure` (10
      papers, one topic, replaying only the consistency stage over stored A/B).**
      The contract works as designed and the predicted benefit did not

@@ -285,13 +285,24 @@ def main() -> None:
     tail_rows = [d for o in outcomes for d in _as_dispositions(o["after"])]
     print(f"  after : {_tally(tail_rows)}")
 
+    # Named by the answering model AND the run label, because comparing repeated runs is
+    # the point of this script: two runs against the same model under different labels
+    # must not land on one path. Exclusive creation, so a collision is reported rather
+    # than silently eating the run it was going to be compared against.
     report_path = (
         Path(args.report)
         if args.report
-        else Path(f"var/consistency-contract-{_report_name(analyzer.model)}.json")
+        else Path(
+            f"var/consistency-contract-{_report_name(analyzer.model)}-{_report_name(args.model)}.json"
+        )
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(outcomes, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        with report_path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(outcomes, ensure_ascii=False, indent=2))
+    except FileExistsError:
+        print(f"report: {report_path} exists — refusing to overwrite; pass --report elsewhere")
+        raise SystemExit(1) from None
     print(f"report: {report_path}")
 
     if args.keep:
