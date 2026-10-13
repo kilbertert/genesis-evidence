@@ -272,7 +272,7 @@ class ArkPaperAnalyzer:
         check_text, check_run_id = self._complete(
             _CONSISTENCY_PROMPT,
             check_source,
-            max_tokens=min(self._max_tokens, 8192),
+            max_tokens=self._max_tokens,
         )
         try:
             consistency = ConsistencyReport.model_validate(

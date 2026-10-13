@@ -1252,6 +1252,34 @@ class PaperStore:
             ).fetchone()
         return dict(claimed)
 
+    def claim_extraction_job(self, job_id: str) -> dict[str, object] | None:
+        """Claim one named queued job.
+
+        The counterpart to `claim_next_extraction_job` for a caller that already
+        knows which job it means — a batch harness, or a scoped retry. Separate
+        from `claim_next` rather than a parameter on it because the two answer
+        different questions: "which job is due" is a scheduling policy, "this job"
+        is not a policy at all.
+        """
+
+        with self.database.transaction() as connection:
+            now = _now()
+            updated = connection.execute(
+                """
+                UPDATE paper_extraction_jobs SET status = 'running',
+                    attempt_count = attempt_count + 1, started_at = ?, updated_at = ?,
+                    error_class = NULL, error_message = NULL
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now, now, job_id),
+            ).rowcount
+            if updated != 1:
+                return None
+            claimed = connection.execute(
+                "SELECT * FROM paper_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return dict(claimed)
+
     def recover_running_extraction_jobs(self, *, topic_id: str | None = None) -> int:
         with self.database.transaction() as connection:
             now = _now()
