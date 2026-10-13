@@ -275,6 +275,14 @@ cap is the control.**
    - **Re-measure before acting on any number here.** The correct next step is
      repeated runs of both prompts over more topics, reporting a distribution --
      not a second single sample, which is what this record's withdrawn figure was.
+6. **Identity is split.** `GENESIS_EVIDENCE_REVIEWER_ID` currently doubles as the
+   ingestion run's authorisation identity and as the autonomous pipeline's gate
+   identity; the environment also carries `ranlei` in `requested_by`. An
+   AI-authored decision must be recorded under an `ai:`-prefixed actor, and a
+   person's name must appear only where a person acted. Today the audit cannot
+   distinguish the two for the ingestion path — the exact question the audit
+   exists to answer.
+
 ## Alternatives Considered
 
 **Re-enforce the written rule: require a human signature on every published
