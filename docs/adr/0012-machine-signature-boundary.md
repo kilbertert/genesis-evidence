@@ -243,46 +243,60 @@ cap is the control.**
      replay this happened 0 times, so the cost is not yet quantified; if a wider
      run shows it bites, the correct change is to enforce the quote rule for
      **material** issues only, not to drop the gate.
-   - **Outcome, 2026-10-13: the contract works; the benefit could not be
-     measured.** Replaying only the consistency stage over stored A/B on
-     `sodium-reduction-blood-pressure` (10 papers, one topic):
+   - **Measured 2026-10-13, as a matrix: 4 topics x 2 prompts x 3 repeats x 6
+     papers (72 paper-runs per arm).** The two arms are the pre-change prompt
+     ("free": requests `evidence`, never says it must be quoted) and the shipped
+     one ("quoted"), *both run under the same model*, which is what the earlier
+     single-sample attempts got wrong.
 
-     | | before | after |
+     | | free | quoted |
      | --- | ---: | ---: |
-     | material issues reported | 18 (every run) | **2, 5, 0** across three identical runs |
-     | all issues reported | 230 | 49, 46, 41 |
+     | material issues per run (mean) | 1.83 (sd 1.57) | 2.17 (sd 1.21) |
+     | all issues reported per run (mean) | 30.2 | 28.1 |
+     | quote-carrying material issues that **attest** | **23%** (5/22) | **100%** (22/22) |
+     | runs that failed outright | 0 / 72 | 1 / 72 (1.4%) |
 
-     The "before" column is stable because it is stored data. The "after" column
-     is not: **three runs of the same code against the same corpus and model
-     produced 2, 5 and 0 material issues.** A single before/after pair therefore
-     cannot show anything, and the intermediate figure this record briefly carried
-     (18 → 5, "6% → 80% adjudicable") was one draw from that distribution, not a
-     result. It is withdrawn.
+     **The contract does what it was built to do.** Under the old prompt, three
+     quarters of the material issues a reviewer was asked to resolve were never
+     quotable from the source -- the deterministic adjudicator could not have
+     decided them no matter how good it was. Under the new prompt, every one is.
 
-     The variance has two sources, and the second is the more useful finding:
-     the checker is a model call, so *which* issues it reports varies; and
-     `_critical_issue` grades an issue `must_resolve` by its `severity`, so a
-     checker that says `medium` where another says `high` moves an issue out of
-     the material set. **The `needs_review` workload is therefore itself a noisy
-     quantity** -- a "how many papers need a human" estimate from one pass is not
-     a measurement, and any future sizing must run repeatedly.
+     **It does not increase the workload.** Material issues per run go 1.83 ->
+     2.17, a difference far inside the run-to-run spread (sd 1.57 / 1.21), and
+     total reported issues go slightly *down* (30.2 -> 28.1). The prompt makes the
+     differences checkable; it does not manufacture more of them.
 
-     What the change *does* establish, and why it still stands: the checker is now
-     asked for a verbatim quote, and a report whose issue evidence is not one is
-     rejected and re-asked instead of being stored as permanently undecidable. The
-     raw model responses confirm the prompt took effect (issues arrive with real
-     quoted原文); whether that *reduces* human work is not established here.
-   - **Re-measure before acting on any number here.** The correct next step is
-     repeated runs of both prompts over more topics, reporting a distribution --
-     not a second single sample, which is what this record's withdrawn figure was.
-6. **Identity is split.** `GENESIS_EVIDENCE_REVIEWER_ID` currently doubles as the
-   ingestion run's authorisation identity and as the autonomous pipeline's gate
-   identity; the environment also carries `ranlei` in `requested_by`. An
-   AI-authored decision must be recorded under an `ai:`-prefixed actor, and a
-   person's name must appear only where a person acted. Today the audit cannot
-   distinguish the two for the ingestion path — the exact question the audit
-   exists to answer.
+     **The cost is real, bounded, and has a named cause.** One paper-run in 72
+     failed, and it failed because the checker returned a quote that does not
+     appear in the full text *even after the correction pass*, so the gate
+     rejected it -- the failure is the gate working, not a defect in it. Cause
+     observed directly: `claims.effect_estimate="demonstrated a 25% reduction in
+     major cv events"`.
 
+     **A new safe mode appears.** Four times under the quoted prompt (never under
+     free) the checker reported `consistent` while the extractions nonetheless
+     differed, and the module's own structural check synthesized a
+     `dual_extraction` issue. Neither arm resolves those, but they are counted
+     and surfaced rather than passing silently.
+
+   - **Verdict: keep the gate as it is. Do not widen it to material issues
+     only.** The reason that fallback was held in reserve was the cost of losing a
+     whole paper's extractions; measured, that cost is 1.4% with a clear,
+     actionable cause, while the benefit is every reported difference becoming
+     decidable. If a later, larger sample puts the failure rate materially higher
+     than this, the change to make is still the narrow one -- enforce for material
+     issues only -- not removal.
+
+   - **The earlier numbers in this record are withdrawn, not merely revised.**
+     Two single-sample readings (18 -> 2, then 18 -> 5) were reported as results
+     and were one draw each from a noisy distribution. They also carried a
+     confound: the stored "before" reports were produced by
+     `deepseek-v4-pro-0813` / `deepseek-v4-flash-ga-260731`, not by the model the
+     replays used, so "before vs after" was measuring a model change alongside the
+     prompt change. Only the arm-vs-arm comparison above is valid, because both
+     arms ran together on one model. **The general lesson is recorded in the
+     project memory: a change to a model-in-the-loop stage cannot be evaluated by
+     one before-and-after pair.**
 ## Alternatives Considered
 
 **Re-enforce the written rule: require a human signature on every published

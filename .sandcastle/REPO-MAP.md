@@ -61,6 +61,18 @@ output and run residue omitted)
 ```
 .sandcastle/  (the AFK scaffold — see its README)
 artifacts/
+  consistency-matrix-20261013/
+    dietary-fatty-acids-lipids__free__r1.json
+    dietary-fatty-acids-lipids__free__r2.json
+    dietary-fatty-acids-lipids__free__r3.json
+    dietary-fatty-acids-lipids__quoted__r1.json
+    dietary-fatty-acids-lipids__quoted__r2.json
+    dietary-fatty-acids-lipids__quoted__r3.json
+    nutrition-ckd-risk__free__r1.json
+    nutrition-ckd-risk__free__r2.json
+    nutrition-ckd-risk__free__r3.json
+    nutrition-ckd-risk__quoted__r1.json
+    ... (14 more)
   qa/
     evidence-strength-20261009.md
     observation-disposition-20261009.md
@@ -130,14 +142,6 @@ scripts/
   local_extraction_batch.py
   measure_consistency_contract.py
   rebuild_evidence_bodies.py
-src/
-  genesis_evidence/
-    core/
-    integrations/
-    literature/
-    portal/
-    reports/
-    review/
-    __init__.py
+  run_consistency_matrix.sh
 ... (truncated — list the rest with `ls`/`find`)
 ```
