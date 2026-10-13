@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..core.conditions import CONDITION_BY_CODE, CONDITIONS
 from ..core.consistency import CONSISTENT, NEEDS_REVIEW, Verdict
 from ..core.methodology import STUDY_DESIGNS, permits_causal_inference
-from ..core.source_excerpt import Excerpt, attest
+from ..core.source_excerpt import Excerpt, _source_evidence_fragments, attest
 from .models import PaperRecord
 
 DEFAULT_ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
@@ -129,6 +129,69 @@ class PaperExtraction(BaseModel):
         ):
             raise ValueError("observational studies cannot produce causal claims")
         return self
+
+
+#: The `field` this module itself sets on the one issue it synthesizes when the two
+#: extractions differ but the checker still reported `consistent`. Such an issue quotes
+#: nothing by construction, so it is exempt from `_require_verbatim_evidence`; every
+#: issue that carries a `field` the checker chose must quote the source.
+SYNTHESIZED_ISSUE_FIELD = "dual_extraction"
+
+#: Tolerances at which the consistency checker's quotes are checked. Two, and both must
+#: hold, because the two ends of the pipeline compare differently:
+#:
+#: - `strict` is what `_source_adjudication` uses when it decides an issue, so a quote
+#:   admitted here must clear the check that will later read it.
+#: - `citations` is what the extraction path already holds its own evidence to, so a
+#:   publisher-inserted "(Table 2)" inside an otherwise verbatim quote does not fail an
+#:   issue that the extraction stage would have accepted.
+#:
+#: Measured on the stored corpus before this contract existed: of the material issues
+#: whose evidence failed `strict`, none were recovered by `citations` — the failures were
+#: prose summaries, not citation-internal quotes. Both are still checked, so this
+#: predicate is not tuned to that measurement.
+ATTESTATION_TOLERANCES = ("strict", "citations")
+
+
+def _require_verbatim_evidence(report: ConsistencyReport, document: object) -> ConsistencyReport:
+    """Reject a consistency report whose issue evidence is not quoted from the source.
+
+    The checker is asked for a verbatim quote; without this it can answer with a prose
+    summary, and `_source_adjudication` — which requires the quote to attest — then
+    declines an issue that was never given a chance to pass. Making the requirement
+    checkable here is what lets that deterministic adjudicator do its job.
+
+    An issue quoting nothing at all is rejected rather than exempted: the `evidence` field
+    defaults to `""`, so exempting it would leave the default open as the escape hatch
+    that defeats the whole check.
+    """
+
+    missing: list[str] = []
+    for issue in report.issues:
+        if issue.field == SYNTHESIZED_ISSUE_FIELD:
+            continue
+        fragments = _source_evidence_fragments(issue.evidence)
+        if not fragments:
+            missing.append(f"{issue.field}=<no verbatim quote in evidence>")
+            continue
+        for tolerance in ATTESTATION_TOLERANCES:
+            unattested = attest(
+                document,
+                [Excerpt(field=issue.field, text=fragment) for fragment in fragments],
+                tolerance=tolerance,
+            ).missing
+            if unattested:
+                quote = json.dumps(unattested[0].text[:200], ensure_ascii=False)
+                missing.append(f"{issue.field}={quote}")
+                break
+    if missing:
+        details = "; ".join(missing[:10])
+        if len(missing) > 10:
+            details += f"; and {len(missing) - 10} more"
+        raise PaperAnalysisError(
+            f"consistency issue evidence is not quoted from the full text: {details}"
+        )
+    return report
 
 
 class ConsistencyIssue(BaseModel):
@@ -275,10 +338,8 @@ class ArkPaperAnalyzer:
             max_tokens=self._max_tokens,
         )
         try:
-            consistency = ConsistencyReport.model_validate(
-                _normalize_consistency_payload(_json_object(check_text))
-            )
-        except (ValueError, json.JSONDecodeError) as exc:
+            consistency = self._validated_consistency(check_text, document)
+        except (ValueError, json.JSONDecodeError, PaperAnalysisError) as exc:
             correction_source = json.dumps(
                 {
                     "source": json.loads(source),
@@ -295,9 +356,7 @@ class ArkPaperAnalyzer:
                     correction_source,
                     max_tokens=self._max_tokens,
                 )
-                consistency = ConsistencyReport.model_validate(
-                    _normalize_consistency_payload(_json_object(corrected_text))
-                )
+                consistency = self._validated_consistency(corrected_text, document)
                 check_run_id = corrected_run_id
             except (ValueError, json.JSONDecodeError, PaperAnalysisError) as correction_error:
                 raise PaperAnalysisError(
@@ -319,6 +378,19 @@ class ArkPaperAnalyzer:
                 ],
             )
         return consistency, check_run_id
+
+    @staticmethod
+    def _validated_consistency(text: str, document: dict[str, object]) -> ConsistencyReport:
+        """Parse a checker report and require its issue evidence to be quoted.
+
+        Both failure modes take the same correction path, so a report that parses but
+        quotes nothing is repaired the same way as one that does not parse at all.
+        """
+
+        return _require_verbatim_evidence(
+            ConsistencyReport.model_validate(_normalize_consistency_payload(_json_object(text))),
+            document,
+        )
 
     def _source(self, paper: PaperRecord, document: dict[str, object]) -> str:
         if not self._api_key:
@@ -559,6 +631,10 @@ _CONSISTENCY_PROMPT = """\
 任何问题都返回 needs_review，并为每项给出 field、severity、message、evidence；完全一致才返回
 consistent 且 issues 必须为空。只保留去重后的关键差异，issues 最多 50 项；不要为同一
 个根因重复生成逐字段的低价值差异。
+
+每个 issue 的 evidence 必须从全文复制一段连续、逐字原文，用它证明这条差异确实存在于
+原文里；禁止改写、总结、使用省略号、拼接不相邻句子，也不要只写“见 3.2 节”“两份抽取
+不一致”这类说明。找不到原文依据的差异不要提出。
 """
 
 _CONSISTENCY_CORRECTION_PROMPT = """\
@@ -568,6 +644,10 @@ _CONSISTENCY_CORRECTION_PROMPT = """\
 保留能够影响研究设计、剂量、样本、人群、结局、效应方向、原文定位或安全解释的关键差异，
 按 field + 根因去重，issues 最多 50 项。若差异只是同一问题的重复表述，只保留一项；不能
 凭空补充原文没有的事实。needs_review 必须至少有一项 issue，consistent 必须为空数组。
+
+每个 issue 的 evidence 必须从全文复制一段连续、逐字原文，用它证明这条差异确实存在于
+原文里；禁止改写、总结、使用省略号、拼接不相邻句子，也不要只写“见 3.2 节”“两份抽取
+不一致”这类说明。找不到原文依据的差异不要提出。
 """
 
 _EXTRACTION_CORRECTION_PROMPT = """\

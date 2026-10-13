@@ -22,6 +22,7 @@ from ..core.methodology import (
 )
 from ..core.source_excerpt import (
     Excerpt,
+    _source_evidence_fragments,
     attest_segments,
     normalized_text,
     segments_from_document,
@@ -797,10 +798,13 @@ class EvidenceReviewService:
         rejected_claim_ids: set[str] = set()
         for issue in issues:
             fragments = _source_evidence_fragments(issue.get("evidence"))
-            if not fragments or not attest_segments(
-                source_segments,
-                [Excerpt(field="fragment", text=fragment) for fragment in fragments],
-            ).ok:
+            if (
+                not fragments
+                or not attest_segments(
+                    source_segments,
+                    [Excerpt(field="fragment", text=fragment) for fragment in fragments],
+                ).ok
+            ):
                 return None
             if not _primary_extraction_supports_fragments(item, issue, fragments):
                 return None
@@ -1062,38 +1066,6 @@ def _automatic_source_verification(
     }
 
 
-def _source_evidence_fragments(value: object) -> list[str]:
-    raw = str(value or "").strip()
-    if not raw:
-        return []
-    markers = list(
-        re.finditer(
-            r"(?:原文|evidence|source|original|full\s+text)\s*(?:[A-Za-z][\w .-]*\s*)?[:：]",
-            raw,
-            flags=re.IGNORECASE,
-        )
-    )
-    candidates: list[str] = []
-    for marker in markers:
-        tail = raw[marker.end() :].strip()
-        quoted = re.findall(r"[\"“](.+?)[\"”]", tail)
-        if not quoted:
-            quoted = re.findall(r"‘(.+?)’", tail)
-        candidates.extend(quoted or [re.split(r"[。；;]", tail, maxsplit=1)[0]])
-    if not candidates and re.match(
-        r"^(?:evidence|source|original|full\s+text)\s*[:：]", raw, flags=re.IGNORECASE
-    ):
-        candidates = [re.split(r"[。；;]", raw.split(":", 1)[1], maxsplit=1)[0]]
-    if not candidates and not markers:
-        candidates = [raw]
-    fragments: list[str] = []
-    for candidate in candidates:
-        fragment = normalized_text(candidate).strip(" \"'“”‘’。.；;")
-        if len(fragment) >= 8 and fragment not in fragments:
-            fragments.append(fragment)
-    return fragments
-
-
 def _primary_extraction_supports_fragments(
     item: dict[str, object], issue: dict[str, object], fragments: list[str]
 ) -> bool:
@@ -1266,9 +1238,7 @@ def _automatic_profile(
     # place it would describe a coconut-oil pool as the whole class it came from.
     pooled_label = pooled_by_label(str(group.get("component_token") or ""))
     named_exposure = pooled_label or str(dimensions["ingredient_name"])
-    studied_exposure = (
-        f"{named_exposure}（{dimensions['ingredient_form']}，{dimensions['dose']}）"
-    )
+    studied_exposure = f"{named_exposure}（{dimensions['ingredient_form']}，{dimensions['dose']}）"
     patient_body = (
         f"关于{candidate['condition_name']}，截至{candidate['evidence_cutoff_date']}的已审核研究"
         f"在{dimensions['population']}中评估了{studied_exposure}与"
