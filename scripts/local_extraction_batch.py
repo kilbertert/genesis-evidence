@@ -245,6 +245,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.report is None:
+        # Resolved once, here, rather than at write time. The write happens after
+        # a batch that may run for an hour; a name minted there could collide with
+        # a batch finishing in the same second, and the later write would win.
+        # Microseconds make that a non-issue for real runs, and the exclusive
+        # create below makes it a non-issue for the adversarial case too.
+        args.report = str(
+            Path(args.report_dir) / f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}"
+            f"-{time.time_ns() % 1_000_000:06d}Z-{_slug(args.model)}.json"
+        )
+
     if args.limit < 1:
         # SQLite reads `LIMIT -1` as "no limit", so a negative value would not mean
         # "none" — it would send every eligible paper to the provider.
@@ -378,17 +389,21 @@ def main() -> None:
 
     # Written OUTSIDE `work`: the report is the durable result of a batch, and
     # deleting the throwaway corpus must not take it along.
-    report = (
-        Path(args.report)
-        if args.report
-        else Path(args.report_dir)
-        / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{_slug(args.model)}.json"
-    )
+    #
+    # Resolved from `args.report` captured *before the run*, not invented here: a
+    # name minted after the run with second resolution collides for two batches
+    # that finish in the same second, and `write_text` would then silently keep
+    # only the later one. Uniqueness is by construction rather than by luck.
+    report = Path(args.report)
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(
-        json.dumps([o.__dict__ for o in outcomes], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    try:
+        # Exclusive creation: the explicit `--report` path is the caller's to
+        # choose, but it must not quietly eat a report that is already there.
+        with report.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps([o.__dict__ for o in outcomes], ensure_ascii=False, indent=2))
+    except FileExistsError:
+        print(f"report: {report} already exists — pass a different --report (not overwriting)")
+        raise SystemExit(1) from None
     print(f"report: {report}")
 
     if args.keep:
