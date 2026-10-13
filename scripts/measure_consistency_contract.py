@@ -43,8 +43,13 @@ from genesis_evidence.core.source_excerpt import (  # noqa: E402
     attest,
     segments_from_document,
 )
-from genesis_evidence.core.store import Database, ObjectStore, PaperStore  # noqa: E402
-from genesis_evidence.core.store.review import _critical_issue  # noqa: E402
+from genesis_evidence.core.store import (  # noqa: E402
+    Database,
+    ObjectStore,
+    PaperStore,
+    ReviewStore,  # noqa: E402
+)
+from genesis_evidence.core.store.review import classify_issue_priorities  # noqa: E402
 from genesis_evidence.literature.ai_extraction import (  # noqa: E402
     ArkPaperAnalyzer,
     PaperAnalysisError,
@@ -82,14 +87,39 @@ def _adjudication_disposition(issue: dict[str, object], segments: tuple[str, ...
     return Disposition(field, severity, "quote_not_verbatim" if unattested else "adjudicable")
 
 
-def _material(issues: list[dict[str, object]], claims: list[dict[str, object]]) -> list[dict]:
-    return [issue for issue in issues if _critical_issue(issue, claims)]
+def _material_issues(
+    review: ReviewStore, paper_id: str, issues: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """The subset of `issues` the review workbench treats as `must_resolve`.
+
+    Asked through the store's own rule over the store's own *enriched* claims. Both
+    matter: `_critical_issue` reads `extraction_claim_index` and `review_suggestion`,
+    which a raw `SELECT * FROM claims` does not carry, so re-deriving the priority from
+    raw rows mislabels a medium `claims[n]` issue as material when it is not.
+    """
+
+    item = review.get_review_item(paper_id)
+    if item is None:
+        return []
+    ranked = classify_issue_priorities(issues, list(item.get("claims") or []))
+    return [issue for issue in ranked if issue.get("priority") == "must_resolve"]
 
 
 def _analyzer() -> ArkPaperAnalyzer:
     """The same construction the extraction worker uses, from the same environment."""
 
     return ArkPaperAnalyzer.from_env()
+
+
+def _report_name(model: str) -> str:
+    """A filename from the model that actually answered, not from the flag.
+
+    `--model` is only a label for the report; `ArkPaperAnalyzer.from_env()` picks the model
+    from `PAPER_AI_MODEL`. Naming the file after the flag would let two runs against
+    different models write the same path and be compared as if they were the same run.
+    """
+
+    return "".join(c if c.isalnum() or c in "._-" else "-" for c in model).strip("-") or "run"
 
 
 def _key_present() -> bool:
@@ -147,7 +177,9 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="call the provider; otherwise preview")
     parser.add_argument("--report", default=None, help="where the JSON result goes")
     parser.add_argument(
-        "--model", default=os.getenv("PAPER_AI_MODEL", "deepseek/deepseek-v4.1-flash")
+        "--model",
+        default=os.getenv("PAPER_AI_MODEL", "deepseek/deepseek-v4.1-flash"),
+        help="label only; the model actually used comes from PAPER_AI_MODEL via from_env()",
     )
     parser.add_argument("--keep", action="store_true", help="keep the throwaway corpus")
     args = parser.parse_args()
@@ -171,6 +203,7 @@ def main() -> None:
     database = Database(corpus)
     database.initialize()
     store = PaperStore(database)
+    review = ReviewStore(database)
     object_store = ObjectStore(objects)
     jats = JatsParser()
 
@@ -194,11 +227,15 @@ def main() -> None:
         )
 
     analyzer = _analyzer()
+    print(f"answering model: {analyzer.model}")
     outcomes: list[dict[str, object]] = []
     for row in rows:
         paper_id = str(row["paper_id"])
         before: list[Disposition] = []
         after: list[Disposition] = []
+        old_all: list[dict[str, object]] = []
+        new_all: list[dict[str, object]] = []
+        verdict = ""
         status, detail = "completed", ""
         try:
             _, object_key = store.get_analysis_source(paper_id)
@@ -206,24 +243,19 @@ def main() -> None:
             segments = segments_from_document(document)
             extraction = PaperExtraction.model_validate(json.loads(row["extraction_json"]))
             second = PaperExtraction.model_validate(json.loads(row["second_extraction_json"]))
-            with database.connect() as connection:
-                claims = [
-                    dict(claim)
-                    for claim in connection.execute(
-                        "SELECT * FROM claims WHERE paper_id = ?", (paper_id,)
-                    )
-                ]
             old = json.loads(row["consistency_json"]) if row["consistency_json"] else {"issues": []}
             old_all = old.get("issues") or []
             paper = store.get_analysis_source(paper_id)[0]
             before = [
                 _adjudication_disposition(issue, segments)
-                for issue in _material(old.get("issues") or [], claims)
+                for issue in _material_issues(review, paper_id, old.get("issues") or [])
             ]
             report, _ = analyzer.check(paper, document, extraction, second)
+            verdict = report.verdict
             new_all = [issue.model_dump(mode="json") for issue in report.issues]
             after = [
-                _adjudication_disposition(issue, segments) for issue in _material(new_all, claims)
+                _adjudication_disposition(issue, segments)
+                for issue in _material_issues(review, paper_id, new_all)
             ]
         except PaperAnalysisError as exc:
             status, detail = "provider_error", str(exc)[:200]
@@ -238,7 +270,7 @@ def main() -> None:
                 "after": [d.__dict__ for d in after],
                 "old_issue_count": len(old_all),
                 "new_issue_count": len(new_all),
-                "new_verdict": report.verdict,
+                "new_verdict": verdict,
             }
         )
         print(
@@ -256,7 +288,7 @@ def main() -> None:
     report_path = (
         Path(args.report)
         if args.report
-        else Path(f"var/consistency-contract-{args.model.replace('/', '-')}.json")
+        else Path(f"var/consistency-contract-{_report_name(analyzer.model)}.json")
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(outcomes, ensure_ascii=False, indent=2), encoding="utf-8")

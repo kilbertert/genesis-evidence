@@ -137,10 +137,17 @@ class PaperExtraction(BaseModel):
 
 
 #: The `field` this module itself sets on the one issue it synthesizes when the two
-#: extractions differ but the checker still reported `consistent`. Such an issue quotes
-#: nothing by construction, so it is exempt from `_require_verbatim_evidence`; every
-#: issue that carries a `field` the checker chose must quote the source.
+#: extractions differ but the checker still reported `consistent`.
 SYNTHESIZED_ISSUE_FIELD = "dual_extraction"
+
+#: The `message` that issue carries. The exemption from `_require_verbatim_evidence` is
+#: keyed on the pair, not on `field` alone: `field` is a string the checker chooses, so
+#: keying on it would let a checker label any ungrounded issue `dual_extraction` and skip
+#: the rule. That issue is built *after* this validator runs, so a real report can never
+#: match the pair -- the exemption exists only so the function is total over its input.
+SYNTHESIZED_ISSUE_MESSAGE = (
+    "Independent extractions differ and require human resolution."
+)
 
 #: The tolerance at which the consistency checker's quotes are checked: the same one
 #: `_source_adjudication` uses to decide an issue. The gate and the consumer must agree,
@@ -170,11 +177,24 @@ def _require_verbatim_evidence(report: ConsistencyReport, document: object) -> C
 
     missing: list[str] = []
     for issue in report.issues:
-        if issue.field == SYNTHESIZED_ISSUE_FIELD:
+        if (
+            issue.field == SYNTHESIZED_ISSUE_FIELD
+            and issue.message == SYNTHESIZED_ISSUE_MESSAGE
+            and not issue.evidence
+        ):
             continue
         fragments = _source_evidence_fragments(issue.evidence)
         if not fragments:
-            missing.append(f"{issue.field}=<no verbatim quote in evidence>")
+            # Two different causes, named apart: no quote at all, or a quote too short to
+            # be evidence. The floor is `_source_evidence_fragments`'s, and it is the same
+            # floor `_source_adjudication` applies -- so the gate cannot admit a quote the
+            # adjudicator would then find nothing to decide with.
+            cause = (
+                "quote shorter than the 8-character evidence floor"
+                if issue.evidence.strip()
+                else "no verbatim quote in evidence"
+            )
+            missing.append(f"{issue.field}=<{cause}>")
             continue
         unattested = attest(
             document,
@@ -371,9 +391,9 @@ class ArkPaperAnalyzer:
                 verdict=NEEDS_REVIEW,
                 issues=[
                     ConsistencyIssue(
-                        field="dual_extraction",
+                        field=SYNTHESIZED_ISSUE_FIELD,
                         severity="high",
-                        message="Independent extractions differ and require human resolution.",
+                        message=SYNTHESIZED_ISSUE_MESSAGE,
                     )
                 ],
             )

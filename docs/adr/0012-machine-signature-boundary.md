@@ -238,20 +238,22 @@ cap is the control.**
 
      | | before | after |
      | --- | ---: | ---: |
-     | material issues reported | 18 | 2 |
-     | of those, adjudicable | 1 (6%) | 2 (100%) |
-     | all issues reported | 230 | 52 |
-     | issues at `high` severity | 17 | 2 |
+     | material issues reported | 18 | 5 |
+     | of those, adjudicable | 1 (6%) | 4 (80%) |
+     | all issues reported | 230 | 49 |
 
-     So every reported difference is now actionable, which is the contract
-     working. But the 43 non-attesting material issues did **not** become
-     adjudicable — the checker stopped reporting them. All 10 papers stayed
-     `needs_review`, so nothing was hidden behind a `consistent` verdict; the
-     suppression is at the *material* level. Whether those withdrawn differences
-     were real (and are now lost) or padded (and were correctly dropped) is
-     **not settled by this measurement**, and the honest next step is repeated
-     runs comparing what each prompt reports on the same papers — not one before
-     and one after. Do not read this table as "the gap is closed".
+     The contract works: the share of reported differences the deterministic
+     adjudicator can actually decide rose from 6% to 80%. But the predicted
+     benefit did **not** materialise — the non-attesting material issues did not
+     become adjudicable, the checker reported fewer of them (18 → 5). All 10
+     papers stayed `needs_review`, so nothing was hidden behind a `consistent`
+     verdict; the reduction is at the *material* level. Whether those withdrawn
+     differences were real (and are now lost) or padded (and were correctly
+     dropped) is **not settled by this measurement**: one before-and-after pair
+     per paper cannot separate a prompt effect from run-to-run variance, and the
+     consistency checker is a model call. The honest next step is repeated runs
+     of *both* prompts over the same papers. **Do not read this table as "the gap
+     is closed", and do not quote the 6% → 80% without the 18 → 5 beside it.**
    - **Zero errors remains the bar for a verdict that changes patient-facing
      direction.** Every other unresolved difference must quote the source that
      decides it.

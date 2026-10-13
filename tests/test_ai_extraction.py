@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.literature.ai_extraction import (
     SYNTHESIZED_ISSUE_FIELD,
+    SYNTHESIZED_ISSUE_MESSAGE,
     ArkPaperAnalyzer,
     ConsistencyReport,
     PaperAnalysisError,
@@ -558,12 +559,35 @@ def test_verbatim_evidence_gate_rejects_an_empty_quote() -> None:
         _require_verbatim_evidence(report, _DOCUMENT)
 
 
-def test_verbatim_evidence_gate_exempts_the_synthesized_issue() -> None:
-    """The one issue this module writes itself quotes nothing, by construction."""
+def test_verbatim_evidence_gate_exempts_only_the_module_synthesized_issue() -> None:
+    """The one issue this module writes itself quotes nothing, by construction.
+
+    Keyed on the exact pair `field` + `message`, because `field` is a string the checker
+    chooses: keying on it alone would let a checker label any ungrounded issue
+    `dual_extraction` and skip the rule.
+    """
+
+    report = _report(field=SYNTHESIZED_ISSUE_FIELD, message=SYNTHESIZED_ISSUE_MESSAGE, evidence="")
+
+    assert _require_verbatim_evidence(report, _DOCUMENT) is report
+
+
+def test_verbatim_evidence_gate_rejects_a_checker_claimed_exemption() -> None:
+    """A checker that labels its own issue `dual_extraction` does not escape the rule."""
 
     report = _report(field=SYNTHESIZED_ISSUE_FIELD, evidence="")
 
-    assert _require_verbatim_evidence(report, _DOCUMENT) is report
+    with pytest.raises(PaperAnalysisError, match="no verbatim quote"):
+        _require_verbatim_evidence(report, _DOCUMENT)
+
+
+def test_verbatim_evidence_gate_names_a_too_short_quote_apart() -> None:
+    """A quote below the evidence floor is a different failure from having none."""
+
+    report = _report(evidence="原文：N=5")
+
+    with pytest.raises(PaperAnalysisError, match="shorter than the 8-character evidence floor"):
+        _require_verbatim_evidence(report, _DOCUMENT)
 
 
 def test_verbatim_evidence_gate_tolerates_a_publisher_citation_in_the_quote() -> None:

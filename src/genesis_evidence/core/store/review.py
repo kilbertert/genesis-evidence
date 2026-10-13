@@ -2254,14 +2254,7 @@ def _review_guidance(
     included = [item for item in collections if item.get("full_text_decision") == "included"]
     all_excluded = bool(collections) and not incomplete_screening and not included
     structured_results = has_structured_results(claims)
-    issues = [
-        {
-            **issue,
-            "priority": "must_resolve" if _critical_issue(issue, claims) else "verify",
-        }
-        for issue in (consistency or {}).get("issues", [])
-        if isinstance(issue, dict)
-    ]
+    issues = classify_issue_priorities((consistency or {}).get("issues", []), claims)
     unresolved_consistency = (consistency or {}).get(
         "verdict"
     ) == NEEDS_REVIEW and not _source_based_consistency_resolution(admission)
@@ -2392,6 +2385,25 @@ def _source_based_consistency_resolution(admission: object) -> bool:
     if not isinstance(admission, dict):
         return False
     return is_source_based(admission.get("consistency_resolution"))
+
+
+def classify_issue_priorities(
+    issues: object, claims: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Tag each consistency issue `must_resolve` or `verify`.
+
+    The one place the rule is applied. It is public because a caller that has its own
+    candidate issues -- a replay measuring what a prompt change would do, say -- must be
+    able to ask the same question of them. Both sides pass *enriched* claims: the rule
+    reads `extraction_claim_index` and `review_suggestion`, which a raw `SELECT * FROM
+    claims` does not carry.
+    """
+
+    return [
+        {**issue, "priority": "must_resolve" if _critical_issue(issue, claims) else "verify"}
+        for issue in (issues or [])
+        if isinstance(issue, dict)
+    ]
 
 
 def _critical_issue(
