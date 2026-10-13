@@ -80,30 +80,42 @@ patient-facing argument rests on.
 ### The fallback queue is mostly not a reasoning problem
 
 Of 432 papers, 423 completed autonomous review; 57 raised
-`autonomous_review_attention_required`. Classified by what blocks them:
+`autonomous_review_attention_required` (70 events over those 57 papers, since a
+paper can be refused at more than one stage). Classified by the paper's
+**current** state rather than by the stage that refused it, so the buckets are
+disjoint and sum to 57:
 
 | Bucket | Papers | What is missing |
 | --- | ---: | --- |
-| Genuine capability boundary — full text present, extraction present, AI still declines | **20** | a better adjudication, not more data |
-| No stored full text | 22 | data |
+| No stored full text | 22 | data — the collection path that would fetch it is paused |
 | Full text present but never extracted | 2 | a retry |
-| Held by a person's earlier rejection | 4 | a person's decision, by design |
-| **Already has full text and extraction — a *stale* `extraction`-stage refusal from before the text arrived** | **12** | nothing but a re-run |
+| Refusal superseded — an extraction postdates the refusal | 11 | nothing; already drained |
+| Capability boundary — full text present, extraction present, still refused | 18 | a better adjudication, not more data |
+| Held by a person's earlier rejection | 3 | a person's decision, by design |
+| Other standing refusal | 1 | — |
 
-The buckets are disjoint and sum to 60 against 57 distinct papers, because 3
-papers are held by *both* a capability-stage refusal and a person's rejection.
-That ordering matters: for those 3, the person's rejection is the binding
-constraint, so the machine has nothing to re-adjudicate until a person moves
-first, and they must not be counted twice when sizing the work.
+Classifying by stage name instead is what makes this look like a bigger problem
+than it is: the stage buckets sum to 60 over the same 57 papers (36 + 20 + 4),
+because one paper carries both an `extraction`- and a capability-stage refusal
+and two carry both an `extraction`-stage refusal and a person's rejection.
 
-The fifth bucket is the one worth noticing. Those 12 papers were refused at the
-`extraction` stage for "no stored full text", the full text later arrived, and
-**they were then re-reviewed successfully** — 35 of the 36 `extraction`-stage
-papers were re-run after their refusal. A stale refusal is therefore not a
-standing limit; it is a queue that the next pass drains. Only the 22 that still
-have no full text are held by data.
+Three of those buckets are worth separating from the rest:
 
-The 20 are not untouched: `_source_adjudication` already reads the full text and
+- **The 11 "superseded" papers are history, not work.** They were refused for
+  "no stored full text", the full text arrived afterwards, and the pipeline moved
+  on by itself. A stale refusal is not a standing limit; the next pass drains it.
+  Read as current backlog it inflates the queue by a fifth.
+- **These counts are a snapshot, and a stage-name reading of them over-counts.**
+  They were taken on 2026-10-13 while the pipeline was still draining, so they
+  must be re-measured rather than quoted. What is stable is the structure: the
+  queue is mostly data and history, and the genuinely undecidable part is small.
+- **The 3 held by a person are the binding constraint, not the capability.**
+  A machine cannot reverse a person's rejection (decision 3), so for those papers
+  the capability question is moot until a person moves first. They must not be
+  counted as capability work.
+
+The capability papers are not untouched: `_source_adjudication` already reads the
+full text and
 attempts the adjudication (`ai:source-adjudicator`), and its fallback reason
 states explicitly that full-text evidence could not support an autonomous
 verdict. It succeeds on 5 and declines on 20.
@@ -163,7 +175,7 @@ cap is the control.**
 5. **The gate for new `action`-threshold machine signatures is the one that does
    not exist yet.** "A machine may sign a card that carries an action message"
    currently rests on a cap, not on measured accuracy. Before that is relied on
-   for new cards, the 20 capability-boundary papers are re-adjudicated with a
+   for new cards, the capability-boundary papers are re-adjudicated with a
    stronger model:
    - If the stronger model resolves them **with quotable source evidence**, the
      boundary was model capability, and the evidence requirement is what admits
@@ -230,22 +242,24 @@ whose cause is the source text — which is exactly what decision 5 tests.
 ## Consequences
 
 **Easier.** "Who decided this, on what grade, under which policy version" becomes
-answerable per row. The 22 + 2 data problems become ordinary data work with no
-judgement attached. The 20-paper experiment is cheap, bounded, falsifiable, and
-produces a fact about the corpus rather than an argument about models.
+answerable per row. The no-full-text and never-extracted papers become ordinary
+data work with no judgement attached. The capability experiment is cheap,
+bounded, falsifiable, and produces a fact about the corpus rather than an argument
+about models.
 
 **Harder, and now capped.** The pipeline's throughput ceiling for *contributing
 new grades* is not the model's rate: an AI-only path cannot lift a topic to
 `high` or clear the action threshold, so topics whose evidence deserves an action
 message need a human in the loop by construction. If decision 5 returns "still
-declines", that ceiling is **permanent for those 20 papers** — they are
+declines", that ceiling is **permanent for the capability papers** — they are
 undecidable from their text, and no future model change lifts it. The
 `needs_review` verdict is therefore not a backlog to drain but a standing
 population that needs a human channel sized for it. Note the distinction: a
 `needs_review` verdict marks two very different things — "the channels disagree"
 (which the pipeline handles by reading the source and adjudicating, and which
 cleared 5 of 25) and "the source could not decide it" (which only a person
-resolves). The second is the standing population; the first drains itself.
+resolves). The second is the standing population; the first drains itself, and
+the 11 superseded refusals above are that draining observed.
 
 **A risk this record accepts, explicitly.** 5 `moderate` cards are live on machine
 signatures with no measured error rate, and are grandfathered (decision 4) rather
