@@ -108,11 +108,12 @@ Three of those buckets are worth separating from the rest:
 - **These counts are a snapshot, and a stage-name reading of them over-counts.**
   They were taken on 2026-10-13 while the pipeline was still draining, so they
   must be re-measured rather than quoted. What is stable is the structure: the
-  queue is mostly data and history, and the genuinely undecidable part is small.
-- **The 3 held by a person are the binding constraint, not the capability.**
+  queue is mostly data and history, and — per decision 5 — what looks like an
+  undecidable remnant is mostly a contract gap that has not been closed yet.
+- **The 3 held by a person are the binding constraint, not the adjudication.**
   A machine cannot reverse a person's rejection (decision 3), so for those papers
-  the capability question is moot until a person moves first. They must not be
-  counted as capability work.
+  the adjudication question is moot until a person moves first. They must not be
+  counted as adjudication work.
 
 These papers are not untouched: `_source_adjudication` already reads the full text
 and attempts the adjudication (`ai:source-adjudicator`), and its fallback reason
@@ -172,7 +173,7 @@ cap is the control.**
    re-adjudicated as part of this record, and they do not become the precedent
    that skips decision 5 for future cards.
 
-5. **The capability boundary is a pipeline gap before it is a model limit, and
+5. **What blocks these papers is a pipeline gap before it is a model limit, and
    must be closed on that basis.** `_source_adjudication` is **deterministic — it
    calls no model at all** (it parses the stored full text, attests the issue's
    quoted evidence against it, and cross-checks Claim/Result structure). An
@@ -190,23 +191,44 @@ cap is the control.**
    | Declines — the issue's `evidence` carries no source quote at all | 15 |
 
    The dominant decline is the second row, and it is not a disagreement about
-   meaning — it is the same complaint, one stage later. `_EXTRACTION_PROMPT`
-   already requires that "每个 evidence 必须从全文复制一段连续、逐字原文", and
-   `ai_extraction.py` **enforces exactly that for the extraction's own evidence**
-   — the `attest(...)` call at line 515, whose `missing` non-empty case raises
-   `PaperAnalysisError` — and the codebase's only `attest(` call is that one. The
-   consistency stage imposes the same requirement in the prompt but **never
-   attests `issue.evidence`**, so a model that paraphrases when it reports a
-   difference blocks the deterministic adjudicator that was built to resolve it.
+   meaning. It is an **unsatisfiable contract**, and the asymmetry runs the
+   opposite way from what "the model gave a bad answer" would suggest:
+
+   - `_EXTRACTION_PROMPT` requires that "evidence 必须是全文中的连续、逐字原文摘录"
+     and `ai_extraction.py` **enforces it for the extraction's own evidence** —
+     the `attest(...)` call at line 515, whose non-empty `missing` raises
+     `PaperAnalysisError`; it is the codebase's only `attest(` call.
+   - `_CONSISTENCY_PROMPT` asks for `evidence` on each issue and **never states
+     the verbatim rule** — the same omission is in `_CONSISTENCY_CORRECTION_PROMPT`.
+   - `_source_adjudication` nevertheless **requires** a verbatim quote: the first
+     thing it does per issue is attest the quoted fragment against the stored full
+     text and return `None` if it does not match.
+
+   So the consistency stage is asked for free prose and then judged by a rule it
+   was never given, and the machine's refusal is not evidence that the difference
+   was hard — it is evidence that **nobody asked for a checkable quote**. That
+   also explains why the "citations" tolerance recovers none of the 43: the
+   problem is not how strictly the quote is matched, it is that no quote was
+   requested.
 
    Therefore, before any accuracy question is asked of these papers:
-   - **Attest `issue.evidence` (or the fields of `ConsistencyReport` that carry
-     it) the way the extraction path already does**, and test how many of the 43
-     the deterministic adjudicator then clears. That is a repair carrying no
-     epistemic risk: it makes the machine check itself, not assert more.
-   - Only the residue — material issues that quote the source verbatim and still
-     cannot be adjudicated — is a genuine capability boundary, and that residue is
-     the population a person must handle.
+   - **State the verbatim requirement in `_CONSISTENCY_PROMPT` (and the
+     correction prompt), then attest `issue.evidence` the way the extraction path
+     already does**, and test how many of the 43 the deterministic adjudicator then
+     clears. This makes the machine check itself rather than assert more; it
+     carries no epistemic risk. Note it is a **contract change** — issues already
+     stored were produced under the old prompt and stay non-attesting.
+   - **Pick one tolerance and use it at both ends.** Extraction attests at
+     `tolerance="citations"`; `_source_adjudication` uses the `strict` default, so
+     a quote can pass one check and fail the other. Whichever is chosen, the
+     prompt's rule and every check must agree on it — otherwise the repair moves
+     the mismatch instead of removing it.
+   - Only the residue — material issues that **quote the source verbatim, carry a
+     resolvable structural target, and still cannot be adjudicated** — is a
+     genuine capability boundary. A refusal is not proof that the source is
+     ambiguous: `_source_adjudication` also declines on an unparseable stored
+     document and on a missing Claim/Result target, and both of those are
+     repairable rather than permanent.
    - **Do not build a "stronger model" harness for this step.** There is nothing
      for it to answer.
    - **Zero errors remains the bar for a verdict that changes patient-facing
@@ -279,9 +301,13 @@ human-throughput ceiling into an ordinary bug fix.
 new grades* is not the model's rate: an AI-only path cannot lift a topic to
 `high` or clear the action threshold, so topics whose evidence deserves an action
 message need a human in the loop by construction. The residue after decision 5 —
-material issues that quote the source verbatim and still cannot be adjudicated —
-is **permanent for those papers**: undecidable from their text, with nothing a
-stronger model could do because no model is involved. The `needs_review` verdict
+material issues that quote the source verbatim, carry a resolvable structural
+target, and still cannot be adjudicated — is the population the human channel is
+sized for. **This record does not claim that residue is permanent**: it has not
+been isolated yet, because the dominant decline is a contract gap that decision 5
+removes first. Only what survives that repair can be called undecidable, and the
+bar for calling it permanent is a documented reason per paper, not a refusal
+count. The `needs_review` verdict
 is therefore not a backlog to drain but a standing population that needs a human
 channel sized for it. Note the distinction: a `needs_review` verdict marks two
 very different things — "the channels disagree" (which the pipeline handles by
