@@ -48,22 +48,34 @@ What the system actually enforces is **not** "a person approves each card" but a
 (`transition_card`) and every reader (`patient_visible_sql`) share, so a card can
 never be published-but-invisible for a reason no reader states.
 
-And the machine cannot reach the top of that scale: `_profile_suggestion` in
-`review/service.py` computes the GRADE score, then applies
+And the machine cannot reach the top of that scale: `_automatic_profile` in
+`review/service.py:1176` computes the GRADE score, then applies
 `min(score, 1 if single_primary_study else 2)` with the rationale string
 **"AI-only synthesis is capped at moderate certainty."** Since
 `STRENGTH_BY_SCORE[3] == "high"`, **`high` is unreachable by an AI-only path.**
 That cap is the human-content guarantee, and it is enforced by arithmetic rather
-than by a signature.
+than by a signature. It binds the **autonomous** path only: the manual
+`EvidenceProfileInput` accepts a caller-supplied `certainty`, so a person can
+still write `high` — which is the intended shape, since the cap exists to bound
+what a machine may assert on its own.
 
 Measured, the boundary holds exactly:
 
-| Grade | Published | Carries an action message? |
+| Grade | Published | `action_status` served to a patient |
 | --- | ---: | --- |
-| `low` | 47 | no — `context_only` |
-| `moderate` | 5 | **yes** |
+| `low` | 47 | `not_available` |
+| `moderate` | 5 | `not_available` |
 | `very_low` | 0 | never published |
 | `high` | 0 (0 profiles at `high`, anywhere) | — |
+
+And measured, **no card carries action advice today**: `card_capabilities` in
+`core/contracts.py` returns `content_layer: "context_only"` and
+`action_status: "not_available"` for **every** grade, including the
+action-threshold ones — the `moderate` branch only supplies a different
+`action_message` string ("…但当前知识卡尚未包含经审核的具体行动内容"). So
+`ACTION_THRESHOLD_GRADES` currently decides **wording**, not capability. That
+narrows this record's exposure considerably, and it is the fact the whole
+patient-facing argument rests on.
 
 ### The fallback queue is mostly not a reasoning problem
 
@@ -76,6 +88,20 @@ Of 432 papers, 423 completed autonomous review; 57 raised
 | No stored full text | 22 | data |
 | Full text present but never extracted | 2 | a retry |
 | Held by a person's earlier rejection | 4 | a person's decision, by design |
+| **Already has full text and extraction — a *stale* `extraction`-stage refusal from before the text arrived** | **12** | nothing but a re-run |
+
+The buckets are disjoint and sum to 60 against 57 distinct papers, because 3
+papers are held by *both* a capability-stage refusal and a person's rejection.
+That ordering matters: for those 3, the person's rejection is the binding
+constraint, so the machine has nothing to re-adjudicate until a person moves
+first, and they must not be counted twice when sizing the work.
+
+The fifth bucket is the one worth noticing. Those 12 papers were refused at the
+`extraction` stage for "no stored full text", the full text later arrived, and
+**they were then re-reviewed successfully** — 35 of the 36 `extraction`-stage
+papers were re-run after their refusal. A stale refusal is therefore not a
+standing limit; it is a queue that the next pass drains. Only the 22 that still
+have no full text are held by data.
 
 The 20 are not untouched: `_source_adjudication` already reads the full text and
 attempts the adjudication (`ai:source-adjudicator`), and its fallback reason
@@ -100,11 +126,17 @@ cap is the control.**
    *detectable without re-running the model*.
 
 2. **The AI-only certainty cap is the human-content guarantee and must not be
-   relaxed.** `min(score, 2)` on the AI path is what keeps every machine-authored
-   card at `context_only` or below the top grade. An `action`-threshold card
-   reaching a patient on a machine signature is acceptable **only** because no
-   model can reach `high` alone; that sentence is therefore load-bearing, and
-   changing the cap changes the safety argument, not just a grade.
+   relaxed.** `min(score, 2)` on the AI path is what keeps a machine from
+   asserting the top grade on its own. This cap matters *because* the parallel
+   guard is weaker than it looks: **`card_capabilities` serves
+   `action_status: "not_available"` at every grade**, so no card carries reviewed
+   action content today and the code — not a policy — is what currently keeps a
+   machine verdict at background context. Relaxing either the cap or that
+   capability mapping changes the safety argument, not just a label. In
+   particular, the day `action_status` becomes available for `moderate`, the
+   action threshold stops being a wording distinction and starts being a
+   behavioural one, and decision 5's evidence becomes mandatory rather than
+   prudent.
 
 3. **A machine may not silently overturn a person.** Where an earlier human
    `rejected` decision blocks a paper, the machine's only available action is to
@@ -118,9 +150,15 @@ cap is the control.**
 4. **Retroactive automation is not redesign in disguise.** The 5 published
    `moderate` cards and 47 `low` cards were machine-signed without the
    reproducibility evidence that decision 5 establishes. They are **grandfathered
-   and labelled as such** — their `certainty_rationale` records the policy version
-   that produced them. They are not re-adjudicated as part of this record, and
-   they do not become the precedent that skips decision 5 for future cards.
+   on the evidence that already exists**, and no migration is owed: every
+   automatically generated profile's `certainty_rationale` already begins
+   "AI GRADE assessment (literature-review-ai/<version>)", so the policy version
+   that produced each row is stored and per-row distinguishable today (220 / 226
+   rows; the 6 without it were not produced by this path). A *second* stored label
+   saying "grandfathered" would add nothing the version string does not already
+   answer. They are not
+   re-adjudicated as part of this record, and they do not become the precedent
+   that skips decision 5 for future cards.
 
 5. **The gate for new `action`-threshold machine signatures is the one that does
    not exist yet.** "A machine may sign a card that carries an action message"
@@ -203,12 +241,18 @@ message need a human in the loop by construction. If decision 5 returns "still
 declines", that ceiling is **permanent for those 20 papers** — they are
 undecidable from their text, and no future model change lifts it. The
 `needs_review` verdict is therefore not a backlog to drain but a standing
-population that needs a human channel sized for it.
+population that needs a human channel sized for it. Note the distinction: a
+`needs_review` verdict marks two very different things — "the channels disagree"
+(which the pipeline handles by reading the source and adjudicating, and which
+cleared 5 of 25) and "the source could not decide it" (which only a person
+resolves). The second is the standing population; the first drains itself.
 
-**A risk this record accepts, explicitly.** 5 cards carrying action messages are
-live on machine signatures with no measured error rate. They are grandfathered
-(decision 4), not endorsed. If patient-facing accuracy ever needs defending, this
-is the first place it is weak, and decision 5 is the remedy.
+**A risk this record accepts, explicitly.** 5 `moderate` cards are live on machine
+signatures with no measured error rate, and are grandfathered (decision 4) rather
+than endorsed. The exposure is narrower than the grade suggests — no card carries
+reviewed action content, so a wrong `moderate` changes a patient's displayed
+certainty, not their behaviour. If patient-facing accuracy ever needs defending,
+this is still the first place it is weak, and decision 5 is the remedy.
 
 **A cost this record does not resolve.** 22 papers need full text absent from the
 corpus, and the collection path that would fetch it is the one paused by
