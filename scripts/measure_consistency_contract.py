@@ -68,11 +68,14 @@ class Disposition:
 
 
 def _adjudication_disposition(issue: dict[str, object], segments: tuple[str, ...]) -> Disposition:
-    """Classify one issue the way `_source_adjudication` decides it.
+    """Classify one issue by the adjudicator's *quote* gate, and only that gate.
 
-    Mirrors only the quote gate, which is the branch this measurement is about: the
-    adjudicator returns `None` for an issue whose fragments do not attest, and proceeds
-    otherwise. Structural checks beyond that are policy the caller owns.
+    `_source_adjudication` refuses at three points, in order: the quote must attest, the
+    extraction must offer a structured Claim/Result target, and a statistical contradiction
+    must have a claim matching the excerpt. This measures the first, because that is the
+    branch this change is about. The kind is therefore named `quote_attested`, not
+    `adjudicable` -- it is a floor on what the adjudicator will accept, not the acceptance
+    rate. Quoting the two as the same number would overstate the result.
     """
 
     field, severity = str(issue.get("field")), str(issue.get("severity"))
@@ -84,7 +87,7 @@ def _adjudication_disposition(issue: dict[str, object], segments: tuple[str, ...
         [Excerpt(field="fragment", text=fragment) for fragment in fragments],
         tolerance="strict",
     ).missing
-    return Disposition(field, severity, "quote_not_verbatim" if unattested else "adjudicable")
+    return Disposition(field, severity, "quote_not_verbatim" if unattested else "quote_attested")
 
 
 def _material_issues(
@@ -164,7 +167,7 @@ def _candidates(database: Database, topic: str | None) -> list[dict[str, object]
     return [dict(row) for row in rows]
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", required=True, help="path to the sqlite corpus to copy")
     parser.add_argument(
@@ -174,7 +177,9 @@ def main() -> None:
     parser.add_argument(
         "--topic", default=None, help="restrict to one topic code, as the worker rule requires"
     )
-    parser.add_argument("--apply", action="store_true", help="call the provider; otherwise preview")
+    parser.add_argument(
+        "--apply", action="store_true", help="call the provider; otherwise preview"
+    )
     parser.add_argument("--report", default=None, help="where the JSON result goes")
     parser.add_argument(
         "--model",
@@ -182,20 +187,44 @@ def main() -> None:
         help="label only; the model actually used comes from PAPER_AI_MODEL via from_env()",
     )
     parser.add_argument("--keep", action="store_true", help="keep the throwaway corpus")
+    return parser
+
+
+def main() -> None:
+    parser = _parser()
     args = parser.parse_args()
 
     if args.limit < 1:
         parser.error(f"--limit must be at least 1 (got {args.limit})")
+    # Asked before anything is copied: a run that cannot call the provider must not leave a
+    # ~100 MB corpus copy behind to be cleaned up by the next person who looks at /tmp.
+    if args.apply and not _key_present():
+        raise SystemExit(
+            "no provider key: set PAPER_AI_API_KEY_FILE / ARK_API_KEY_FILE "
+            "or PAPER_AI_API_KEY / ARK_API_KEY"
+        )
 
     work = Path(tempfile.mkdtemp(prefix="genesis-consistency-"))
+    try:
+        _replay(args, work)
+    finally:
+        # Every exit past the copy goes through here: a failed provider call, an unreadable
+        # corpus, a full disk. The two happy paths used to be the only ones that cleaned up.
+        if not args.keep:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def _replay(args: argparse.Namespace, work: Path) -> None:
+    """Copy the corpus, replay one topic's consistency stage, report, and write."""
+
     corpus = work / "genesis-evidence.sqlite3"
     objects = work / "objects"
-    source_objects = Path(args.objects) if args.objects else Path(args.corpus).parent / "objects"
-
-    # A copy, not the original: DB.initialize() writes, so even a read-only intent must not
-    # point at the live file. `VACUUM INTO` rather than a byte copy, because the source may
-    # be a live database and a page-level copy can land mid-write.
     source = Path(args.corpus)
+    source_objects = Path(args.objects) if args.objects else source.parent / "objects"
+
+    # A copy, not the original: `Database.initialize()` writes, so even a read-only intent
+    # must not point at the live file. `VACUUM INTO` rather than a byte copy, because the
+    # source may be a live database and a page-level copy can land mid-write.
     with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as origin:
         origin.execute("VACUUM INTO ?", (str(corpus),))
     shutil.copytree(source_objects, objects)
@@ -218,13 +247,7 @@ def main() -> None:
 
     if not args.apply:
         print("\npreview only: nothing run. Re-run with --apply.")
-        shutil.rmtree(work, ignore_errors=True)
         return
-    if not _key_present():
-        raise SystemExit(
-            "no provider key: set PAPER_AI_API_KEY_FILE / ARK_API_KEY_FILE "
-            "or PAPER_AI_API_KEY / ARK_API_KEY"
-        )
 
     analyzer = _analyzer()
     print(f"answering model: {analyzer.model}")
@@ -237,6 +260,9 @@ def main() -> None:
         new_all: list[dict[str, object]] = []
         verdict = ""
         status, detail = "completed", ""
+        # Every local is initialised above, per paper: the exception handlers below set
+        # only `status`/`detail`, so leaving these unset would either raise on the first
+        # failure or carry the previous paper's numbers into this paper's row.
         try:
             _, object_key = store.get_analysis_source(paper_id)
             document = jats.parse(object_store.read(object_key)).to_dict()
@@ -273,17 +299,23 @@ def main() -> None:
                 "new_verdict": verdict,
             }
         )
+        tail = f"  {detail}" if detail else ""
         print(
-            f"  {paper_id[:8]}  {status:14} before: {_tally(before)}  after: {_tally(after)}"
-            + (f"  {detail}" if detail else "")
+            f"  {paper_id[:8]}  {status:14} before: {_tally(before)}  "
+            f"after: {_tally(after)}{tail}"
         )
 
     print()
     print("=== totals over material issues ===")
-    head_rows = [d for o in outcomes for d in _as_dispositions(o["before"])]
-    print(f"  before: {_tally(head_rows)}")
-    tail_rows = [d for o in outcomes for d in _as_dispositions(o["after"])]
-    print(f"  after : {_tally(tail_rows)}")
+    # A failed replay has no "after" side, so including it would report the contract as
+    # removing issues it never got to check. Only complete pairs are comparable.
+    paired = [o for o in outcomes if o["status"] == "completed"]
+    skipped = len(outcomes) - len(paired)
+    print(f"  comparing {len(paired)}/{len(outcomes)} paper(s) with both sides recorded")
+    if skipped:
+        print(f"  ({skipped} paper(s) excluded: no complete before/after pair)")
+    print(f"  before: {_tally([d for o in paired for d in _as_dispositions(o['before'])])}")
+    print(f"  after : {_tally([d for o in paired for d in _as_dispositions(o['after'])])}")
 
     # Named by the answering model AND the run label, because comparing repeated runs is
     # the point of this script: two runs against the same model under different labels
@@ -304,11 +336,8 @@ def main() -> None:
         print(f"report: {report_path} exists — refusing to overwrite; pass --report elsewhere")
         raise SystemExit(1) from None
     print(f"report: {report_path}")
-
     if args.keep:
         print(f"kept the throwaway corpus at {work}")
-    else:
-        shutil.rmtree(work, ignore_errors=True)
 
 
 def _as_dispositions(rows: list[dict[str, object]]) -> list[Disposition]:
