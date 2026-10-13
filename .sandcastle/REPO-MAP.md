@@ -128,6 +128,7 @@ scripts/
   check_scope.py
   collect_topics.py
   local_extraction_batch.py
+  measure_consistency_contract.py
   rebuild_evidence_bodies.py
 src/
   genesis_evidence/
@@ -138,17 +139,5 @@ src/
     reports/
     review/
     __init__.py
-tests/
-  __init__.py
-  test_ai_extraction.py
-  test_blood_cell_differential_domain.py
-  test_card_evidence.py
-  test_card_lifecycle.py
-  test_components.py
-  test_condition_catalog_expansion.py
-  test_condition_catalog_review_fixes.py
-  test_conditions.py
-  test_connectors.py
-  ... (44 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```

@@ -22,6 +22,7 @@ from ..core.methodology import (
 )
 from ..core.source_excerpt import (
     Excerpt,
+    _source_evidence_fragments,
     attest_segments,
     normalized_text,
     segments_from_document,
@@ -1060,38 +1061,6 @@ def _automatic_source_verification(
         "evidence_source": "paper_extractions.extraction_json",
         "failures": failures,
     }
-
-
-def _source_evidence_fragments(value: object) -> list[str]:
-    raw = str(value or "").strip()
-    if not raw:
-        return []
-    markers = list(
-        re.finditer(
-            r"(?:原文|evidence|source|original|full\s+text)\s*(?:[A-Za-z][\w .-]*\s*)?[:：]",
-            raw,
-            flags=re.IGNORECASE,
-        )
-    )
-    candidates: list[str] = []
-    for marker in markers:
-        tail = raw[marker.end() :].strip()
-        quoted = re.findall(r"[\"“](.+?)[\"”]", tail)
-        if not quoted:
-            quoted = re.findall(r"‘(.+?)’", tail)
-        candidates.extend(quoted or [re.split(r"[。；;]", tail, maxsplit=1)[0]])
-    if not candidates and re.match(
-        r"^(?:evidence|source|original|full\s+text)\s*[:：]", raw, flags=re.IGNORECASE
-    ):
-        candidates = [re.split(r"[。；;]", raw.split(":", 1)[1], maxsplit=1)[0]]
-    if not candidates and not markers:
-        candidates = [raw]
-    fragments: list[str] = []
-    for candidate in candidates:
-        fragment = normalized_text(candidate).strip(" \"'“”‘’。.；;")
-        if len(fragment) >= 8 and fragment not in fragments:
-            fragments.append(fragment)
-    return fragments
 
 
 def _primary_extraction_supports_fragments(

@@ -231,10 +231,50 @@ cap is the control.**
      repairable rather than permanent.
    - **Do not build a "stronger model" harness for this step.** There is nothing
      for it to answer.
-   - **Zero errors remains the bar for a verdict that changes patient-facing
-     direction.** Every other unresolved difference must quote the source that
-     decides it.
+   - **Where the gate lives is a decision with a cost, and it is accepted.** The
+     requirement is enforced in `ArkPaperAnalyzer.check`, which runs *before*
+     the extractions are persisted, so a report that fails after correction fails
+     the whole job and both stored extractions are lost. The alternative --
+     leaving the quote rule unenforced at ingestion and letting
+     `_source_adjudication` decline later -- loses nothing but leaves the 43
+     non-attesting issues permanently undecidable. The accepted cost is bounded:
+     a quote shorter than the 8-character floor counts as "no evidence", so an
+     issue quoting only e.g. `N=5` can fail a paper. Measured over the 10-paper
+     replay this happened 0 times, so the cost is not yet quantified; if a wider
+     run shows it bites, the correct change is to enforce the quote rule for
+     **material** issues only, not to drop the gate.
+   - **Outcome, 2026-10-13: the contract works; the benefit could not be
+     measured.** Replaying only the consistency stage over stored A/B on
+     `sodium-reduction-blood-pressure` (10 papers, one topic):
 
+     | | before | after |
+     | --- | ---: | ---: |
+     | material issues reported | 18 (every run) | **2, 5, 0** across three identical runs |
+     | all issues reported | 230 | 49, 46, 41 |
+
+     The "before" column is stable because it is stored data. The "after" column
+     is not: **three runs of the same code against the same corpus and model
+     produced 2, 5 and 0 material issues.** A single before/after pair therefore
+     cannot show anything, and the intermediate figure this record briefly carried
+     (18 → 5, "6% → 80% adjudicable") was one draw from that distribution, not a
+     result. It is withdrawn.
+
+     The variance has two sources, and the second is the more useful finding:
+     the checker is a model call, so *which* issues it reports varies; and
+     `_critical_issue` grades an issue `must_resolve` by its `severity`, so a
+     checker that says `medium` where another says `high` moves an issue out of
+     the material set. **The `needs_review` workload is therefore itself a noisy
+     quantity** -- a "how many papers need a human" estimate from one pass is not
+     a measurement, and any future sizing must run repeatedly.
+
+     What the change *does* establish, and why it still stands: the checker is now
+     asked for a verbatim quote, and a report whose issue evidence is not one is
+     rejected and re-asked instead of being stored as permanently undecidable. The
+     raw model responses confirm the prompt took effect (issues arrive with real
+     quoted原文); whether that *reduces* human work is not established here.
+   - **Re-measure before acting on any number here.** The correct next step is
+     repeated runs of both prompts over more topics, reporting a distribution --
+     not a second single sample, which is what this record's withdrawn figure was.
 6. **Identity is split.** `GENESIS_EVIDENCE_REVIEWER_ID` currently doubles as the
    ingestion run's authorisation identity and as the autonomous pipeline's gate
    identity; the environment also carries `ranlei` in `requested_by`. An
