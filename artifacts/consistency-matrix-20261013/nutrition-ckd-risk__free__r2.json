@@ -1,0 +1,102 @@
+[
+  {
+    "paper_id": "06d22ddc-b9de-42f2-8a24-704fca7af323",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [
+      {
+        "field": "directly_reported_symptoms",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[13].inference",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "old_issue_count": 8,
+    "new_issue_count": 8,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "0bcd7878-aa2b-45ae-812e-c5a91c80ab6b",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 5,
+    "new_issue_count": 3,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "13607793-f6e6-42ac-bf22-6620edd70eb5",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 6,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "223d280e-d402-4ae0-a7e8-da8c8f750eef",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "directly_reported_symptoms",
+        "severity": "medium",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "studied_approach",
+        "severity": "medium",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [
+      {
+        "field": "population / 样本量",
+        "severity": "medium",
+        "kind": "quote_attested"
+      }
+    ],
+    "old_issue_count": 6,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "25351331-a6e7-42c1-9961-0a807c9a88b3",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 17,
+    "new_issue_count": 0,
+    "new_verdict": "consistent",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "2db479c5-5d0f-47f8-a689-b161f2f8bfdc",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "dual_extraction",
+        "severity": "high",
+        "kind": "no_quote"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 1,
+    "new_issue_count": 3,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  }
+]

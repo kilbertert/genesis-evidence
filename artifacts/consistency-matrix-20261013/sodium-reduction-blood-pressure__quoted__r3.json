@@ -1,0 +1,152 @@
+[
+  {
+    "paper_id": "0911bbbf-ecf6-4600-aba4-2c47e29c9334",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [
+      {
+        "field": "population",
+        "severity": "medium",
+        "kind": "quote_attested"
+      }
+    ],
+    "old_issue_count": 59,
+    "new_issue_count": 8,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "1fa70190-1f65-4f4c-ba30-c2a053b0d5ac",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "claims",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[ACCORD]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[SPRINT]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[KAMIR]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[ARIC]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[Mouhat]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[Ameloot]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[Abanador-Kamper]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[U-shaped MACE]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[low SBP myocardial injury]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[microvascular obstruction proportion]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[MAP 80/85-100]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "claims[overtreatment safety]",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 25,
+    "new_issue_count": 2,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "2db479c5-5d0f-47f8-a689-b161f2f8bfdc",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "dual_extraction",
+        "severity": "high",
+        "kind": "no_quote"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 1,
+    "new_issue_count": 4,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "3593242a-7c06-40e6-b350-33fe8fd2469e",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "population",
+        "severity": "medium",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 25,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "3f3c1e34-2b80-41a7-9be8-9aaab8add8cd",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 50,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "50bd3ce8-5ef8-4677-aa22-98b87b82ca40",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 52,
+    "new_issue_count": 3,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  }
+]

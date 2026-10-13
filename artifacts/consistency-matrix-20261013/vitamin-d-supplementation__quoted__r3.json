@@ -1,0 +1,103 @@
+[
+  {
+    "paper_id": "0cc6aeed-1d14-47ac-a0d5-8582064a7de3",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "dual_extraction",
+        "severity": "high",
+        "kind": "no_quote"
+      }
+    ],
+    "after": [
+      {
+        "field": "dual_extraction",
+        "severity": "high",
+        "kind": "no_quote"
+      }
+    ],
+    "old_issue_count": 1,
+    "new_issue_count": 1,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "1c735414-66b7-49d0-9fa0-95102efc5aa9",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "claims.effect_estimate",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [
+      {
+        "field": "summary（机构居住时长的多变量结果）",
+        "severity": "medium",
+        "kind": "quote_attested"
+      }
+    ],
+    "old_issue_count": 7,
+    "new_issue_count": 3,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "2052410d-1af0-4e51-a890-fe0baef22339",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 13,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "227a6eb2-ec0d-47b4-af72-7703b0b3c673",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "claims",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      },
+      {
+        "field": "population",
+        "severity": "medium",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 15,
+    "new_issue_count": 10,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "2827b0f1-e21e-4081-9645-ac2f3023bca3",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 7,
+    "new_issue_count": 4,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  },
+  {
+    "paper_id": "2fb2d1ef-b015-4387-9763-6b4e94651357",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 12,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "quoted"
+  }
+]

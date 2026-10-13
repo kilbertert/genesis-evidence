@@ -1,0 +1,86 @@
+[
+  {
+    "paper_id": "02b450f6-e4c6-45c7-aeed-13a37d0e0e97",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 31,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "336f710c-c554-4f62-b953-d4225ba256f9",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "claims[1].outcome",
+        "severity": "high",
+        "kind": "quote_not_verbatim"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 6,
+    "new_issue_count": 2,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "39b4fb66-8833-4dd1-b535-45406aa0ebe7",
+    "status": "completed",
+    "detail": "",
+    "before": [
+      {
+        "field": "dual_extraction",
+        "severity": "high",
+        "kind": "no_quote"
+      }
+    ],
+    "after": [],
+    "old_issue_count": 1,
+    "new_issue_count": 2,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "41d13666-5f49-41f9-842a-a384db0cd94f",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 10,
+    "new_issue_count": 6,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "65e006fb-cc4b-478e-93df-7da182f38a24",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [],
+    "old_issue_count": 10,
+    "new_issue_count": 2,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  },
+  {
+    "paper_id": "6a22b8c5-2d4c-4e2c-934f-c245ced1b00c",
+    "status": "completed",
+    "detail": "",
+    "before": [],
+    "after": [
+      {
+        "field": "registration_ids",
+        "severity": "medium",
+        "kind": "quote_attested"
+      }
+    ],
+    "old_issue_count": 4,
+    "new_issue_count": 3,
+    "new_verdict": "needs_review",
+    "prompt_arm": "free"
+  }
+]
