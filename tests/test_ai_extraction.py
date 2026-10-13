@@ -8,12 +8,15 @@ from pydantic import ValidationError
 
 from genesis_evidence.core.conditions import CONDITIONS
 from genesis_evidence.literature.ai_extraction import (
+    SYNTHESIZED_ISSUE_FIELD,
+    SYNTHESIZED_ISSUE_MESSAGE,
     ArkPaperAnalyzer,
     ConsistencyReport,
     PaperAnalysisError,
     PaperExtraction,
     _normalize_consistency_payload,
     _require_source_evidence,
+    _require_verbatim_evidence,
     _streamed_completion,
 )
 from genesis_evidence.literature.models import PaperRecord, SourceName
@@ -360,8 +363,7 @@ def test_source_evidence_allows_inline_figure_citation_marker() -> None:
                 {
                     "title": "Results",
                     "text": (
-                        "Lower 25(OH)D was associated with higher frailty prevalence "
-                        "(Figure 2)."
+                        "Lower 25(OH)D was associated with higher frailty prevalence (Figure 2)."
                     ),
                 }
             ],
@@ -503,3 +505,105 @@ def test_complete_endpoint_keeps_full_chat_completions_url() -> None:
         endpoint="https://provider.invalid/v1/chat/completions",
     )
     assert analyzer._endpoint == "https://provider.invalid/v1/chat/completions"
+
+
+def _report(**issue: object) -> ConsistencyReport:
+    return ConsistencyReport.model_validate(
+        {
+            "verdict": "needs_review",
+            "issues": [
+                {
+                    "severity": "high",
+                    "field": "claims",
+                    "message": "The two extractions differ.",
+                    **issue,
+                }
+            ],
+        }
+    )
+
+
+_DOCUMENT = {
+    "sections": [
+        {
+            "title": "Results",
+            "text": "Plotting MACE rates against BP ranges revealed a U-shaped relation.",
+        }
+    ]
+}
+
+
+def test_verbatim_evidence_gate_accepts_a_quote_from_the_document() -> None:
+    report = _report(evidence="原文：revealed a U-shaped relation.")
+
+    accepted = _require_verbatim_evidence(report, _DOCUMENT)
+
+    assert accepted is report
+
+
+def test_verbatim_evidence_gate_rejects_a_paraphrase() -> None:
+    """The failure this contract exists for: the checker summarizes instead of quoting."""
+
+    report = _report(evidence="原文显示血压与 MACE 呈 U 形关系。")
+
+    with pytest.raises(PaperAnalysisError, match="not quoted from the full text"):
+        _require_verbatim_evidence(report, _DOCUMENT)
+
+
+def test_verbatim_evidence_gate_rejects_an_empty_quote() -> None:
+    """`evidence` defaults to "", so accepting it would leave the default as the bypass."""
+
+    report = _report(evidence="")
+
+    with pytest.raises(PaperAnalysisError, match="no verbatim quote"):
+        _require_verbatim_evidence(report, _DOCUMENT)
+
+
+def test_verbatim_evidence_gate_exempts_only_the_module_synthesized_issue() -> None:
+    """The one issue this module writes itself quotes nothing, by construction.
+
+    Keyed on the exact pair `field` + `message`, because `field` is a string the checker
+    chooses: keying on it alone would let a checker label any ungrounded issue
+    `dual_extraction` and skip the rule.
+    """
+
+    report = _report(field=SYNTHESIZED_ISSUE_FIELD, message=SYNTHESIZED_ISSUE_MESSAGE, evidence="")
+
+    assert _require_verbatim_evidence(report, _DOCUMENT) is report
+
+
+def test_verbatim_evidence_gate_rejects_a_checker_claimed_exemption() -> None:
+    """A checker that labels its own issue `dual_extraction` does not escape the rule."""
+
+    report = _report(field=SYNTHESIZED_ISSUE_FIELD, evidence="")
+
+    with pytest.raises(PaperAnalysisError, match="no verbatim quote"):
+        _require_verbatim_evidence(report, _DOCUMENT)
+
+
+def test_verbatim_evidence_gate_names_a_too_short_quote_apart() -> None:
+    """A quote below the evidence floor is a different failure from having none."""
+
+    report = _report(evidence="原文：N=5")
+
+    with pytest.raises(PaperAnalysisError, match="shorter than the 8-character evidence floor"):
+        _require_verbatim_evidence(report, _DOCUMENT)
+
+
+def test_verbatim_evidence_gate_tolerates_a_publisher_citation_in_the_quote() -> None:
+    """A publisher-inserted "(Table 2)" inside a real quote must not fail the gate."""
+
+    document = {"text": "Table 2 shows a 25% reduction (Table 2) in major CV events."}
+    report = _report(evidence="原文：a 25% reduction (Table 2) in major CV events.")
+
+    assert _require_verbatim_evidence(report, document) is report
+
+
+def test_verbatim_evidence_gate_uses_the_adjudicators_tolerance() -> None:
+    """A quote that only `strict` rejects is rejected here too — the two must agree."""
+
+    document = {"text": "Table 2 shows a 25% reduction (Table 2) in major CV events."}
+    report = _report(evidence="原文：a 25% reduction. Table 2")
+
+    with pytest.raises(PaperAnalysisError):
+        _require_verbatim_evidence(report, document)

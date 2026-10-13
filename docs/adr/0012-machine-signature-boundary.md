@@ -231,6 +231,41 @@ cap is the control.**
      repairable rather than permanent.
    - **Do not build a "stronger model" harness for this step.** There is nothing
      for it to answer.
+   - **Where the gate lives is a decision with a cost, and it is accepted.** The
+     requirement is enforced in `ArkPaperAnalyzer.check`, which runs *before*
+     the extractions are persisted, so a report that fails after correction fails
+     the whole job and both stored extractions are lost. The alternative --
+     leaving the quote rule unenforced at ingestion and letting
+     `_source_adjudication` decline later -- loses nothing but leaves the 43
+     non-attesting issues permanently undecidable. The accepted cost is bounded:
+     a quote shorter than the 8-character floor counts as "no evidence", so an
+     issue quoting only e.g. `N=5` can fail a paper. Measured over the 10-paper
+     replay this happened 0 times, so the cost is not yet quantified; if a wider
+     run shows it bites, the correct change is to enforce the quote rule for
+     **material** issues only, not to drop the gate.
+   - **Measured outcome, 2026-10-13, on `sodium-reduction-blood-pressure` (10
+     papers, one topic, replaying only the consistency stage over stored A/B).**
+     The contract works as designed and the predicted benefit did not
+     materialise, and both halves matter:
+
+     | | before | after |
+     | --- | ---: | ---: |
+     | material issues reported | 18 | 5 |
+     | of those, adjudicable | 1 (6%) | 4 (80%) |
+     | all issues reported | 230 | 49 |
+
+     The contract works: the share of reported differences the deterministic
+     adjudicator can actually decide rose from 6% to 80%. But the predicted
+     benefit did **not** materialise — the non-attesting material issues did not
+     become adjudicable, the checker reported fewer of them (18 → 5). All 10
+     papers stayed `needs_review`, so nothing was hidden behind a `consistent`
+     verdict; the reduction is at the *material* level. Whether those withdrawn
+     differences were real (and are now lost) or padded (and were correctly
+     dropped) is **not settled by this measurement**: one before-and-after pair
+     per paper cannot separate a prompt effect from run-to-run variance, and the
+     consistency checker is a model call. The honest next step is repeated runs
+     of *both* prompts over the same papers. **Do not read this table as "the gap
+     is closed", and do not quote the 6% → 80% without the 18 → 5 beside it.**
    - **Zero errors remains the bar for a verdict that changes patient-facing
      direction.** Every other unresolved difference must quote the source that
      decides it.
