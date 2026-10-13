@@ -144,7 +144,7 @@ cap is the control.**
    human-signed `moderate` profile is superseded by an automatic one, the
    downgrade **fails** rather than proceeding, and the refusal is recorded as
    attention. Today that collision is an unhandled exception path in
-   `_profile_suggestion`; making it an explicit refusal is a required follow-up,
+   `_automatic_profile`; making it an explicit refusal is a required follow-up,
    not an optional one.
 
 4. **Retroactive automation is not redesign in disguise.** The 5 published
