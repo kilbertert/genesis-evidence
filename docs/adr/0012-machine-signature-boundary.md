@@ -297,6 +297,20 @@ cap is the control.**
      arms ran together on one model. **The general lesson is recorded in the
      project memory: a change to a model-in-the-loop stage cannot be evaluated by
      one before-and-after pair.**
+6. **Identity is split.** `GENESIS_EVIDENCE_REVIEWER_ID` currently doubles as the
+   ingestion run's authorisation identity and as the autonomous pipeline's gate
+   identity; the environment also carries `ranlei` in `requested_by`. An
+   AI-authored decision must be recorded under an `ai:`-prefixed actor, and a
+   person's name must appear only where a person acted. Today the audit cannot
+   distinguish the two for the ingestion path — the exact question the audit
+   exists to answer.
+
+   **Execution status: not started.** As of 2026-10-15 the deployed
+   `var/review.env` still carries `GENESIS_EVIDENCE_REVIEWER_ID=ranlei`, and the
+   three call sites are unchanged: `review/api.py` (twice) and
+   `literature/extraction_worker.py` (the ingestion path this decision names).
+   The decision is recorded; the split is owed and is not claimed as done.
+
 ## Alternatives Considered
 
 **Re-enforce the written rule: require a human signature on every published
