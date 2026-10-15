@@ -85,6 +85,8 @@ artifacts/
     acceptance-20261001-mall-order-loop.md
     acceptance-20261009.md
     acceptance-20261009b-collection.md
+    acceptance-20261015-consistency-contract-run.json
+    acceptance-20261015-consistency-contract.md
 docs/
   adr/
     0002-trusted-pr-control-plane.md
