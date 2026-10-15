@@ -83,12 +83,18 @@ def _queued_papers(database: Database, limit: int) -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
-def _queued_jobs(database: Database, limit: int) -> list[dict[str, object]]:
+def _queued_jobs(
+    database: Database, limit: int, topic: str | None = None
+) -> list[dict[str, object]]:
     """Jobs already queued in the corpus, in the order they were created.
 
     The counterpart to `_queued_papers` for the case that actually matters on the
     production corpus: the papers are already enqueued, and running *those* is the
     question. Selecting by "no extraction yet" would answer a different one.
+
+    Scoped to one topic when asked, because that is the standing rule for
+    resuming extraction at all ("单主题低速验收"): a cross-topic batch is what
+    forced the worker to be paused, so a resumed run takes one topic at a time.
     """
 
     with database.connect() as connection:
@@ -98,10 +104,18 @@ def _queued_jobs(database: Database, limit: int) -> list[dict[str, object]]:
             FROM paper_extraction_jobs j
             JOIN papers p ON p.id = j.paper_id
             WHERE j.status = 'queued'
+                AND (
+                    ? IS NULL OR EXISTS (
+                        SELECT 1 FROM collection_papers cp
+                        JOIN collection_runs cr ON cr.id = cp.run_id
+                        JOIN evidence_topics et ON et.id = cr.topic_id
+                        WHERE cp.paper_id = j.paper_id AND et.code = ?
+                    )
+                )
             ORDER BY j.created_at, j.id
             LIMIT ?
             """,
-            (limit,),
+            (topic, topic, limit),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -243,6 +257,11 @@ def main() -> None:
         action="store_true",
         help="run the jobs already queued in the corpus, instead of unextracted papers",
     )
+    parser.add_argument(
+        "--topic",
+        default=None,
+        help="restrict to one topic code; the standing rule resumes one topic at a time",
+    )
     args = parser.parse_args()
 
     if args.report is None:
@@ -286,7 +305,7 @@ def main() -> None:
     database.initialize()
     store = PaperStore(database)
     if args.queued_jobs:
-        selected = _queued_jobs(database, args.limit)
+        selected = _queued_jobs(database, args.limit, args.topic)
         print(f"jobs already queued in the corpus: {len(selected)} selected")
         for row in selected:
             print(f"  {str(row['job_id'])[:8]}  {str(row['title'])[:60]}")
