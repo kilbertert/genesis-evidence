@@ -19,21 +19,29 @@ jobs:
       AFK_AGENT_GH_TOKEN: ${{ secrets.AFK_AGENT_READ_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - name: Count open architecture-review issues
+      - name: Count open architecture-review proposals
         id: count
         env:
           LABEL: source:architecture-review
         run: |
           set -euo pipefail
+          # This cap exists to stop the pass from overfilling a review queue
+          # nobody drains — it sat five short of it for the whole of
+          # 2026-08-27 → 2026-10-15. It is deliberately NOT a cap on defect
+          # reports: a bug filed by this pass is work someone should pick up, and
+          # throttling it would let a real defect wait behind a backlog of
+          # refactors. Findings carry `bug`, so excluding that label keeps the
+          # cap on proposals only.
+          #
           # Only care whether the backlog is below 10, so a limit of 10 is enough
           # to detect the threshold; the true count may be higher.
-          open=$(gh issue list --state open --label "$LABEL" --limit 10 --json number --jq 'length')
-          echo "Found $open open '$LABEL' issue(s) (counted up to 10)."
+          open=$(gh issue list --state open --search "label:\"$LABEL\" -label:bug" --limit 10 --json number --jq 'length')
+          echo "Found $open open '$LABEL' proposal(s) (counted up to 10)."
           if [ "$open" -lt 10 ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "Backlog has 10+ open '$LABEL' issues — skipping this run." >> "$GITHUB_STEP_SUMMARY"
+            echo "Backlog has 10+ open '$LABEL' proposals — skipping this run." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   architecture-review:
@@ -87,7 +95,7 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: npm exec tsx .sandcastle/architecture-review/architecture-review.ts
 
-      - name: Publish PRD issue
+      - name: Publish the issue
         id: publish
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
@@ -97,21 +105,34 @@ jobs:
         run: |
           set -euo pipefail
           status=$(jq -r '.status' "$OUTPUT_FILE")
-          if [ "$status" != "proposed" ]; then
+          if [ "$status" != "proposed" ] && [ "$status" != "finding" ]; then
             echo "Status is '$status' — nothing to publish."
             exit 0
           fi
           title=$(cat "$TITLE_FILE")
-          # Ensure the provenance label exists (idempotent — succeeds if already present).
+          # Provenance first: the pass's own label says where this came from, and
+          # `#309` was published by an earlier version of this workflow that
+          # silently dropped it. Every issue this step creates carries it.
           gh label create "$LABEL" \
             --color "5319E7" \
-            --description "PRDs proposed by the automated architecture-review workflow" \
+            --description "Proposals and defect findings from the automated architecture-review pass" \
             >/dev/null 2>&1 || true
+          # A defect is a bug and a deepening is an enhancement. This is the split
+          # that keeps a defect from arriving as a 250-line refactor PRD: the
+          # `bug` label routes it to someone who fixes bugs rather than into the
+          # deepening chain — and excludes it from the proposal-backlog cap above.
+          if [ "$status" = "finding" ]; then
+            LABELS=("$LABEL" bug)
+          else
+            LABELS=("$LABEL" enhancement)
+          fi
+          label_args=()
+          for label in "${LABELS[@]}"; do label_args+=(--label "$label"); done
           # gh issue create prints the URL on the last line.
           issue_url=$(gh issue create \
             --title "$title" \
             --body-file "$BODY_FILE" \
-            --label "$LABEL" | tail -n1)
+            "${label_args[@]}" | tail -n1)
           issue_number=$(basename "$issue_url")
           echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
@@ -176,14 +197,28 @@ jobs:
               echo ""
               echo "$summary"
               echo ""
+              echo "duplication \`$(jq -r '.duplicationBefore' "$OUTPUT_FILE")\` → \`$(jq -r '.duplicationAfter' "$OUTPUT_FILE")\` · deleted lines \`$(jq -r '.deletedLines' "$OUTPUT_FILE")\`"
+              echo ""
+              echo "### Candidates considered"
+              jq -r '.candidatesConsidered[] | "- \(.)"' "$OUTPUT_FILE"
+            elif [ "$status" = "finding" ]; then
+              issue_url="${{ steps.publish.outputs.issue_url }}"
+              title=$(jq -r '.title' "$OUTPUT_FILE")
+              summary=$(jq -r '.oneLineSummary' "$OUTPUT_FILE")
+              echo "**Defect filed as a bug:** [$title]($issue_url)"
+              echo ""
+              echo "$summary"
+              echo ""
+              echo "location \`$(jq -r '.location' "$OUTPUT_FILE")\`"
+              echo ""
               echo "### Candidates considered"
               jq -r '.candidatesConsidered[] | "- \(.)"' "$OUTPUT_FILE"
             elif [ "$status" = "skipped" ]; then
               reason=$(jq -r '.reason' "$OUTPUT_FILE")
-              echo "**Skipped — no fresh candidates today.**"
+              echo "**Skipped — no qualified candidate.** This is the expected outcome most days."
               echo ""
               echo "$reason"
             else
-              echo "**❌ Unexpected status \`$status\`** in the output file — expected \`proposed\` or \`skipped\`."
+              echo "**❌ Unexpected status \`$status\`** in the output file — expected \`proposed\`, \`finding\` or \`skipped\`."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
