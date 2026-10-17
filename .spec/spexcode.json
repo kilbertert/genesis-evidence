@@ -1,0 +1,10 @@
+{
+  "dashboard": {
+    "title": "Genesis Evidence"
+  },
+  "lint": {
+    "governedRoots": [
+      "src"
+    ]
+  }
+}
