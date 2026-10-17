@@ -6,6 +6,7 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
+from genesis_evidence.core.consistency import is_autonomous_reopenable, is_machine_actor
 from genesis_evidence.core.store import Database, ObjectStore, PaperStore, ReviewStore
 from genesis_evidence.core.store.review import (
     _augment_profile_population,
@@ -1231,6 +1232,42 @@ def test_ai_reopens_only_its_own_claim_rejection(tmp_path) -> None:
         }
     assert decisions[ai_claim] == ("approved", "ai:checker")
     assert decisions[human_claim] == ("rejected", "reviewer-1")
+
+
+def test_ai_does_not_reopen_a_source_adjudicated_claim_rejection(tmp_path) -> None:
+    """A `source-ai:` rejection is a machine's, and the machine still may not reopen it.
+
+    The distinction the six `startswith("ai:")` readers could not express. `source-ai:` is a
+    machine actor, but its rejection was verified against the paper's own full text on the
+    pass that wrote it — and the stored `source_based` resolution then short-circuits
+    `_source_adjudication` (`review/service.py:396`), so a later pass would flip the claim to
+    `approved` without re-verifying anything. `is_machine_actor` says who acted;
+    `is_autonomous_reopenable` says what may follow, and it excludes this prefix.
+
+    Both halves are asserted here because getting either wrong is a silent schema-shaped bug:
+    read `source-ai:` as a person and the audit lies about who decided (#311); read it as
+    freely reopenable and a machine silently overturns a machine.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(
+        claim_id,
+        reviewer="source-ai:old-policy",
+        review=ClaimReviewInput(decision="rejected"),
+    )
+
+    service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    with database.connect() as connection:
+        decision, reviewer = connection.execute(
+            "SELECT decision, reviewer FROM claim_reviews WHERE claim_id = ?", (claim_id,)
+        ).fetchone()
+    assert (decision, reviewer) == ("rejected", "source-ai:old-policy")
+    # …and the reader that decides it does classify the actor as a machine.
+    assert is_machine_actor(reviewer)
+    assert not is_autonomous_reopenable(reviewer)
 
 
 def test_ai_completes_review_and_card_without_human_participation(tmp_path) -> None:

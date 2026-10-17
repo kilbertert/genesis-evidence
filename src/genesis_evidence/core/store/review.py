@@ -27,7 +27,7 @@ from ...review.scope import (
 )
 from ..card_lifecycle import CARD_STATUSES, can_transition, is_patient_visible
 from ..components import pool_token
-from ..consistency import NEEDS_REVIEW, is_source_based
+from ..consistency import NEEDS_REVIEW, is_machine_actor, is_source_based
 from ..evidence_strength import (
     ACTION_THRESHOLD_STRENGTHS,
     CONTEXT_ONLY_STRENGTHS,
@@ -1871,7 +1871,7 @@ def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
     elif (
         item["title_abstract_decision"] == "included"
         and item["full_text_decision"] == "excluded"
-        and str(item["full_text_reviewer"] or "").startswith("ai:")
+        and is_machine_actor(item["full_text_reviewer"])
         and item["full_text_retrieval_status"] != "not_retrieved"
     ):
         eligible = design in item["eligible_study_designs"]

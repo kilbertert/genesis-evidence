@@ -10,7 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.card_lifecycle import AUTONOMOUS_REVIEW_PATH, can_transition, is_patient_visible
 from ..core.components import pooled_by_label
-from ..core.consistency import NEEDS_REVIEW, is_source_based
+from ..core.consistency import (
+    NEEDS_REVIEW,
+    automatic_actor_for_model,
+    is_autonomous_reopenable,
+    is_machine_actor,
+    is_source_based,
+    source_adjudicated_actor_for_model,
+)
 from ..core.evidence_strength import CardGrade, strength_for_score, strength_label
 from ..core.methodology import (
     RANDOMIZED_DESIGNS,
@@ -246,7 +253,7 @@ class EvidenceReviewService:
                 reason="paper has no stored full text for independent extraction",
                 trace={},
             )
-        actor = f"ai:{trace.get('check_model') or trace.get('model')}"
+        actor = automatic_actor_for_model(trace.get("check_model") or trace.get("model"))
         context = {
             "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
             "requested_by": requester,
@@ -262,19 +269,19 @@ class EvidenceReviewService:
         )
         has_new_included_screening = any(
             collection.get("full_text_decision") == "included"
-            and str(collection.get("full_text_reviewer") or "").startswith("ai:")
+            and is_machine_actor(collection.get("full_text_reviewer"))
             and str(collection.get("full_text_reviewed_at") or "")
             > str(admission.get("reviewed_at") or "")
             for collection in item["collections"]
         )
         reopened_screening_rejection = (
             admission.get("status") == "rejected"
-            and str(admission.get("reviewer") or "").startswith("ai:")
+            and is_machine_actor(admission.get("reviewer"))
             and (has_screening_reassessment or has_new_included_screening)
         )
-        if admission.get("status") == "rejected" and not str(
-            admission.get("reviewer") or ""
-        ).startswith("ai:"):
+        if admission.get("status") == "rejected" and not is_machine_actor(
+            admission.get("reviewer")
+        ):
             return self._automation_attention(
                 paper_id,
                 actor=actor,
@@ -533,13 +540,13 @@ class EvidenceReviewService:
                 continue
             ai_rejection_reopened = (
                 claim.get("status") == "rejected"
-                and str(claim.get("reviewer") or "").startswith("ai:")
+                and is_autonomous_reopenable(claim.get("reviewer"))
                 and (claim.get("review_suggestion") or {}).get("decision") == "approved"
             )
             ai_approval_recheck = (
                 claim.get("status") == "reviewed"
                 and claim.get("decision") == "approved"
-                and str(claim.get("reviewer") or "").startswith("ai:")
+                and is_autonomous_reopenable(claim.get("reviewer"))
                 and (claim.get("review_suggestion") or {}).get("decision") == "approved"
                 and _needs_extraction_risk_migration(claim)
             )
@@ -558,7 +565,9 @@ class EvidenceReviewService:
             if str(claim["id"]) in source_rejected_claim_ids:
                 self.review_claim(
                     str(claim["id"]),
-                    reviewer=f"source-ai:{trace.get('check_model') or trace.get('model')}",
+                    reviewer=source_adjudicated_actor_for_model(
+                        trace.get("check_model") or trace.get("model")
+                    ),
                     review=ClaimReviewInput(decision="rejected"),
                 )
                 reviewed_claims.append(str(claim["id"]))

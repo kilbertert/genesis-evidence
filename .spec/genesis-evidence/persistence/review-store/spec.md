@@ -28,5 +28,8 @@ related:
 - 至少一条 Claim，每条 Claim 在 Profile 中有对应 Result，`scope_key` 非空。
 - 上下文卡（`grade=low`）不得携带 `high`/`critical`/`uncertain` 的偏倚风险判定。
 - 论文被重新评估时，其已发布卡片转 `stale` 并从患者接口消失。
+- 筛选建议投影（`_collection_dict`）判断"全文排除是否为机器所为"时读
+  [[consistency]] 的 `is_machine_actor`，不复述 `startswith("ai:")`。
+  该列可以由 `literature/ingestion.py` 的 `ai:retrieval-worker` 写入，所以它确实会被机器写。
 - `_require_complete_topic` 是主题闭合检查：主题 locked、每个检索流有 completed run、无 running run、
   每条记录有筛选决定、纳入项有全文结果并完成抽取/准入/Claim 审核。

@@ -19,3 +19,8 @@ code:
 - 每个自动决定写 `policy_version`（当前 `literature-review-ai/1.5`）与 `requested_by`。
 - 自动路径与人工路径共用 [[review-store]] 的发布裁判，不各自实现。
 - 自动审核**不能**放宽任何一道闸门；它只能加快人类本会做的决定。
+- **自主环节只能翻掉自己未经核实的决定。** 两道 Claim 重开闸门（`ai_rejection_reopened`、
+  `ai_approval_recheck`）问的是 `is_autonomous_reopenable`，**不是** `is_machine_actor`：
+  `source-ai:` 是机器，但它的拒绝已对照全文核实，且 `source_based` 决议落库后
+  `_source_adjudication` 会被跳过——重开即等于"在没重新核实的那一趟里翻案"，因此必须被拒绝。
+  一条路径若把这两个谓词用反，表现为"第二趟自动审核静默改判"。见 [[consistency]]。
