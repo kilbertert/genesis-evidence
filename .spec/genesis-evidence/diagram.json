@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Genesis Evidence 顶层：一个证据体，两条生产线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    },
+    "repository": {
+      "url": "https://github.com/kilbertert/genesis-evidence",
+      "revision": "46051d45de0d21e562f44606ba532968ab1ad568"
+    },
+    "note": "纵向是依赖方向：上面两条生产线，中间持久化，底部是无依赖的判定内核。production 与 patient-path 之间刻意没有边——论文线与报告线只在已发布的证据体上相遇，不在编排层互相调用。kernel 被上面每一层直接调用，这里只画了 persistence 那条；其余三处是推断，不画成线以免与真实调用混淆。quality 不是代码，是断言：它约束另外四层做什么。"
+  },
+  "components": [
+    {
+      "id": "production",
+      "type": "backend",
+      "label": "production",
+      "sublabel": "论文证据生产线",
+      "sources": [
+        {
+          "path": ".spec/genesis-evidence/production/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/genesis_evidence/literature/ingestion.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        60,
+        60
+      ],
+      "size": [
+        190,
+        72
+      ]
+    },
+    {
+      "id": "patient-path",
+      "type": "frontend",
+      "label": "patient-path",
+      "sublabel": "报告解读生产线",
+      "sources": [
+        {
+          "path": ".spec/genesis-evidence/patient-path/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/genesis_evidence/portal/api.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        330,
+        60
+      ],
+      "size": [
+        190,
+        72
+      ]
+    },
+    {
+      "id": "quality",
+      "type": "cloud",
+      "label": "quality",
+      "sublabel": "闸门与度量",
+      "sources": [
+        {
+          "path": ".spec/genesis-evidence/quality/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/genesis_evidence/core/patient_copy.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        620,
+        230
+      ],
+      "size": [
+        190,
+        72
+      ]
+    },
+    {
+      "id": "persistence",
+      "type": "database",
+      "label": "persistence",
+      "sublabel": "事务与投影",
+      "sources": [
+        {
+          "path": ".spec/genesis-evidence/persistence/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/genesis_evidence/core/store/database.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        60,
+        230
+      ],
+      "size": [
+        460,
+        72
+      ]
+    },
+    {
+      "id": "kernel",
+      "type": "security",
+      "label": "kernel",
+      "sublabel": "确定性判定，无依赖",
+      "sources": [
+        {
+          "path": ".spec/genesis-evidence/kernel/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/genesis_evidence/core/matching.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        195,
+        380
+      ],
+      "size": [
+        190,
+        72
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "production",
+      "to": "persistence",
+      "label": "状态迁移",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "patient-path",
+      "to": "persistence",
+      "label": "已发布卡片",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "persistence",
+      "to": "kernel",
+      "label": "SQL 谓词",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        290,
+        320
+      ]
+    },
+    {
+      "from": "quality",
+      "to": "persistence",
+      "label": "发布裁判",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两条线共用什么",
+      "items": [
+        "已发布的 knowledge_cards",
+        "同一个 kernel 判定",
+        "同一个发布裁判"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "刻意没有画",
+      "items": [
+        "production ↔ patient-path 直接调用",
+        "上面每层 → kernel 的三条边",
+        "商品能力（已移出本仓库）"
+      ]
+    }
+  ]
+}

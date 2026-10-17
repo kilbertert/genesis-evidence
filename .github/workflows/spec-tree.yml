@@ -1,0 +1,31 @@
+name: spec-tree
+
+# The `.spec/` tree is project source, and its drift rule is computed from git
+# history on every read — so this job must check out the FULL history. With the
+# default shallow checkout (<fetch-depth: 0) the tool cannot see the commits
+# that moved the code, and the check silently passes everything.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: spec-tree lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm i -g spexcode@0.7.0
+      - run: spex spec lint
