@@ -36,3 +36,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsx .sandcastle/profile-network.check.ts
+
+      # The architecture-review pass's publication gate. The pass published 19
+      # proposals in seven weeks at a cost of +27% source and +73% test lines,
+      # and a pass that cannot say `skipped` will always find a noun to propose —
+      # so the gate that requires it is checked, not reviewed.
+      - run: npx tsx .sandcastle/architecture-review/output.check.ts
