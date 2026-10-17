@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import pytest
 
@@ -1382,3 +1383,26 @@ def test_an_unchecked_paper_cannot_become_durable_evidence(tmp_path) -> None:
 
     assert admits_paper("unknown") is False
     assert admits_paper("clear") is True
+
+
+def test_worker_main_does_not_borrow_the_workbench_reviewer_identity(monkeypatch) -> None:
+    """The ingestion path must not record a person's name on its own decisions.
+
+    `GENESIS_EVIDENCE_REVIEWER_ID` is the *workbench's* authenticated reviewer. The
+    worker used to read it and pass it as `requested_by`, so every autonomous decision
+    carried `ranlei` — a name that never requested any of them. ADR 0012 decision 6
+    splits the two: a person's name appears only where a person acted.
+
+    `main` is not run here (it would poll forever); the assertion is over the module
+    constant it now uses, plus the absence of the env read that produced the mix-up.
+    """
+
+    from genesis_evidence.literature import extraction_worker
+
+    assert extraction_worker.WORKER_IDENTITY == "ai:extraction-worker"
+    # `main` must not READ the workbench's reviewer variable. Checking for the mere
+    # string would fail on the comment that explains why it is gone, so the check is on
+    # an actual `os.getenv` call.
+    source = Path(extraction_worker.__file__).read_text(encoding="utf-8")
+    main_body = source.split("def main() -> None:")[1]
+    assert 'getenv("GENESIS_EVIDENCE_REVIEWER_ID"' not in main_body

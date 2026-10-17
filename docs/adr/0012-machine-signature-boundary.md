@@ -305,11 +305,22 @@ cap is the control.**
    distinguish the two for the ingestion path — the exact question the audit
    exists to answer.
 
-   **Execution status: not started.** As of 2026-10-15 the deployed
-   `var/review.env` still carries `GENESIS_EVIDENCE_REVIEWER_ID=ranlei`, and the
-   three call sites are unchanged: `review/api.py` (twice) and
-   `literature/extraction_worker.py` (the ingestion path this decision names).
-   The decision is recorded; the split is owed and is not claimed as done.
+   **Execution status: the ingestion path is split; the workbench path is not, and
+   should not be.** As of 2026-10-18:
+
+   - `literature/extraction_worker.py` no longer reads
+     `GENESIS_EVIDENCE_REVIEWER_ID`. It records `WORKER_IDENTITY`
+     (`ai:extraction-worker`) as both actor and `requested_by`, which is what the
+     audit should show for a decision no person requested.
+   - `review/api.py` still passes the authenticated reviewer as `requested_by`, and
+     that is correct: a person **did** press the button. The rule this decision
+     states is "a person's name appears only where a person acted", not "the
+     workbench must not name anyone". Changing it would erase the one record that
+     says a human asked for that run.
+
+   So the variable still means "the workbench's reviewer", which is its only
+   remaining caller. What is gone is the second, unrelated meaning it had picked up:
+   the pipeline's own authorisation identity.
 
 ## Alternatives Considered
 

@@ -204,6 +204,13 @@ class LiteratureExtractionWorker:
         return consistency
 
 
+#: The actor and `requested_by` this worker records. `ai:`-prefixed because the decision
+#: is the pipeline's, not a person's (ADR 0012 decision 6). The default on
+#: `LiteratureExtractionWorker` already says this; naming it once here keeps the two from
+#: drifting and makes the identity greppable.
+WORKER_IDENTITY = "ai:extraction-worker"
+
+
 def main() -> None:
     analyzer = ArkPaperAnalyzer.from_env()
     if not analyzer.api_key_configured:
@@ -216,12 +223,11 @@ def main() -> None:
     database.initialize()
     store = PaperStore(database)
     objects = ObjectStore(os.getenv("GENESIS_EVIDENCE_OBJECTS", "var/objects"))
-    reviewer_id = os.getenv("GENESIS_EVIDENCE_REVIEWER_ID", "").strip()
-    if not reviewer_id:
-        raise SystemExit(
-            "GENESIS_EVIDENCE_REVIEWER_ID is not configured; "
-            "the extraction worker cannot audit autonomous review requests"
-        )
+    # The worker does not borrow a person's name. `GENESIS_EVIDENCE_REVIEWER_ID` is the
+    # *workbench's* authenticated reviewer; reusing it here wrote `ranlei` into
+    # `requested_by` on decisions no person requested, which is the confusion ADR 0012
+    # decision 6 exists to end. The worker's own identity is what the audit should show.
+    reviewer_id = WORKER_IDENTITY
     topic_id = os.getenv("GENESIS_EVIDENCE_ACTIVE_TOPIC_ID") or None
     worker = LiteratureExtractionWorker(
         store=store,
