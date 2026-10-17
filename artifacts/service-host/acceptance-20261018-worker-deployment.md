@@ -97,3 +97,40 @@ worker 处于 `active`、`NRestarts` 稳定、journal 无新错误；生产库�
   与旧模型可比。本次只证明它可用。
 - `nutrition-ckd-risk` 的 1 篇待取全文不在本次单主题限定内。
 - ADR 0012 决策 6（身份拆分）仍未执行。
+
+## 七、第二次生产疏漏：停服务后忘记启回（2026-10-18 05:53–06:16，约 22 分钟）
+
+**做了什么**：为取"服务停止状态下的干净快照"，执行了
+`systemctl stop genesis-evidence-review genesis-evidence-portal`。
+快照取完后，我**只启动了 `genesis-evidence-worker`**，忘了把这两个启回来。
+
+**实际中断**：`05:53:42` 停，`06:16` 左右发现并启回，**约 22 分钟**。
+两个 unit 都是 `enabled`，但 `enabled` 只保证开机自启，不保证 `stop` 之后会自己回来。
+
+**影响面**：
+
+| 服务 | 端口 | 中断期间的影响 |
+| --- | --- | --- |
+| `genesis-evidence-portal` | 127.0.0.1:10005 | health-flow 在用户确认指标后调用它；那 22 分钟内无该调用，`health-flow` 日志无相关错误 |
+| `genesis-evidence-review` | 127.0.0.1:10006 | 内部工作台，只绑环回，无外部用户 |
+
+**没有造成数据损失**：worker 全程在跑，数据库未被并发写坏。
+
+**纪律**：停止一个服务就欠一次启动。取备份这类"短暂停止"应当：
+
+1. 在同一个命令块里 `stop` → 快照 → `start`，让二者不可分离；或
+2. 用 `systemctl try-restart` 之类**自带恢复**的形态；或
+3. 至少在停之前记下**哪些 unit 处于 active**，启回时逐个核对。
+
+**本次采用的是第 3 种意识但没执行**：我停之前知道停了两个，启回时只记住了新装的 worker。
+`enabled` 的状态会让人误以为"它自己会起来"——它不会，`stop` 是持久的。
+
+**检查方法**（在任何"短暂停服"之后）：
+
+```
+systemctl is-active genesis-evidence-portal genesis-evidence-review genesis-evidence-worker
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:10005/health
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:10006/health
+```
+
+三行都 `active` / `200` 才算恢复。
