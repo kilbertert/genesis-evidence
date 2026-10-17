@@ -2923,3 +2923,168 @@ def test_two_component_cards_at_one_scope_do_not_retire_each_other(tmp_path) -> 
     assert statuses[soybean] == "published", (
         "a second component is a second body, so both stay published"
     )
+
+
+def _paper_without_extraction(database: Database) -> str:
+    """A paper record with no extraction, no claims, and no admission -- only identity."""
+
+    paper_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            """INSERT INTO papers(id, title, created_at) VALUES (?, 'Sodium and bone',
+                   '2026-08-11T00:00:00Z')""",
+            (paper_id,),
+        )
+        connection.execute(
+            "INSERT INTO paper_admissions(paper_id, status) VALUES (?, 'pending')",
+            (paper_id,),
+        )
+    return paper_id
+
+
+def _topic_without_decision(database: Database, paper_id: str) -> tuple[str, str]:
+    """A locked topic whose paper has neither a title/abstract decision nor a full text.
+
+    The state the deadlock was found in: the paper is in the ledger, nothing has been
+    decided about it, and full-text retrieval has not run. `_complete_topic` cannot build
+    this, because it screens and retrieves as it goes.
+    """
+
+    store = PaperStore(database)
+    topic_id = store.create_topic(
+        code=f"electrolytes-{uuid.uuid4()}",
+        version="1",
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        review_question="Do electrolytes affect bone health?",
+        picots={
+            "population": "Adults",
+            "intervention_or_exposure": "Dietary sodium",
+            "comparator": "Usual intake",
+            "outcomes": "Bone health",
+            "timing": "Baseline",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("randomized_controlled_trial",),
+        inclusion_criteria=("Adults reporting dietary sodium",),
+        exclusion_reasons=("wrong_population", "ineligible_study_design", "wrong_outcome"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    store.lock_topic(topic_id, reviewer="reviewer-1")
+    run_id = store.start_collection(topic_id=topic_id, source="test", query="sodium bone")
+    store.add_to_collection(run_id, paper_id, position=1)
+    store.finish_collection(run_id, status="completed", detail={})
+    return topic_id, run_id
+
+
+def test_screening_suggestion_never_targets_a_paper_without_a_full_text(tmp_path) -> None:
+    """`full_text_retrieval_status = 'pending'` must not yield a full-text suggestion.
+
+    `screen_collection_paper` refuses a full-text decision without a stored full text, so a
+    suggestion there can only raise. It used to be produced, which made the autonomous
+    path crash on exactly the papers it was meant to unblock.
+    """
+
+    database, _ = _service(tmp_path)
+    paper_id, _ = _review_case(database, screened=False)
+    _topic_without_decision(database, paper_id)
+    store = ReviewStore(database)
+
+    paper_store = PaperStore(database)
+    # Title/abstract screening is allowed and is the only thing on offer.
+    suggestion = store.get_review_item(paper_id)["collections"][-1]["screening_suggestion"]
+    assert suggestion["stage"] == "title_abstract"
+
+    paper_store.screen_collection_paper(
+        _run_id_for(database, paper_id),
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    # Now included, but `pending`: no full text, so no full-text suggestion.
+    item = store.get_review_item(paper_id)
+    collection = next(
+        c for c in item["collections"] if c["full_text_retrieval_status"] == "pending"
+    )
+    assert collection["screening_suggestion"] is None
+
+
+def test_full_text_suggestion_requires_a_known_study_design(tmp_path) -> None:
+    """A paper with no extraction must not be excluded for its absent study design.
+
+    The design comes from the extraction. With no extraction it reads `"uncertain"`, which
+    is never in a topic's eligible designs -- so suggesting a decision would exclude a good
+    paper for a fact that has not been gathered yet.
+
+    The paper is built with **no extraction at all**: `_review_case` always writes one, and
+    a populated extraction is exactly the case this test must not exercise.
+    """
+
+    database, _ = _service(tmp_path)
+    paper_id = _paper_without_extraction(database)
+    _topic_without_decision(database, paper_id)
+    store = PaperStore(database)
+    run_id = _run_id_for(database, paper_id)
+
+    store.screen_collection_paper(
+        run_id,
+        paper_id,
+        stage="title_abstract",
+        decision="included",
+        exclusion_reason=None,
+        reviewer="reviewer-1",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """INSERT INTO full_texts(paper_id, object_key, sha256, media_type,
+                   rights_status, processed_at)
+               VALUES (?, 'test/x.xml', ?, 'application/xml', 'redistributable',
+                       '2026-08-11T00:00:00Z')""",
+            (paper_id, "0" * 64),
+        )
+        connection.execute(
+            "UPDATE collection_papers SET full_text_retrieval_status = 'retrieved' "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        )
+
+    item = ReviewStore(database).get_review_item(paper_id)
+    collection = next(
+        c for c in item["collections"] if c["full_text_retrieval_status"] == "retrieved"
+    )
+    assert collection["screening_suggestion"] is None
+
+
+def test_autonomous_review_screens_a_paper_that_has_no_full_text(tmp_path) -> None:
+    """The deadlock, end to end: a paper with no full text must still get screened.
+
+    Without this, screening waits for retrieval (`list_pending_full_texts` selects on
+    `title_abstract_decision = 'included'`) and retrieval waits for screening. The paper
+    sits in that loop forever, which is what `nutrition-electrolytes` did.
+    """
+
+    database, service = _service(tmp_path)
+    # No extraction: that is the state whose screening had no entry point at all.
+    paper_id = _paper_without_extraction(database)
+    _topic_without_decision(database, paper_id)
+    assert service.papers_store is not None
+
+    service.auto_review_paper(paper_id, requested_by="test")
+
+    item = ReviewStore(database).get_review_item(paper_id)
+    collection = next(c for c in item["collections"] if c["title_abstract_decision"])
+    assert collection["title_abstract_decision"] == "included"
+    assert collection["title_abstract_reviewer"] == "ai:screening-ledger"
+
+
+def _run_id_for(database: Database, paper_id: str) -> str:
+    with database.connect() as connection:
+        return str(
+            connection.execute(
+                "SELECT run_id FROM collection_papers WHERE paper_id = ? LIMIT 1",
+                (paper_id,),
+            ).fetchone()["run_id"]
+        )
