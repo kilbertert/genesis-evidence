@@ -332,6 +332,12 @@ AI 自动执行与人工覆盖产出的都是带 actor 的审计记录，事后�
 **改自动化审核行为** → `review/service.py`，并提升 `AUTONOMOUS_REVIEW_POLICY_VERSION`，
 否则审计无法区分新旧策略下的决定。
 
+**改任何被 `.spec/` 锚定的行为** → `.spec/` 是意图侧的真值：每个节点是一份 `spec.md`，
+frontmatter 的 `code:` 指向它治理的文件或具名单元。改了锚定单元而没动对应 spec，
+`spex spec lint` 会指出是哪个 commit 越的线。真的只是机制变化（契约仍成立）时，
+用 `git commit --trailer "Spec-OK: <node>"` 记录理由，而不是让 spec 与代码各自漂移。
+CI 的 `spec-tree` 作业跑这条检查，**必须全量历史**——浅克隆下它看不见漂移，会静默通过。
+
 ---
 
 ## 9. 开发
