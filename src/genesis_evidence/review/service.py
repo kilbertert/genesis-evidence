@@ -176,6 +176,29 @@ class EvidenceReviewService:
             return result
         trace = item.get("extraction_trace") or {}
         if not trace:
+            # Screen FIRST, before anything decides this paper is stuck. A paper with no
+            # stored full text never reaches the extraction stage, so screening that only
+            # happens after an extraction trace exists could never run for it -- and since
+            # full-text retrieval selects on `title_abstract_decision = 'included'`, a paper
+            # that is never screened is also never retrieved. Screening and retrieval would
+            # each wait for the other forever.
+            # `ai:screening-ledger`, not a model actor: a title/abstract suggestion is
+            # derived deterministically from the collection record, so no model produced
+            # this decision and naming one would put a false actor in the audit trail.
+            screening_attention = self._apply_screening_suggestions(
+                paper_id,
+                actor="ai:screening-ledger",
+                requester=requester,
+                trace={},
+                context={
+                    "policy_version": AUTONOMOUS_REVIEW_POLICY_VERSION,
+                    "requested_by": requester,
+                },
+            )
+            if screening_attention is not None:
+                return screening_attention
+            item = self.store.get_review_item(paper_id)
+            assert item is not None
             guidance = item.get("review_guidance") or {}
             if guidance.get("terminal_decision") == "not_retrieved":
                 actor = "ai:retrieval-ledger"
@@ -291,54 +314,11 @@ class EvidenceReviewService:
                 trace=trace,
             )
 
-        screening_actions: list[dict[str, object]] = []
-        while True:
-            item = self.store.get_review_item(paper_id)
-            assert item is not None
-            suggestion = next(
-                (
-                    (collection, collection.get("screening_suggestion") or {})
-                    for collection in item["collections"]
-                    if (collection.get("screening_suggestion") or {}).get("stage")
-                ),
-                None,
-            )
-            if suggestion is None:
-                break
-            collection, decision = suggestion
-            if decision.get("decision") not in {"included", "excluded"}:
-                return self._automation_attention(
-                    paper_id,
-                    actor=actor,
-                    requested_by=requester,
-                    stage="screening",
-                    reason=str(decision.get("reason") or "screening decision is ambiguous"),
-                    trace=trace,
-                )
-            self.papers_store.screen_collection_paper(
-                str(collection["run_id"]),
-                paper_id,
-                stage=str(decision["stage"]),
-                decision=str(decision["decision"]),
-                exclusion_reason=decision.get("primary_exclusion_reason"),
-                reviewer=actor,
-            )
-            screening_actions.append(
-                {
-                    "topic_id": collection["topic_id"],
-                    "run_id": collection["run_id"],
-                    "stage": decision["stage"],
-                    "decision": decision["decision"],
-                    "primary_exclusion_reason": decision.get("primary_exclusion_reason"),
-                }
-            )
-        self.store.record_event(
-            "paper",
-            paper_id,
-            "autonomous_screening_completed",
-            actor=actor,
-            detail={**context, "decisions": screening_actions},
+        screening_attention = self._apply_screening_suggestions(
+            paper_id, actor=actor, requester=requester, trace=trace, context=context
         )
+        if screening_attention is not None:
+            return screening_attention
 
         item = self.store.get_review_item(paper_id)
         assert item is not None
@@ -840,6 +820,78 @@ class EvidenceReviewService:
             "verified_issue_count": len(issues),
             "rejected_claim_ids": sorted(rejected_claim_ids),
         }
+
+    def _apply_screening_suggestions(
+        self,
+        paper_id: str,
+        *,
+        actor: str,
+        requester: str,
+        trace: dict[str, object],
+        context: dict[str, object],
+    ) -> dict[str, object] | None:
+        """Consume every pending screening suggestion, or report why one is unusable.
+
+        Extracted because the loop has **two** entry points, and the second one is the
+        reason it exists: a paper with no stored full text never reaches the extraction
+        stage, so a reviewer that only screened *after* an extraction trace existed could
+        never screen it. That is a lock, not a delay -- `list_pending_full_texts` selects
+        on `title_abstract_decision = 'included'`, so a paper that is never screened is
+        also never retrieved, and therefore never extracted.
+
+        Returns an `attention` result when a suggestion exists but cannot be applied, and
+        `None` when the ledger is as screened as its suggestions allow.
+        """
+
+        screening_actions: list[dict[str, object]] = []
+        while True:
+            item = self.store.get_review_item(paper_id)
+            assert item is not None
+            suggestion = next(
+                (
+                    (collection, collection.get("screening_suggestion") or {})
+                    for collection in item["collections"]
+                    if (collection.get("screening_suggestion") or {}).get("stage")
+                ),
+                None,
+            )
+            if suggestion is None:
+                break
+            collection, decision = suggestion
+            if decision.get("decision") not in {"included", "excluded"}:
+                return self._automation_attention(
+                    paper_id,
+                    actor=actor,
+                    requested_by=requester,
+                    stage="screening",
+                    reason=str(decision.get("reason") or "screening decision is ambiguous"),
+                    trace=trace,
+                )
+            self.papers_store.screen_collection_paper(
+                str(collection["run_id"]),
+                paper_id,
+                stage=str(decision["stage"]),
+                decision=str(decision["decision"]),
+                exclusion_reason=decision.get("primary_exclusion_reason"),
+                reviewer=actor,
+            )
+            screening_actions.append(
+                {
+                    "topic_id": collection["topic_id"],
+                    "run_id": collection["run_id"],
+                    "stage": decision["stage"],
+                    "decision": decision["decision"],
+                    "primary_exclusion_reason": decision.get("primary_exclusion_reason"),
+                }
+            )
+        self.store.record_event(
+            "paper",
+            paper_id,
+            "autonomous_screening_completed",
+            actor=actor,
+            detail={**context, "decisions": screening_actions},
+        )
+        return None
 
     def _automation_attention(
         self,

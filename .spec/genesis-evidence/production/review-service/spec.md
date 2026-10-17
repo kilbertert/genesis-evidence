@@ -24,3 +24,11 @@ code:
   `source-ai:` 是机器，但它的拒绝已对照全文核实，且 `source_based` 决议落库后
   `_source_adjudication` 会被跳过——重开即等于"在没重新核实的那一趟里翻案"，因此必须被拒绝。
   一条路径若把这两个谓词用反，表现为"第二趟自动审核静默改判"。见 [[consistency]]。
+- **筛查先于“判定卡住”。** 没有全文的论文走不到抽取阶段，而筛查循环原先只在抽取
+  产生 trace 之后才可达——于是“无全文 → 不筛查 → 不检索 → 无全文”互相等待。
+  现在 `if not trace` 分支在返回 `attention_required` **之前**先消费筛查建议，
+  且这条路径的 actor 是 `ai:screening-ledger`（题录建议由采集记录确定性派生，没有模型参与）。
+  见 [[review-store]] 与 ADR 0015。
+- **不产出过不了自己前提的建议。** 全文裁决建议要求 `full_text_retrieval_status == 'retrieved'`
+  （否则 store 必拒）且研究设计已知（`design != 'uncertain'`）。用尚未测量的设计去排除一篇论文，
+  是拿缺失数据下科学结论——比保持台账打开更糟。

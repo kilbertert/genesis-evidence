@@ -1832,9 +1832,22 @@ def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
         }
     elif (
         item["title_abstract_decision"] == "included"
-        and item["full_text_retrieval_status"] != "not_retrieved"
+        and item["full_text_retrieval_status"] == "retrieved"
         and not item["full_text_decision"]
+        # A full-text decision needs a study design, and the only source of one is the
+        # extraction. Without it `design` is `"uncertain"`, which is never in the topic's
+        # eligible designs -- so the branch below would exclude a perfectly good paper
+        # *because the extraction that would have justified including it has not run*.
+        # Skipping the suggestion leaves the paper at full-text retrieval, which is the
+        # true state: the full text is in hand and the design is not yet known.
+        and design != "uncertain"
     ):
+        # `retrieved`, not merely "not `not_retrieved`": `pending` means the full text has
+        # not arrived yet, and `screen_collection_paper` refuses a full-text decision
+        # without one. Suggesting one there produced a suggestion that could only fail --
+        # and because screening gates retrieval (`list_pending_full_texts` selects on
+        # `title_abstract_decision = 'included'`), a paper stuck at `pending` could never
+        # be screened, never be retrieved, and never be extracted.
         eligible = design in item["eligible_study_designs"]
         wrong_design = next(
             (code for code in item["exclusion_reasons"] if "design" in code.casefold()),

@@ -33,3 +33,8 @@ related:
   该列可以由 `literature/ingestion.py` 的 `ai:retrieval-worker` 写入，所以它确实会被机器写。
 - `_require_complete_topic` 是主题闭合检查：主题 locked、每个检索流有 completed run、无 running run、
   每条记录有筛选决定、纳入项有全文结果并完成抽取/准入/Claim 审核。
+- 筛选建议投影只在**决定可被接受**时给出决定：全文裁决建议要求
+  `full_text_retrieval_status == 'retrieved'` 且研究设计已知（`design != 'uncertain'`）。
+  理由：`screen_collection_paper` 拒绝无全文的全文裁决，而设计只在抽取之后才知道——
+  对"还在等全文"或"尚未抽取"的论文给出裁决建议，要么当场抛错，要么**用缺失的设计
+  把论文排除**（`ineligible_study_design`）。后者是拿缺失数据下科学结论。见 ADR 0015。
