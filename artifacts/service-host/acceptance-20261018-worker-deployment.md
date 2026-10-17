@@ -134,3 +134,52 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:10006/health
 ```
 
 三行都 `active` / `200` 才算恢复。
+
+## 八、第三次生产疏漏（最严重）：部署了不含修复的构建，并据此宣布验收
+
+**事实**：我把"第 1 项完成"报告给操作者时，生产上跑的是 **`57cbf81` 构建**，
+而 ADR 0015 的修复（#314）是在那之后合并的（`4b88173`）。
+`git merge-base --is-ancestor 4b88173 57cbf81` → **NO**。
+
+**为什么没被发现**：那 7 篇抽取确实全部成功，所以我以为修复生效了。但——
+
+| 论文 | 有全文？ | 走哪条路径 | 依赖 #314？ |
+| --- | --- | --- | --- |
+| 7 篇 `retrieved` | 是 | 抽取→一致性→审核 | **否** |
+| `4de1e17d` | 否 | 需要"无全文也筛查" | **是** |
+
+**7 篇的成功不能证明修复有效**，因为它们走的是抽取路径。真正的检验点是那篇
+没有全文的论文——而它当时解不开，我把它当成了"这个主题的正常结果"。
+
+**我是怎么发现的**：做第 2 项时对 `4de1e17d` 调 `auto_review`，`ta` 没有变化。
+在副本上直接检查安装包，得到 `hasattr(EvidenceReviewService, '_apply_screening_suggestions')` → **False**。宿主上的包根本没有这个函数。
+
+**修复过程**（两次才成）：
+
+1. 重新 `uv build`，核对 wheel 内含 `_apply_screening_suggestions` / `classify_issue_priorities` / `design != "uncertain"` → 全 True。
+2. **第一次装错**：`pip install` 读的是 `/opt/genesis-evidence/artifacts/` 里的**旧文件**，
+   新轮子还在开发机上没传。装完复核仍是 `helper: False`。
+3. **第二次**：先把新轮子 `dev-host write` 到 artifacts 并核对 sha256（`986f16e2…`），再装 → `helper: True`。
+4. **但 `review` 服务进程仍是 06:13:52 启动的旧进程**，装的包不会改变已加载的代码。
+   重启 `genesis-evidence-review` 后，对 `4de1e17d` 调 `auto-review`：`ta: None → included`。
+
+**三个独立的验证缺口，每一个都足以让结论错**：
+
+1. 没核对**构建来源修订**是否包含待验收的提交；
+2. 没核对**装进去的确实是新构建**（`pip` 读的是 artifacts 里的旧文件）；
+3. 没核对**服务进程已重启**（装包 ≠ 换掉正在跑的代码）。
+
+### 纪律
+
+部署后宣布任何验收结论之前，必须逐条回答：
+
+```
+1. 这个 wheel 是从哪个 commit 构建的？ 在它里面有那个修复吗？
+   git merge-base --is-ancestor <fix-commit> <build-commit>
+2. artifacts 里那个文件的 sha256 == 我构建的那个吗？
+3. 装完之后，已安装包里有修复的符号吗？   （import + hasattr，不是"pip 说成功"）
+4. 运行这个功能的进程，其 ActiveEnterTimestamp 晚于我装包的时间吗？
+```
+
+第 4 条尤其容易漏：**装包只改变磁盘上的文件，不改变已经加载到内存的代码。**
+本次三个服务里只有 worker 被重启过，而真正执行 `auto_review` 的是 `review` 服务。
