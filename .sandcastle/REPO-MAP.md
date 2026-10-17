@@ -51,7 +51,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 28 markdown file(s)
+- docs/ — 29 markdown file(s)
 - docs/adr/ — 12 markdown file(s)
 - docs/agents/ — 5 markdown file(s)
 
@@ -114,7 +114,7 @@ docs/
   evidence-coverage-2026-10-06.md
   evidence-coverage-baseline-2026-10-07.md
   evidence-governance-standards.md
-  ... (4 more)
+  ... (5 more)
 evals/
   README.md
   report-gold.synthetic.jsonl
