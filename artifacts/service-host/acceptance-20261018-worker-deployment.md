@@ -2,7 +2,7 @@
 
 **主机**：36（移动云服务宿主）
 **范围**：ADR 0015 的修复在生产上生效；抽取 worker 首次以 systemd unit 部署
-**含**：一次我造成的生产写入事故、它的恢复、以及恢复路径的缺陷
+**含**：一次我造成的生产写入事故、它的恢复，以及一条被我先前**夸大成缺陷**的运维纪律问题
 
 ## 一、部署产物
 
@@ -56,9 +56,19 @@
 cards 52 / topic ta 0` 全部等于基线 → 单独回收残留的 `running` job（它是
 `started_at` 被改过、但 `model`/`run_id`/输出全空的空壳，改回 `queued`）。
 
-**恢复路径的缺陷**：`recover_running_extraction_jobs` 只在进程**正常启动**时运行；
-被 `SIGKILL` 的进程不会触发它。`systemd` 的 `Restart=on-failure` 能救这种情况，
-但手工 `timeout` 杀掉的不在 systemd 视野里。这是一条应该在运维脚本里显式处理的路径。
+**恢复路径：这是运维纪律问题，不是产品缺陷（更正）。**
+
+我先前写的是"恢复路径的缺陷"。核实后这个说法不成立：
+
+- `recover_running_extraction_jobs` 在 worker **启动时**运行一次，配合
+  `Restart=on-failure` + `KillMode=control-group`，systemd 杀掉整个 cgroup 并重启，
+  重启时把中断作业标为 `failed`/`WorkerInterrupted`。**通过 systemd 的停止、崩溃、
+  重启，恢复路径是完整的。**
+- 我那次用的是**手工 `timeout` 杀进程**，绕过了 systemd，所以没有恢复发生。
+
+也就是说：出问题的不是恢复机制，而是**绕开服务管理器去跑生产进程**这个动作本身。
+正确做法是经由 `systemctl` 操作；需要临时测试就在副本上做。把它记成产品缺陷会误导
+下一个读者去改一段本来就正确的代码。
 
 ## 四、正式部署（按契约重做）
 
