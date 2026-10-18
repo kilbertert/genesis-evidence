@@ -93,6 +93,34 @@ screening ran without an extraction:
    proceeds with whatever evidence it does have, and a topic with no included evidence
    correctly refuses to build profiles.
 
+## The third gap: a fix with no driver
+
+Making screening *possible* without a full text (decision 1) did not make it *happen*.
+Measured on 2026-10-18, every entry point drove `auto_review_paper` for a different
+population, and none of them covered a paper that had never been screened:
+
+| Driver | Which papers it reaches |
+| --- | --- |
+| `literature/extraction_worker.py` | papers with a `queued` job |
+| `review/api.py` | a paper a person clicks on |
+| `scripts/rebuild_evidence_bodies.py` | papers already admitted |
+
+An unscreened paper has none of those: it has no job (jobs are created after a full text
+arrives), nobody is clicking it, and it is not admitted. Four papers — three in
+`nutrition-electrolytes`, one in `nutrition-ckd-risk` — sat in exactly that state and were
+closed only by hand.
+
+**Decision 8: the backlog drives screening, and does it before retrieval.**
+`PaperStore.list_unscreened_papers` is the dual of `list_pending_full_texts` — one selects
+`title_abstract_decision IS NULL`, the other `'included'` — and `literature/backlog.py`
+consumes the first, then the second. The order is not a preference: retrieval selects on
+`'included'`, so screening it has not done cannot be reached by retrieving afterwards.
+
+The backlog rather than the worker, because the backlog already owns the other
+"make the queue make progress" operations (`supersede_excluded_extraction_failures`,
+`restore_screening_excluded_extractions`, retrying failed jobs) and adding to it introduces
+no new long-running process.
+
 ## Alternatives Considered
 
 **Have a person screen the ten papers through the workbench.** This is the strongest

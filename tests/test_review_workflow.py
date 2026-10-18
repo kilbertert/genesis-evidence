@@ -3088,3 +3088,88 @@ def _run_id_for(database: Database, paper_id: str) -> str:
                 (paper_id,),
             ).fetchone()["run_id"]
         )
+
+
+def test_unscreened_papers_are_listed_and_decided_ones_are_not(tmp_path) -> None:
+    """The backlog's driver must select only papers that have no decision yet.
+
+    `list_pending_full_texts` selects `'included'`, so an undecided paper is invisible to
+    retrieval. This query is what makes it visible — and it must not re-offer a paper that
+    was already excluded, because screening is immutable once a profile uses the paper and
+    re-deciding one would be a silent reversal.
+    """
+
+    database, _ = _service(tmp_path)
+    left, _ = _review_case(database, screened=False)
+    _topic_without_decision(database, left)
+    store = PaperStore(database)
+
+    assert left in store.list_unscreened_papers()
+    run_id = _run_id_for(database, left)
+    store.screen_collection_paper(
+        run_id,
+        left,
+        stage="title_abstract",
+        decision="excluded",
+        exclusion_reason="wrong_population",
+        reviewer="reviewer-1",
+    )
+    assert left not in store.list_unscreened_papers()
+
+
+def test_unscreened_query_ignores_a_run_that_is_still_open(tmp_path) -> None:
+    """A paper in an unfinished run is not ready to be screened or fetched.
+
+    Same rule screening itself enforces: a run still collecting can change what the paper
+    is being screened against, so deciding now would decide against the wrong criteria.
+    """
+
+    database, _ = _service(tmp_path)
+    paper_id, _ = _review_case(database, screened=False)
+    topic_id, run_id = _topic_without_decision(database, paper_id)
+    store = PaperStore(database)
+
+    assert paper_id in store.list_unscreened_papers()
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE collection_runs SET status = 'running' WHERE id = ?", (run_id,)
+        )
+    assert paper_id not in store.list_unscreened_papers()
+
+
+def test_backlog_screens_an_undecided_paper_before_retrieving(tmp_path, monkeypatch) -> None:
+    """End to end: the backlog entry point must leave the paper `included`.
+
+    Without this step the paper is invisible to retrieval (which selects `'included'`) and
+    to the extraction worker (which claims `queued` jobs an undecided paper does not have).
+    It sat in exactly that state in production until it was screened by hand.
+    """
+
+    from genesis_evidence.literature import backlog
+
+    database, _ = _service(tmp_path)
+    # No extraction: that is the state the backlog driver exists for. A paper WITH an
+    # extraction reaches the screening loop through the review service's normal path
+    # (`ai:checker`), which is not the gap.
+    paper_id = _paper_without_extraction(database)
+    _topic_without_decision(database, paper_id)
+    monkeypatch.setenv("GENESIS_EVIDENCE_DATABASE", str(tmp_path / "evidence.sqlite3"))
+    monkeypatch.setenv("GENESIS_EVIDENCE_OBJECTS", str(tmp_path / "objects"))
+
+    # The retrieval half needs the network; the assertion is about screening, which runs
+    # first and is what this change adds.
+    def stop_before_network(*_args, **_kwargs):
+        raise AssertionError("retrieval should not be reached for a topic with no pending paper")
+
+    monkeypatch.setattr(backlog, "LiteratureIngestionService", stop_before_network)
+    monkeypatch.setattr(backlog, "HttpClient", stop_before_network)
+    with pytest.raises(AssertionError):
+        backlog.main()
+
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT title_abstract_decision, title_abstract_reviewer FROM collection_papers "
+            "WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+    assert tuple(row) == ("included", "ai:screening-ledger")

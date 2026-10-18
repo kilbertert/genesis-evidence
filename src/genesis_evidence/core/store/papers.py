@@ -905,6 +905,36 @@ class PaperStore:
             item["run_ids"].append(str(row["run_id"]))  # type: ignore[union-attr]
         return list(pending.values())
 
+    def list_unscreened_papers(self, *, topic_id: str | None = None) -> list[str]:
+        """Papers whose title/abstract decision has never been made.
+
+        The counterpart to :meth:`list_pending_full_texts`, and the reason ADR 0015
+        needed a driver as well as a fix: a paper with no title/abstract decision is
+        also not pending retrieval (that query selects `'included'`), so nothing in the
+        pipeline reached it. The extraction worker only claims `queued` jobs, and an
+        unscreened paper has no job to queue.
+
+        Scoped to a completed run of a locked topic for the same reason screening itself
+        is: a run still collecting can still change what the paper is being screened
+        against, and screening is immutable once a profile uses the paper.
+        """
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT cp.paper_id
+                FROM collection_papers cp
+                JOIN collection_runs cr ON cr.id = cp.run_id
+                JOIN evidence_topics et ON et.id = cr.topic_id
+                WHERE cp.title_abstract_decision IS NULL
+                    AND cr.status = 'completed' AND et.status = 'locked'
+                    AND (? IS NULL OR cr.topic_id = ?)
+                ORDER BY cp.paper_id
+                """,
+                (topic_id, topic_id),
+            ).fetchall()
+        return [str(row["paper_id"]) for row in rows]
+
     def supersede_excluded_extraction_failures(
         self, *, reviewer: str, topic_id: str | None = None
     ) -> int:
