@@ -141,7 +141,13 @@ def test_entry_config_serves_acme_on_80_and_redirects_the_rest() -> None:
     blocks = _server_blocks(config)
     port_80 = next(block for block in blocks if re.search(r"listen\s+80;", block))
     assert "/.well-known/acme-challenge/" in port_80
-    assert "return 301 https://$host$request_uri;" in port_80
+    # `$uri`, not `$request_uri`: the latter copies `?ticket=…` into the Location
+    # header of a plaintext response. Pinned as an equality so a well-meaning
+    # "preserve the query string" edit fails here rather than in a log.
+    assert "return 301 https://$host$uri;" in port_80
+    # The comment above the directive names `$request_uri` as the rejected
+    # option, so the "must not contain" half is judged on directives only.
+    assert "$request_uri" not in _directives(port_80)
     # No whole-site `root`: only the challenge prefix maps to disk.
     assert len(re.findall(r"\broot\s+", port_80)) == 1
 
@@ -273,6 +279,62 @@ def test_logrotate_covers_only_our_two_files() -> None:
     assert "*" not in listing
     assert "copytruncate" not in conf
     assert "USR1" in conf
+
+
+def test_cert_deploy_hook_is_executable() -> None:
+    """certbot runs `--deploy-hook` as an **executable**, not through a shell.
+
+    A 644 hook is the quietest possible failure: renewal succeeds, the copy and
+    the reload never happen, and the portal goes on serving an expired
+    certificate until someone notices the browser warning. The mode is asserted
+    from git's index rather than the working tree, because that is what a deploy
+    of this commit carries — an editor re-save can flip the disk copy back and
+    still leave the committed mode intact.
+    """
+
+    result = subprocess.run(
+        ["git", "ls-files", "-s", "ops/service-host/cert-deploy-hook.sh"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.startswith("100755 "), (
+        "cert-deploy-hook.sh is not executable in the index: "
+        f"{result.stdout.split()[0] if result.stdout else '<absent>'}"
+    )
+
+
+def test_cert_expiry_gate_self_check_covers_the_escape_hatch() -> None:
+    """`OWNED_DIRS_OVERRIDE` must not be usable outside `--self-check`.
+
+    Set alone it would let whoever controls the environment choose which
+    certificates this unit is judged by — that is the alarm, disabled by
+    accident or on purpose. Asserted by running it, since the guard is a shell
+    branch: without the marker it must exit 2, and the self-check itself must
+    still pass with all its samples.
+    """
+
+    script = ROOT / "ops/service-host/cert-expiry-check.sh"
+
+    without_marker = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={"PATH": "/usr/bin:/bin", "OWNED_DIRS_OVERRIDE": "/tmp/not-ours"},
+    )
+    assert without_marker.returncode == 2, without_marker.stdout + without_marker.stderr
+    assert "CERT_EXPIRY_SELF_CHECK" in without_marker.stderr
+
+    with_marker = subprocess.run(
+        ["bash", str(script), "--self-check"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert with_marker.returncode == 0, with_marker.stdout + with_marker.stderr
+
 
 def test_cert_expiry_gate_is_read_only() -> None:
     """It parses certificates. It must not write, copy, or reload anything.

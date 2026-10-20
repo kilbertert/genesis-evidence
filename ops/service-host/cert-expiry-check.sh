@@ -82,9 +82,24 @@ OWNED_DIRS=(
 # The self-check drives the real bare run, so it must be able to say which
 # directory is "ours" without depending on this host's real layout: run against
 # the actual list, the same sample would pass on one machine and fail on another.
-# Colon-separated, only read when set, and never used to widen what we judge —
-# a caller that sets it is declaring the same fact the array holds.
+#
+# **This is an escape hatch for the self-check, not a knob for production.** A
+# bare run that honours an arbitrary override turns "which certificates judge
+# this unit" into an environment variable — set it to a directory of healthy
+# certificates and the alarm is silently disabled. So it is gated: it is only
+# read when CERT_EXPIRY_SELF_CHECK=1 is set in the same environment, and its
+# presence without that marker is a **failure**, not a fallback to the built-in
+# list. Failing closed matters here because the quiet option looks exactly like
+# a working gate.
 if [ -n "${OWNED_DIRS_OVERRIDE:-}" ]; then
+  if [ "${CERT_EXPIRY_SELF_CHECK:-}" != "1" ]; then
+    printf 'cert-expiry-check: OWNED_DIRS_OVERRIDE is set without CERT_EXPIRY_SELF_CHECK=1\n' >&2
+    printf '  This override exists only for --self-check. In a real run it would let whoever\n' >&2
+    printf '  sets the environment choose which certificates this unit is judged by — i.e.\n' >&2
+    printf '  silently disable the alarm. Refusing to run rather than quietly using a\n' >&2
+    printf '  different set of certificates than the one in this file.\n' >&2
+    exit 2
+  fi
   IFS=':' read -r -a OWNED_DIRS <<< "$OWNED_DIRS_OVERRIDE"
 fi
 
@@ -301,11 +316,11 @@ self_check() {
   mv "$work/root/site-of-ours" "$work/root/site-of-ours.hidden"
   local rc_absent=0
   CERT_ROOT="$work/root" OWNED_DIRS_OVERRIDE="$work/root/site-of-ours" \
-    bash "$0" >/dev/null 2>&1 || rc_absent=$?
+    CERT_EXPIRY_SELF_CHECK=1 bash "$0" >/dev/null 2>&1 || rc_absent=$?
   mv "$work/root/site-of-ours.hidden" "$work/root/site-of-ours"
   local rc_present=0
   CERT_ROOT="$work/root" OWNED_DIRS_OVERRIDE="$work/root/site-of-ours" \
-    bash "$0" >/dev/null 2>&1 || rc_present=$?
+    CERT_EXPIRY_SELF_CHECK=1 bash "$0" >/dev/null 2>&1 || rc_present=$?
   if [ "$rc_absent" -ne 0 ] && [ "$rc_present" -eq 0 ]; then
     printf 'ok    self-check: an absent own certificate fails the sweep (rc=%s), present one passes\n' "$rc_absent"
   else

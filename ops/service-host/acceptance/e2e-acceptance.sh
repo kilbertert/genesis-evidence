@@ -46,9 +46,21 @@ chmod 700 "$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 ok() { printf 'PASS  %s\n' "$1"; pass=$((pass+1)); }
 no() { printf 'FAIL  %s — %s\n' "$1" "$2" >&2; fail=$((fail+1)); }
+# A skipped case is printed, counted, and **not** silently treated as a pass. It
+# exists for assertions that only make sense against one of the two entries this
+# suite can be pointed at; the alternative — running them anyway — makes a
+# rollback comparison fail for a reason that has nothing to do with the rollback.
+skip() { printf 'SKIP  %s — %s\n' "$1" "$2"; skip=$((skip+1)); }
+
+# The hostname the entry was reached by, or empty when it is an IP address.
+# Everything that is a property of the *named* entry (its log file, its
+# certificate) keys off this rather than off "which URL did I pass".
+entry_host=${PORTAL#*://}
+entry_host=${entry_host%%/*}
+entry_host=${entry_host%%:*}
 
 # Run a command on the service host, returning its stdout.
 on_host() { dev-host exec 36 --allow-service-exec -- "$1"; }
@@ -145,8 +157,16 @@ echo "== 5. the entry's access log exists and holds no ticket =="
 # for 120 seconds. The log format uses `$uri` instead of `$request_uri` so the
 # query string is never written; this asserts the property on the file the entry
 # actually writes, which is the only place it can be observed.
+#
+# **This is an assertion about the named entry, not about the deployment.** Run
+# against the pre-TLS `http://<host>:10007` entry — which has no hostname and
+# therefore no such log — it would fail for the reason the rollback comparison
+# is least able to afford: the new entry is not installed. So it is skipped
+# there, out loud, and the suite's exit status does not depend on it.
 LOG=/www/wwwlogs/health.ranlei.work.log
-if on_host "test -r $LOG" >/dev/null 2>&1; then
+if [ "$entry_host" != "health.ranlei.work" ]; then
+  skip "entry access log" "entry is '$entry_host'; this assertion only applies to health.ranlei.work"
+elif on_host "test -r $LOG" >/dev/null 2>&1; then
   hits=$(on_host "grep -c 'ticket=' $LOG || true")
   case "$hits" in
     ""|0) ok "access log has no ticket= (read through the private channel)" ;;
@@ -192,6 +212,6 @@ assert str(d.get('id')) == '$REPORT_ID', 'reported id does not match the request
 fi
 
 echo
-printf 'SUMMARY pass=%d fail=%d\n' "$pass" "$fail"
+printf 'SUMMARY pass=%d fail=%d skip=%d\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ] || exit 1
 echo "END-TO-END ACCEPTANCE PASSED"
