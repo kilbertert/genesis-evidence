@@ -37,3 +37,13 @@ backups = "/var/backups/genesis-evidence"
 #   是项目,不是进程。
 # - 只读探测(健康端点、监听、日志)不需要产物身份;任何写入都需要。
 # - 该机上**公司既有服务**不在本项目射程内,既不读也不动。
+
+[[targets]]
+name        = "singapore-server"
+host        = "singapore-server"
+description = "新加坡商城生产宿主的**单一用途**声明:只用来改商城「健康服务入口页」那一个静态文件的跳转目标(#333)。**不部署本项目任何服务,不承载本项目任何数据、代码或配置。** 该机是公司 Java 商城生产栈(约 21 个容器 + BT-Panel)。⚠️ 该机现有账号为 www/redis/prd,没有本项目身份 —— 本声明不构成在该机部署的前提,任何「把服务迁过去」的工作都需要独立授权。"
+
+[targets.paths]
+# Only the directory holding the entry page. A path entry here is not a
+# deployment layout: nothing of ours lives on this host.
+entry_page = "/www/wwwroot/h5.trendcloud.cc/health-entry"
