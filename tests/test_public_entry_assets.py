@@ -170,19 +170,65 @@ def test_cert_expiry_gate_rings_on_an_expiring_sample(name: str) -> None:
 
 
 def test_cert_expiry_gate_honours_its_declared_paths() -> None:
-    """It checks what this deployment answers for, not every cert on the host.
+    """It judges what this deployment answers for, and sweeps the rest.
 
     Read from the declaration rather than from a copy of the list, so adding a
-    site does not require editing two places.
+    site does not require editing two places. The sweep root is asserted too:
+    the ledger is only a ledger if it actually looks at every site on the host.
     """
 
     script = EXPIRY_CHECK.read_text(encoding="utf-8")
-    default_block = script[script.index("DEFAULT_CERT_DIRS=(") :]
-    default_block = default_block[: default_block.index(")")]
-    assert "health.ranlei.work" in default_block
-    # The retired genesis-evidence domain's certificate has no consumer; counting
+    owned_block = script[script.index("OWNED_DIRS=(") :]
+    owned_block = owned_block[: owned_block.index(")")]
+    assert "health.ranlei.work" in owned_block
+    # The retired genesis-evidence domain's certificate has no consumer; judging
     # it would make the gate fail forever for a site nobody visits.
-    assert "genesis-evidence.ranlei.work" not in default_block
+    assert "genesis-evidence.ranlei.work" not in owned_block
+    # Sweeping the whole host is what turns "we did not judge it" into "we saw
+    # it". If this were narrowed to the owned list, a company certificate's lapse
+    # would become invisible rather than merely unjudged.
+    assert "CERT_ROOT=${CERT_ROOT:-/www/server/panel/vhost/cert}" in script
+    assert 'check_dirs "${all_dirs[@]}"' in script
+
+
+def test_cert_expiry_gate_separates_owned_from_observed() -> None:
+    """A lapse we do not own is reported, and does not fail the unit.
+
+    The host is shared: `api.qumall.qushiyun.com` lapsed to 10 days while this
+    was written, and its renewal is not ours to fix. A unit that goes red for it
+    is a unit whose red gets ignored — so the classification is the property, not
+    an implementation detail. Asserted through the script's own samples rather
+    than by re-reading a list, because the self-check runs the shipped code.
+    """
+
+    result = subprocess.run(
+        ["bash", str(EXPIRY_CHECK), "--self-check"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Both directions, or classification could be inert and still pass one.
+    assert "an observed lapse does not judge the run" in result.stdout
+    assert "an owned lapse judges the run" in result.stdout
+    assert "the observed lapse is still reported" in result.stdout
+    assert "FAIL" not in result.stdout + result.stderr
+
+
+def test_cert_expiry_gate_names_the_domain_not_the_issuer() -> None:
+    """A Cloudflare Origin certificate's CN is the product name, not the site.
+
+    Measured on the host: the subject reads `CN=CloudFlare Origin Certificate`
+    for a `*.ranlei.work` certificate. A ledger keyed on that tells an operator
+    nothing about which site is about to break, so the DNS SAN is what names a
+    row.
+    """
+
+    script = EXPIRY_CHECK.read_text(encoding="utf-8")
+    body = script[script.index("domain_of()") :]
+    body = body[: body.index("\n}")]
+    assert "subjectAltName" in body, "the ledger names the issuer instead of the site"
+    assert body.index("subjectAltName") < body.index("subject -nameopt RFC2253")
 
 
 def test_cert_hook_is_registered_per_lineage_not_globally() -> None:

@@ -181,17 +181,33 @@ comparison.
 
 #### The certificate-expiry gate
 
-`cert-expiry-check.sh` fails when any certificate this deployment answers for
+`cert-expiry-check.sh` fails when any certificate **this deployment answers for**
 has 21 days or less left; the `systemd/cert-expiry-check.{service,timer}` pair
 runs it daily. It is **read-only**. It runs as root only because the per-site
 certificate directories are `700 root` — the project identity cannot open its
 own certificate — and the unit has no `ReadWritePaths`.
 
-**Until there is an alerting channel, `systemctl --failed` is the only signal**:
-the unit enters `failed` and stays there. That sentence is also in the unit file,
-so the next reader does not believe it has notification.
+**It judges two classes separately, because this host is shared.** The sweep
+covers every site under the vhost certificate root — that is what makes the
+output a ledger rather than a guess — but only the directories listed in the
+script's `OWNED_DIRS` decide the exit status. Everything else is reported as
+`[observed]`; a lapse there prints `EXPIRING*` and does not fail the unit.
 
-It is proven by feeding it a failing sample, not by watching it stay quiet:
+That split is not squeamishness. Measured when this was written:
+`api.qumall.qushiyun.com` was down to **10 days**, and its renewal is the
+company's to fix, not ours. A unit that goes permanently red for a certificate
+we cannot renew is a unit whose red stops being read — and then the one that
+matters gets ignored too. Recording it is what keeps it visible without making
+our status a function of someone else's directory.
+
+**Until there is an alerting channel, `systemctl --failed` is the only signal**
+for the owned class: the unit enters `failed` and stays there. That sentence is
+also in the unit file, so the next reader does not believe it has notification.
+An `observed` lapse has no such signal — it is in the daily output, and whoever
+reads the ledger is what turns it into action.
+
+It is proven by feeding it failing samples, not by watching it stay quiet. Both
+directions of the classification are asserted, so the split cannot be inert:
 
 ```bash
 /opt/genesis-evidence/ops/cert-expiry-check.sh --self-check

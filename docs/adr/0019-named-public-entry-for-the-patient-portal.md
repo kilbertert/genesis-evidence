@@ -53,9 +53,19 @@ the portal **only**; it does not reopen the workbench.
   `preload`: this deployment speaks for one name, and preload is effectively
   irreversible.
 - A certificate-expiry gate fails when any certificate this deployment answers
-  for has 21 days or less left. It is read-only, it is fed a failing sample in
-  its own self-check, and until there is an alerting channel its only signal is
-  the unit entering `failed` and appearing in `systemctl --failed`.
+  for has 21 days or less left. It sweeps **every** site under the host's
+  certificate root and keeps the rest as an `[observed]` ledger that does not
+  decide the exit status. It is read-only, it is fed failing samples in its own
+  self-check — in both classes, or the split could be inert — and until there is
+  an alerting channel its only signal is the unit entering `failed` and appearing
+  in `systemctl --failed`.
+
+  The two classes exist because responsibility is not uniform on a shared host.
+  Measured while writing this: a company site's certificate was down to 10 days
+  and its renewal is not ours. Judging it would make this unit's status a
+  function of someone else's directory, and a permanently red unit is a unit
+  nobody reads. Recording it is what keeps it visible; not judging it is what
+  keeps our red meaningful.
 
 **What this does not do**: it does not give the review workbench a public name,
 does not expose the evidence API, does not add CSP or other security headers
