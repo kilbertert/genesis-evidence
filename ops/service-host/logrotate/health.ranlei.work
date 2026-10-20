@@ -1,0 +1,39 @@
+# Rotation for the patient portal's entry logs.
+#
+# The host's log directory is **not** under any existing logrotate rule — there
+# are multi-hundred-megabyte files in it as evidence — so an entry that declares
+# its own `access_log` grows without bound unless this file exists.
+#
+# Scope: **only the two files this entry writes.** Every other file in that
+# directory belongs to another site on this shared host, and this deployment does
+# not manage their retention. A glob (`*.log`) here would be a change to someone
+# else's production.
+#
+# `USR1` reopens the file rather than `copytruncate`: nginx handles the signal by
+# reopening its descriptors, so no request can land in the truncated window and
+# the new file starts at zero. `copytruncate` copies and then truncates, which
+# loses whatever was written between the two steps.
+/www/wwwlogs/health.ranlei.work.log
+/www/wwwlogs/health.ranlei.work.error.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # nginx runs as `www` on this host; the log directory is `www:www` and the
+    # existing per-site logs there are `600 www:www`. `create` names the mode and
+    # owner explicitly so a rotation does not hand the new file to root.
+    su www www
+    create 640 www www
+    sharedscripts
+    postrotate
+        # `nginx -s reopen` is not used: it resolves through the pid file, and
+        # on this host nginx is panel-managed (its LSB unit can be failed while
+        # nginx serves traffic). `USR1` to the running master is the signal the
+        # process actually documents for reopening logs.
+        if [ -s /www/server/nginx/logs/nginx.pid ]; then
+            kill -USR1 "$(cat /www/server/nginx/logs/nginx.pid)" 2>/dev/null || true
+        fi
+    endscript
+}

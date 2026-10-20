@@ -1,0 +1,37 @@
+[Unit]
+Description=Genesis Evidence — certificate expiry gate
+Documentation=file:///opt/genesis-evidence/ops/cert-expiry-check.sh
+# Deliberately not `After=nginx.service`: this unit reads files, and the
+# panel-managed nginx on this host is not the unit that serves traffic (its LSB
+# unit can be failed while nginx runs). Ordering against it would express a
+# dependency that does not exist.
+
+[Service]
+Type=oneshot
+# Runs as root **because it must read the certificates**, not because it needs
+# privilege: the host's per-site certificate directories are `700 root`, so the
+# project identity cannot open even its own certificate. The script is read-only
+# (it parses and prints; it never writes, copies, or reloads), and the sandbox
+# below removes everything except reading. Running it as the service identity
+# would make every run fail closed on an unreadable path — a gate that is always
+# red is the same as no gate.
+User=root
+Group=root
+# Read-only traversal of the host's certificate directories. It reads the
+# company's certificates too — that is how a broken shared renewal pipeline is
+# noticed — and it must never be able to change them.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+# No `ReadWritePaths`: nothing here writes. The absence is the guarantee.
+ExecStart=/opt/genesis-evidence/ops/cert-expiry-check.sh
+# ── This unit has no notification channel ───────────────────────────────────
+# Until this deployment has an alerting path, the only thing that happens when a
+# certificate approaches expiry is this unit entering `failed`, which surfaces in
+# `systemctl --failed`. That is the signal; there is no mail, no webhook, and no
+# chat message. Do not read the existence of this timer as a notification path —
+# whoever looks at `systemctl --failed` is the notification path.
+
+[Install]
+WantedBy=multi-user.target
