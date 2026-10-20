@@ -193,6 +193,13 @@ output a ledger rather than a guess — but only the directories listed in the
 script's `OWNED_DIRS` decide the exit status. Everything else is reported as
 `[observed]`; a lapse there prints `EXPIRING*` and does not fail the unit.
 
+The bare run checks the **union** of the sweep and `OWNED_DIRS`, and that is not
+redundant: a gate that only looks where certificates are cannot notice that ours
+is gone. A deleted site directory or a `CERT_ROOT` pointed elsewhere would leave
+no row at all, and the run would pass on the strength of everyone else's healthy
+certificates — the one failure this unit exists to catch would be the one it
+cannot see. `--self-check` drives that exact path, in both directions.
+
 That split is not squeamishness. Measured when this was written:
 `api.qumall.qushiyun.com` was down to **10 days**, and its renewal is the
 company's to fix, not ours. A unit that goes permanently red for a certificate

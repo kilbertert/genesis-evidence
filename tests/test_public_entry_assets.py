@@ -188,7 +188,10 @@ def test_cert_expiry_gate_honours_its_declared_paths() -> None:
     # it". If this were narrowed to the owned list, a company certificate's lapse
     # would become invisible rather than merely unjudged.
     assert "CERT_ROOT=${CERT_ROOT:-/www/server/panel/vhost/cert}" in script
-    assert 'check_dirs "${all_dirs[@]}"' in script
+    # The bare run unions the sweep with the owned list. Without the union, an
+    # owned certificate that has vanished from the root produces no row at all,
+    # and the run passes on the strength of other people's certificates.
+    assert 'check_dirs "${all_dirs[@]}" "${OWNED_DIRS[@]}"' in script
 
 
 def test_cert_expiry_gate_separates_owned_from_observed() -> None:

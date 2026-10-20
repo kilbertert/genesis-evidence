@@ -17,6 +17,12 @@
 #   owned    — listed in OWNED_DIRS below. These decide the exit status.
 #   observed — everything else found in the sweep. Reported, never judged.
 #
+# The bare run is the **union** of the sweep and OWNED_DIRS, not the sweep alone.
+# A gate that only looks where certificates are cannot notice that ours is no
+# longer there — a deleted site directory or a root pointed elsewhere would leave
+# no row at all, and the run would pass on the strength of everyone else's
+# healthy certificates. Our absence is exactly the failure this exists to catch.
+#
 # The ledger is the point of `observed`: our gate not judging a certificate is
 # not the same as nobody knowing. When one of them lapses, it is visible in the
 # output (and in the ticket that follows it up), not silently absent.
@@ -73,6 +79,14 @@ CERT_ROOT=${CERT_ROOT:-/www/server/panel/vhost/cert}
 OWNED_DIRS=(
   /www/server/panel/vhost/cert/health.ranlei.work
 )
+# The self-check drives the real bare run, so it must be able to say which
+# directory is "ours" without depending on this host's real layout: run against
+# the actual list, the same sample would pass on one machine and fail on another.
+# Colon-separated, only read when set, and never used to widen what we judge —
+# a caller that sets it is declaring the same fact the array holds.
+if [ -n "${OWNED_DIRS_OVERRIDE:-}" ]; then
+  IFS=':' read -r -a OWNED_DIRS <<< "$OWNED_DIRS_OVERRIDE"
+fi
 
 # Days from now until the certificate expires. Prints an integer, or nothing.
 days_left() { # days_left <fullchain.pem>
@@ -116,8 +130,15 @@ is_owned() { # is_owned <dir>
 }
 
 check_dirs() {
-  local failures=0 readable=0 observed_expiring=0 dir pem days domain class
+  local failures=0 readable=0 observed_expiring=0 dir pem days domain class key
+  # One row per directory. The bare run unions the sweep with OWNED_DIRS (below),
+  # so our own site arrives twice unless it is deduplicated here — and a ledger
+  # that lists a site twice reads as two sites.
+  local -A seen=()
   for dir in "$@"; do
+    key=$(readlink -f -- "$dir" 2>/dev/null || printf '%s' "$dir")
+    [ -n "${seen[$key]:-}" ] && continue
+    seen[$key]=1
     pem="$dir/fullchain.pem"
     if is_owned "$dir"; then class=owned; else class=observed; fi
     if [ ! -r "$pem" ]; then
@@ -172,7 +193,7 @@ check_dirs() {
 }
 
 self_check() {
-  local work cert_bad cert_good rc_bad rc_good
+  local work rc_bad rc_good
   work=$(mktemp -d)
   trap 'rm -rf "$work"' RETURN
   mkdir -p "$work/bad" "$work/good"
@@ -268,6 +289,32 @@ self_check() {
     failed=1
   fi
 
+  # ── An owned directory can go missing entirely ────────────────────────────
+  # This is the sweep's blind spot: if our site is not under the root, it has no
+  # row, and a run made only of other people's healthy certificates passes. Drive
+  # the real bare-run path, because the union with OWNED_DIRS is what is tested.
+  #
+  # `site-of-ours` is moved aside so the sweep genuinely cannot see it; the
+  # override names it anyway, which is exactly the state a renamed or deleted
+  # site directory produces. Both directions are asserted, since a run that fails
+  # on everything would pass the first half for the wrong reason.
+  mv "$work/root/site-of-ours" "$work/root/site-of-ours.hidden"
+  local rc_absent=0
+  CERT_ROOT="$work/root" OWNED_DIRS_OVERRIDE="$work/root/site-of-ours" \
+    bash "$0" >/dev/null 2>&1 || rc_absent=$?
+  mv "$work/root/site-of-ours.hidden" "$work/root/site-of-ours"
+  local rc_present=0
+  CERT_ROOT="$work/root" OWNED_DIRS_OVERRIDE="$work/root/site-of-ours" \
+    bash "$0" >/dev/null 2>&1 || rc_present=$?
+  if [ "$rc_absent" -ne 0 ] && [ "$rc_present" -eq 0 ]; then
+    printf 'ok    self-check: an absent own certificate fails the sweep (rc=%s), present one passes\n' "$rc_absent"
+  else
+    printf 'FAIL  self-check: absent=%s present=%s — a sweep that cannot see our own\n' \
+      "$rc_absent" "$rc_present" >&2
+    printf '      certificate must fail closed, and must pass once it is back\n' >&2
+    failed=1
+  fi
+
   return "$failed"
 }
 
@@ -281,8 +328,15 @@ if [ "$#" -gt 0 ]; then
 else
   # Sweep every site on the host: the owned ones decide the exit status, the rest
   # are reported. A missing root is the fail-closed case above, not a quiet pass.
+  #
+  # OWNED_DIRS is unioned in rather than trusted to be a subset of the sweep.
+  # Without the union, an owned certificate that is *absent* from the sweep — its
+  # site deleted, its directory renamed, the root pointed somewhere else — would
+  # produce no row at all and the run would pass on the strength of other
+  # people's healthy certificates. That is the one failure this gate exists to
+  # catch, so it must not be the one it cannot see.
   shopt -s nullglob
   all_dirs=("$CERT_ROOT"/*)
   shopt -u nullglob
-  check_dirs "${all_dirs[@]}"
+  check_dirs "${all_dirs[@]}" "${OWNED_DIRS[@]}"
 fi
