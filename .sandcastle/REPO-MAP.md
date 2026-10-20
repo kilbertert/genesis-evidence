@@ -88,6 +88,7 @@ artifacts/
     acceptance-20261015-consistency-contract-run.json
     acceptance-20261015-consistency-contract.md
     acceptance-20261018-worker-deployment.md
+    ... (1 more)
 docs/
   adr/
     0002-trusted-pr-control-plane.md
