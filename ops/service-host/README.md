@@ -131,37 +131,94 @@ exposure was open.
 Any future remote access to `10006` uses a separate channel (SSH tunnel or the
 private plane) and does not restore a public binding.
 
-### Target state: loopback behind the host's web server
+### Public entry: `health.ranlei.work`
 
-Both services bind loopback only. The public entry point is terminated in front
-of them by the host's web server; the services themselves are never reached by
-their port from outside the host.
+Both internal services bind loopback only. The portal's single public entry is
+terminated by the host's web server and proxies to `127.0.0.1:10007`; the
+services themselves are never reached by their port from outside the host.
 
-`nginx/genesis-evidence.conf` is that entry: one server block per domain,
-proxying to the loopback port of the matching service. It is deployed into the
-host's vhost directory and, like the neighbouring internal entry there, does not
-modify a panel-managed site.
+`nginx/health.ranlei.work.conf` is that entry — one file, one hostname, one
+backend. Its decisions are recorded in ADR 0019; the ones that need a reader of
+*the file* to know:
 
-It was **removed from the host** during the retirement above, and the file is
-kept here as the form to restore. Reinstating it means changing the domain names
-in it — the previous ones are retired — and pointing it at the ports in use.
+- **Port 80 does ACME and a 301, nothing else.** No whole-site `root`.
+- **The access log uses `$uri`.** The mall's entry page arrives as `/?ticket=…`
+  and that ticket is a credential; `$uri` never records the query string. There
+  is a comment in the file saying so, so removing the property means first
+  deleting a sentence with a reason.
+- **`X-Forwarded-For` is overwritten, not appended.** The application trusts
+  proxy headers from a loopback peer, and this request is one.
+- **HSTS without `includeSubDomains` or `preload`** — this deployment speaks for
+  one name.
+- **No `default_server`.** The `00-default-catchall.conf` that sorts before this
+  file owns it; see the trap below.
 
-TLS terminates there with the **Cloudflare Origin certificate** for
-`*.ranlei.work`, matching the existing entry path (Cloudflare → origin). The
-certificate a browser sees is Cloudflare's; this one only has to satisfy
-Cloudflare in Full (strict) mode. Plain HTTP **redirects** to HTTPS rather than
-serving, because patient sessions and the reviewer's bearer key must not cross
-the network in the clear.
+TLS terminates there with a **Let's Encrypt** certificate (ECDSA, webroot),
+matching the neighbouring TLS site on the machine. `cert-deploy-hook.sh` is
+registered **on this lineage only** (`--deploy-hook` at issuance, recorded in
+`/etc/letsencrypt/renewal/health.ranlei.work.conf`): a hook in the global
+`renewal-hooks/deploy/` directory would copy our files and reload the server on
+every other site's renewal. It copies the certificate into the panel's per-site
+directory — nginx's worker cannot read `/etc/letsencrypt/live` — runs
+`nginx -t`, and only then reloads.
 
-That requirement is not hypothetical: it is precisely what the interim state
-above violates, and the reason the interim state is bounded.
-
-The certificate and its private key are installed under the panel's per-site
-certificate directory — mode `700` on the directory, `600` on the key. They are
-**not** in this repository, and are delivered by a private channel.
+**`certbot renew --dry-run` does not exercise that hook.** Measured on certbot
+2.9.0: `--dry-run` skips deploy hooks. The verification that counts is running
+the hook once with `RENEWED_LINEAGE` set to the live lineage.
 
 The report portal's block raises `client_max_body_size` to 55m because a single
 submission may carry two large report files.
+
+#### Why not Cloudflare in front of the origin
+
+The zone's SSL mode is `flexible`. Behind a proxy in that mode the browser leg
+is TLS and the **Cloudflare → origin leg is plaintext**, while the page looks
+completely normal — the worst kind of green, because the patient sees a padlock
+and the session token still crosses the network in the clear. Switching the zone
+to Full (strict) is a zone-wide setting shared with every other site under
+`ranlei.work`, so it is not this project's to change. ADR 0019 records the full
+comparison.
+
+#### The certificate-expiry gate
+
+`cert-expiry-check.sh` fails when any certificate **this deployment answers for**
+has 21 days or less left; the `systemd/cert-expiry-check.{service,timer}` pair
+runs it daily. It is **read-only**. It runs as root only because the per-site
+certificate directories are `700 root` — the project identity cannot open its
+own certificate — and the unit has no `ReadWritePaths`.
+
+**It judges two classes separately, because this host is shared.** The sweep
+covers every site under the vhost certificate root — that is what makes the
+output a ledger rather than a guess — but only the directories listed in the
+script's `OWNED_DIRS` decide the exit status. Everything else is reported as
+`[observed]`; a lapse there prints `EXPIRING*` and does not fail the unit.
+
+The bare run checks the **union** of the sweep and `OWNED_DIRS`, and that is not
+redundant: a gate that only looks where certificates are cannot notice that ours
+is gone. A deleted site directory or a `CERT_ROOT` pointed elsewhere would leave
+no row at all, and the run would pass on the strength of everyone else's healthy
+certificates — the one failure this unit exists to catch would be the one it
+cannot see. `--self-check` drives that exact path, in both directions.
+
+That split is not squeamishness. Measured when this was written:
+`api.qumall.qushiyun.com` was down to **10 days**, and its renewal is the
+company's to fix, not ours. A unit that goes permanently red for a certificate
+we cannot renew is a unit whose red stops being read — and then the one that
+matters gets ignored too. Recording it is what keeps it visible without making
+our status a function of someone else's directory.
+
+**Until there is an alerting channel, `systemctl --failed` is the only signal**
+for the owned class: the unit enters `failed` and stays there. That sentence is
+also in the unit file, so the next reader does not believe it has notification.
+An `observed` lapse has no such signal — it is in the daily output, and whoever
+reads the ledger is what turns it into action.
+
+It is proven by feeding it failing samples, not by watching it stay quiet. Both
+directions of the classification are asserted, so the split cannot be inert:
+
+```bash
+/opt/genesis-evidence/ops/cert-expiry-check.sh --self-check
+```
 
 ### The default-server trap
 
@@ -173,8 +230,9 @@ whoever wrote last, silently.
 That happened here: the first version of this file, listening on 443 without a
 catch-all, became the HTTPS default and served our application to any hostname.
 The fix is an explicit `default_server` block that returns `444`, so "no match"
-says no match instead of answering as us. Any file added to this directory
-should carry one for this reason.
+says no match instead of answering as us. That block now lives in
+`00-default-catchall.conf`, which sorts before every site file; a site file must
+**not** carry `default_server` of its own.
 
 ### Verifying the entry
 

@@ -5,34 +5,47 @@ genesis-evidence 运行在**服务宿主**上(不是开发机)。本文说明线
 
 ## 线上访问
 
+> **本文件描述的是目标形态,不是此刻的线上状态。** 下表里的入口已在仓库中定义并通过
+> 评审,但**尚未部署到服务宿主**;合并这次改动时,线上仍然是下面的"现状"。
+> 切换由 #331(T3 canary)与 #334(T6 收敛)执行,完成之前旧入口是回退路径。
+>
+> | | 入口 | 服务绑定 |
+> | --- | --- | --- |
+> | **现状(合并时)** | `http://<服务宿主>:10007` | 门户绑 `0.0.0.0`,cookie 不带 `Secure` |
+> | **目标(部署后)** | `https://health.ranlei.work` | 门户只绑 `127.0.0.1`,cookie 带 `Secure`,TLS 由宿主 web 服务器终结 |
+
 | 服务 | 入口 | 端口 | 说明 |
 |---|---|---|---|
-| 个人报告门户 | `http://<服务宿主>:10007` | 10007 | Health-Flow 体检报告解读与健康风险提示(主线 B);**绑 `0.0.0.0`,有真实外部用户** |
+| 个人报告门户 | `https://health.ranlei.work` | 443 → `127.0.0.1:10007` | Health-Flow 体检报告解读与健康风险提示(主线 B);**唯一公开入口**,TLS 由宿主 web 服务器终结 |
 | 论文证据审核工作台 | `127.0.0.1:10006` | 10006 | 论文采集/抽取/审核/知识卡(主线 A);**只绑环回,收回已于 2026-09-28 执行** |
 | Evidence API | `127.0.0.1:10005` | 10005 | 只读已发布证据 API;**只绑环回,不对外** |
 
 用户端由 Health-Flow 提供页面与报告 API,并在用户确认指标后调用**本机**
 `127.0.0.1:10005/api/evidence/matches`;该 Evidence API 是内部边,刻意不暴露。
 
-> **过渡期状态**:患者门户仍是公网 IP + 端口、**无 TLS**,且
-> `AUTH_COOKIE_SECURE` 被临时设为 `false`(否则浏览器在 `http://` 下拒绝存 cookie,登录会静默失败)。
-> 公司二级域名与证书就位后须:收回绑回 `127.0.0.1`(或改由该机 web 服务器承载)、
-> 恢复 `AUTH_COOKIE_SECURE=true`。原 `genesis-evidence*.ranlei.work` 域名已随迁移退役。
->
-> **`10006` 的暴露已决定收回,依据是对该服务近两周访问日志的观测**:外部来源 **0 次**
-> (全部命中来自本平台自身出口地址,即验收脚本所在主机),而同一次测量中患者门户 `10007`
-> 有至少 6 个不同的外部地址。审核工作台是内部工具,没有公开使用场景;后续远程访问走
-> 独立通道(SSH 隧道或私有平面),不恢复公网绑定。
->
-> **状态(2026-09-28 实测)**:主机侧变更**已执行**——`GENESIS_EVIDENCE_REVIEW_HOST` 已设为
-> `127.0.0.1` 并重启 `genesis-evidence-review.service`,`ss -ltn` 显示 `127.0.0.1:10006`,
-> `e2e-acceptance.sh` 的负向断言确认 `:10006` 从外部不可达。下表"入口"一列即当前状态。
-> 详见 `ops/service-host/README.md` 的 Exposure 一节。
+**入口的形态**(决策见 ADR 0019,配置文件 `ops/service-host/nginx/health.ranlei.work.conf`):
+
+- 患者门户只绑 `127.0.0.1`;唯一的对外入口是宿主 web 服务器上的那一个 `server` 块。
+  **应用改动不再等于暴露改动。**
+- `X-Forwarded-For` 用 `$remote_addr` **覆写**而不是追加;HSTS 一年,不带
+  `includeSubDomains`、不带 `preload`。
+- 该入口声明自己的 `access_log`,格式用 **`$uri`** —— 商城入口页以 `/?ticket=…`
+  跳转,那张票是凭据,不能永久写进磁盘。轮转由
+  `ops/service-host/logrotate/health.ranlei.work` 负责,**只覆盖我们那两个文件**。
+- 证书由 **Let's Encrypt** 签发(ECDSA,webroot),续期后的"拷证书 + reload"由
+  `ops/service-host/cert-deploy-hook.sh` 完成,按 **lineage** 注册,不在全局钩子目录。
+  **`certbot renew --dry-run` 不执行 deploy hook**(certbot 2.9.0 实测),不能拿它当钩子可用的证据。
+- 证书到期闸门 `ops/service-host/cert-expiry-check.sh` 每天跑一次:任何一张我们负责的
+  证书剩余 ≤ 21 天时 unit 进入 `failed`。**在还没有告警渠道之前,`systemctl --failed`
+  是这台机上唯一会被看见的信号。** 它只读。
+
+**过渡状态与回退**:`health.ranlei.work` 是**过渡域名**,依赖个人注册商与个人 Cloudflare
+账户;迁到公司域名是单独一张阻塞票,不是本次的终态。回退路径是旧入口
+`http://<服务宿主>:10007`(在收敛完成之前仍在运行),以及按 DNS 记录 **id** 删除那条 `A` 记录。
 
 个人报告门户以 **账号会话** 为患者访问边界(`REPORT_ACCOUNT_REQUIRED=true`)。RFC 7617 Basic Auth
 只是可选的操作者兼容闸门(`HEALTHFLOW_BASIC_AUTH_ENABLED`,默认关闭),不是患者访问路径;启用时凭据
-仅存在 Health-Flow 的私有 `var/health-flow.env` 中。Basic Auth 不自带传输加密,启用时只能通过
-HTTPS 访问。
+仅存在 Health-Flow 的私有 `var/health-flow.env` 中。
 
 ## 审核工作台访问
 
@@ -53,6 +66,7 @@ HTTPS 访问。
 | `genesis-evidence-review.service` | 审核工作台(FastAPI,10006) |
 | `health-flow.service` | Health-Flow 用户端 + 报告 API(FastAPI + React,10007) |
 | `health-flow-report-worker.service` | Health-Flow 持久化报告解析 worker,消费报告抽取队列 |
+| `cert-expiry-check.timer` / `.service` | 证书到期闸门(每天一次);失败即进入 `failed`,是这台机上唯一的信号 |
 
 论文抽取 worker **尚未部署到服务宿主**:迁移时按既定决策保持停用(单主题低速验收),
 恢复抽取是另一次单独的低速验收。开发机上的 `genesis-evidence-worker.service` 已随之退役。
@@ -95,8 +109,8 @@ systemctl restart genesis-evidence-review   # 改了 env 后重启
 - `https://genesis-review.ranlei.work` — 旧证据审核工作台
 
 **这四个域名现在全部不可用**,不要用其中任何一个:旧的两个已于 2026-08-13 停用,
-`genesis-evidence*` 两个也随 2026-09-22 的迁移退役。**当前入口是本文开头的 IP + 端口**;
-公司二级域名到位后以新域名为准。
+`genesis-evidence*` 两个也随 2026-09-22 的迁移退役。**当前入口是本文开头的
+`https://health.ranlei.work`**;它是过渡域名,迁到公司域名后以新域名为准。
 
 旧 genesis-health 的 6 个 user 服务(`genesis-health-portal`、
 `genesis-health-private-portal`、`genesis-review-api`、`genesis-health-frp`、

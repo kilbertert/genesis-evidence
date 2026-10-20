@@ -1,0 +1,16 @@
+[Unit]
+Description=Genesis Evidence — certificate expiry gate (daily)
+
+[Timer]
+# Daily rather than hourly: the thing being watched changes on a scale of days
+# (Let's Encrypt renews at 30 days before expiry, twice a day), and a daily
+# check means a failure is at most a day old when someone reads
+# `systemctl --failed`.
+OnCalendar=daily
+# Run once after boot if the last run was missed — a host that was down at the
+# scheduled time otherwise reports nothing at all.
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

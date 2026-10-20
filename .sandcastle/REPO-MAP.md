@@ -42,7 +42,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 53 test file(s, recursive)
+- tests/ — 54 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -51,8 +51,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 32 markdown file(s)
-- docs/adr/ — 15 markdown file(s)
+- docs/ — 33 markdown file(s)
+- docs/adr/ — 16 markdown file(s)
 - docs/agents/ — 5 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -100,7 +100,7 @@ docs/
     0011-adr-check-scope-and-self-application.md
     0012-machine-signature-boundary.md
     0013-spec-tree-as-intent-truth.md
-    ... (5 more)
+    ... (6 more)
   agents/
     architecture-decisions.md
     domain.md
@@ -127,26 +127,18 @@ ops/
   service-host/
     acceptance/
     examples/
+    logrotate/
     nginx/
     systemd/
     auth-probe.sh
     bootstrap-db.py
+    cert-deploy-hook.sh
+    cert-expiry-check.sh
     README.md
   systemd/
     genesis-evidence-portal.service
     genesis-evidence-review.service
     genesis-evidence-worker.service
   README.md
-scripts/
-  __init__.py
-  check_patient_copy.py
-  check_review_workbench_layout.py
-  check_schema.py
-  check_scope.py
-  collect_topics.py
-  local_extraction_batch.py
-  measure_consistency_contract.py
-  rebuild_evidence_bodies.py
-  run_consistency_matrix.sh
 ... (truncated — list the rest with `ls`/`find`)
 ```
