@@ -9,6 +9,10 @@ document specified (`POST /report/{id}/recommendations/{spu_id}/cart-link`) and 
 (PRD kilbertert/Health-Flow#266).
 
 关联：health-flow #174（检测页商品展示，已交付）、genesis-evidence #159（闭环总规格）。
+
+> **本文件以下内容已退役,不得据此实现或要求对方实现。** 保留它是为了让后来的人看见
+> 「曾经设计过这条深链、为什么最终没有走它」。「阻塞项」「商城侧需要做什么」等章节
+> 记录的是退役前的状态,不是待办。
 本文件是**交付给商城侧的接口契约**，与 `docs/condition-to-mall-tag.md` 同类：
 它只声明本仓构造什么、需要商城侧做什么，**不记录商城侧的内部实现**。
 
