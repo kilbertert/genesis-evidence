@@ -23,7 +23,16 @@ genesis-evidence 运行在**服务宿主**上(不是开发机)。本文说明线
 用户端由 Health-Flow 提供页面与报告 API,并在用户确认指标后调用**本机**
 `127.0.0.1:10005/api/evidence/matches`;该 Evidence API 是内部边,刻意不暴露。
 
-**入口的形态**(决策见 ADR 0019,配置文件 `ops/service-host/nginx/health.ranlei.work.conf`):
+**入口的形态**(决策见 ADR 0019 与 ADR 0020,配置文件 `ops/service-host/nginx/health.ranlei.work.conf`):
+
+> **2026-10-27 起,这个入口服务的是 health-flow 的 API,不再是一个患者页面**(ADR 0020)。
+> 患者界面已并入商城 H5(PRD kilbertert/Health-Flow#266)。下表中「个人报告门户」那一行的
+> **传输形态仍然有效**(TLS 在宿主终结、只绑 `127.0.0.1`),**载荷已改变**:`/` 不再提供患者
+> 页面。上线切换窗口内两者并存,切换完成后本节的验收项要从「页面能打开」改为「API 可达」。
+>
+> **验收脚本尚未随之修改**:`ops/service-host/acceptance/e2e-acceptance.sh` 仍断言 `/` 返回
+> 患者页面(含「健康流」标题)。它是**切换前**的验收,**现在仍然正确**;新模块上线时需要一条
+> 只验 API 的验收项,那是与该入口切换同一个窗口的工作,不在本次文档改动内。
 
 - 患者门户只绑 `127.0.0.1`;唯一的对外入口是宿主 web 服务器上的那一个 `server` 块。
   **应用改动不再等于暴露改动。**
