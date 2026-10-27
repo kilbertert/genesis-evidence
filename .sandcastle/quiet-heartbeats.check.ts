@@ -176,8 +176,16 @@ const exitRun = spawnSync(
   ],
   { cwd: import.meta.dirname, encoding: "utf8", timeout: 10_000 },
 );
+// The summary reports BOTH numbers: how many frames were dropped and how many
+// console lines the filter actually judged. Without the second, "dropped 0"
+// cannot be told apart from a runner that logs to a file and never writes to
+// stdout — and that distinction is the whole diagnostic value of the line.
+// The count is EXACT, not `\d+`: the probe writes exactly one line, so `\d+`
+// would also accept a counter that never increments — the mutation "delete
+// `observed += 1`" was measured to survive `\d+`. A number the test knows must be
+// asserted as that number.
 assert(
-  /dropped 1 thinking-token frame/.test(exitRun.stderr),
+  /dropped 1 thinking-token frame\(s\) of 1 stream line\(s\)/.test(exitRun.stderr),
   `the exit summary must reach a captured stderr (stderr: ${JSON.stringify(exitRun.stderr)})`,
 );
 // And it must NOT reach stdout — see the placement assertion below, which reads
@@ -268,9 +276,14 @@ const nestedCall = profileSource
   .slice(bodyStart)
   .search(/^\s*function\s+\w+\s*\([^)]*\)\s*\{[^}]*quietThinkingHeartbeats\(\)/m);
 if (nestedCall >= 0) {
-  // The shape is present but unreachable-by-inspection; record it rather than
-  // pass silently. Not a failure — see above.
-  console.error("note: a nested uncalled function contains the install (documented limit)");
+  // The shape is present and this check cannot tell whether the nested function
+  // is called — that needs the call graph, which needs the provider. Report the
+  // OBSERVATION rather than a conclusion: an earlier wording said "a nested
+  // uncalled function", which labelled a helper the code may well invoke. A note
+  // that asserts something the check cannot see is worse than no note.
+  console.error(
+    "note: the install appears inside a nested function; this check cannot tell whether it is called (documented limit)",
+  );
 }
 
 const beforeCall = profileSource.slice(bodyStart, callAt);
@@ -299,6 +312,40 @@ assert(
 assert(
   !/writeSync\(\s*stream\.fd\s*,/.test(source),
   "the exit summary must not be written to stdout — main.ts's JSON result follows it",
+);
+
+// --- "0 of 0" is a different fact from "0 of N" (review finding 7) ----------
+//
+// `claudeProfile` installs the hook before it validates the profile, and a runner
+// using `logging: { type: "file" }` gets no agent stream on stdout. Its summary
+// must be legible as "this run carried no agent stream", not as "the filter never
+// matched".
+//
+// ⚠️ The FIRST version of this probe only called the filter and wrote nothing —
+// and it passed for the wrong reason. A real file-logged run still prints its
+// JSON result from `main.ts`, and the original counter counted that too, so the
+// summary read "0 of 1": indistinguishable from a quiet console run, i.e. the
+// exact confusion the number exists to remove. The probe below reproduces the
+// real shape — filter installed, then a pretty-printed result — and asserts the
+// count stays 0.
+const silentProbe = `
+  quietThinkingHeartbeats();
+  // What main.ts prints after run() with logging: { type: "file" }.
+  console.log(JSON.stringify({ issue: 7, commits: 0 }, null, 2));
+`;
+const silentRun = spawnSync(
+  process.execPath,
+  [
+    "--experimental-strip-types",
+    "--input-type=module",
+    "-e",
+    `import { quietThinkingHeartbeats } from "./quiet-heartbeats.ts";${silentProbe}`,
+  ],
+  { cwd: import.meta.dirname, encoding: "utf8", timeout: 10_000 },
+);
+assert(
+  /dropped 0 thinking-token frame\(s\) of 0 stream line\(s\)/.test(silentRun.stderr),
+  `a run with no console output must say "0 of 0" (stderr: ${JSON.stringify(silentRun.stderr)})`,
 );
 
 console.log("quiet-heartbeats check ok");

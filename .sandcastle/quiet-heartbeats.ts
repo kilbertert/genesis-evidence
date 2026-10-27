@@ -38,6 +38,18 @@ import { writeSync } from "node:fs";
 const HEARTBEAT_TYPE = "system";
 const HEARTBEAT_SUBTYPE = "thinking_tokens";
 let suppressed = 0;
+// How many AGENT STREAM lines the filter actually judged — not how many bytes
+// reached stdout.
+//
+// The distinction is the whole point and the first attempt got it wrong
+// (review-caught): counting every newline on stdout also counted `main.ts`'s
+// final `console.log(JSON.stringify(…))`, which a FILE-logged run still prints.
+// Its summary then read "0 of 1" — indistinguishable from a quiet console run,
+// which is exactly the confusion this number exists to remove.
+//
+// A stream-json line is the unit that matters: it is what the CLI emits, what the
+// heartbeat is hidden among, and what a file-logging run produces none of.
+let observed = 0;
 let installed = false;
 
 /** True for one `thinking_tokens` frame, and for nothing else. */
@@ -66,8 +78,10 @@ export function isThinkingHeartbeat(line: string): boolean {
  *
  * The count is printed because the frame name belongs to another product: if a
  * Claude Code release renames `thinking_tokens`, the filter goes quietly inert and
- * the flood returns with nothing failing. A run that ends with "dropped 0" is the
- * signal that the match needs revisiting.
+ * the flood returns with nothing failing. "dropped 0 of N console lines" is the
+ * signal that the match needs revisiting — and reporting N alongside it is what
+ * keeps that signal honest: a file-logging runner prints "0 of 0", which is a
+ * different fact from a console run that simply had no thinking.
  *
  * TWO details of the writable-stream contract this has to respect, both of which
  * a naive drop gets wrong (both found in review of the first version):
@@ -88,6 +102,13 @@ export function quietThinkingHeartbeats(): void {
   const stream = process.stdout;
   const write = stream.write.bind(stream);
   stream.write = ((chunk: unknown, ...rest: unknown[]) => {
+    // Count only frame-shaped lines. The cheap `{"` test runs before a parse:
+    // a runner's own output (`main.ts`'s JSON result is pretty-printed, so its
+    // fragments do not open with `{"`) and the CLI's non-JSON warnings do not
+    // inflate the number.
+    if (typeof chunk === "string" && chunk.startsWith('{"') && chunk.endsWith("\n")) {
+      observed += 1;
+    }
     if (typeof chunk === "string") {
       // Sandcastle writes one raw line per call, terminator included. Requiring
       // the terminator keeps a partial write from being judged on half a line.
@@ -122,7 +143,10 @@ export function quietThinkingHeartbeats(): void {
     // to a pipe can still fail with EAGAIN when the reader has not drained it, so
     // a closed stderr silently costs the line rather than failing the run.
     try {
-      writeSync(2, `[afk] dropped ${suppressed} thinking-token frame(s) from the console stream\n`);
+      writeSync(
+        2,
+        `[afk] dropped ${suppressed} thinking-token frame(s) of ${observed} stream line(s)\n`,
+      );
     } catch {
       // A closed or redirected descriptor is not worth failing a completed run over.
     }
