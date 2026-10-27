@@ -1,6 +1,12 @@
 # 加购深链契约：health-flow → 商城
 
-Status: Draft — 待商城侧确认（本仓签发端尚未实现）
+Status: **Retired** (2026-10-27) — 加购已在商城内完成，不再需要从本平台深链回商城。
+This document is kept as history, not as a contract. See `docs/adr/0020-the-entry-serves-the-api-not-a-page.md`
+and health-flow ADR 0026: the patient UI lives inside the mall H5, so the product page the
+patient is already on is where adding to the cart happens. The health-flow endpoint this
+document specified (`POST /report/{id}/recommendations/{spu_id}/cart-link`) and its
+`report_not_ready` / `link_unavailable` reasons are retired with the old frontend
+(PRD kilbertert/Health-Flow#266).
 
 关联：health-flow #174（检测页商品展示，已交付）、genesis-evidence #159（闭环总规格）。
 本文件是**交付给商城侧的接口契约**，与 `docs/condition-to-mall-tag.md` 同类：

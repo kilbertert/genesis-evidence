@@ -1,7 +1,7 @@
 # 19. The patient portal gets a named entry; TLS terminates on the host's web server
 
 Date: 2026-10-20
-Status: Accepted
+Status: Partly superseded by 0020 (the entry now serves health-flow's API, not the patient page)
 
 ## Context
 
