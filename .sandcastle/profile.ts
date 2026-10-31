@@ -89,11 +89,29 @@ export function claudeProfile(
     },
     agent: claudeCode(process.env.AFK_MODEL ?? "claude-sonnet-4-6"),
     sandbox: docker({
-      // Use the same image name that `npx sandcastle docker build-image`
-      // produces (defaultImageName = sandcastle:<repo>). A hardcoded custom
-      // name here means rebuilds target a different tag and the sandbox keeps
-      // running a stale image — the cause of repeated false BLOCKEDs.
-      imageName: process.env.AFK_IMAGE ?? "sandcastle:genesis-evidence-governance",
+      // The image comes from GHCR, not from the local Docker daemon.
+      //
+      // Why this is not `sandcastle:<repo>` any more: that name is satisfied
+      // only by a `docker build` someone remembered to run on THIS host. Nothing
+      // re-creates it — not the weekly cleanup, not the upgrade script (which
+      // prints the rebuild command as prose and never checks it), and not the
+      // Sandcastle library, whose `checkImageUid` calls `docker image inspect`
+      // and reports "not found" rather than pulling. The image disappeared once
+      // and this workflow went red for two weeks before anyone looked.
+      //
+      // A published image is content-addressed and re-pulled on every job, so
+      // "the image is gone" stops being a state this host can be in.
+      //
+      // `containerUid` is explicit for the same class of reason: the published
+      // image bakes one UID, while `docker()` defaults the expected UID to
+      // `process.getuid()`. They agree on this host today (both 1000) and that
+      // would be coincidence, not a guarantee — a mismatch is rejected before
+      // the container starts.
+      imageName:
+        process.env.AFK_IMAGE ??
+        "ghcr.io/kilbertert/genesis-evidence-sandbox:latest",
+      containerUid: 1000,
+      containerGid: 1000,
       env: {
         ...safeEnv,
         // AFK_PROFILE lives in the sandbox env (not the agent env) so that

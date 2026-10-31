@@ -1,0 +1,100 @@
+name: Sandbox image
+
+# Publish the Sandcastle sandbox image this repository's AFK jobs run in.
+#
+# Why a workflow and not a local `docker build`
+# ---------------------------------------------
+# The image used to live only in the development host's Docker daemon, satisfied
+# by a `docker build` someone remembered to run. Nothing re-created it: the
+# weekly cleanup does not touch images, `upgrade-afk.sh` prints the rebuild
+# command as prose rather than checking it, and Sandcastle's own `checkImageUid`
+# runs `docker image inspect` and reports "not found" instead of pulling. The
+# image went missing and `architecture-review` failed every weekday for two weeks;
+# the failure surfaced as `Image 'sandcastle:...' not found locally` several steps
+# into a job, which reads as a runner or code problem.
+#
+# A published image is content-addressed and re-pulled per job, so "the image is
+# gone" stops being a state this host can reach.
+#
+# The UID is baked in and fixed at 1000 on purpose. `docker()` in `.sandcastle/
+# profile.ts` passes `containerUid: 1000` to match; a published image cannot be
+# rebuilt per host, so the expected UID has to be as fixed as the image is.
+#
+# Public package, so consumers pull it unauthenticated. Nothing secret is baked
+# in — credentials are mounted at run time (see the note in profile.ts).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".sandcastle/Dockerfile"
+      - ".github/workflows/sandbox-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sandbox-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Lowercase on purpose: GHCR requires it and `github.repository` carries the
+  # owner's original casing.
+  IMAGE: ghcr.io/kilbertert/genesis-evidence-sandbox
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .sandcastle
+          push: true
+          # Both tags, and both matter:
+          #   `<dockerfile-sha>` is what makes "which Dockerfile produced the
+          #   `latest` I just pulled?" answerable without trusting a timestamp.
+          #   `latest` is the one `profile.ts` names, because a consumer should
+          #   not have to know this repository's commit graph to start a sandbox.
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ hashFiles('.sandcastle/Dockerfile') }}
+          build-args: |
+            AGENT_UID=1000
+            AGENT_GID=1000
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=AFK sandbox image for ${{ github.repository }}
+          cache-from: type=gha,scope=sandbox-image
+          cache-to: type=gha,mode=max,scope=sandbox-image
+
+      - name: Verify the published image is usable
+        # A green push only says the registry accepted the layers. This asserts
+        # the two properties `.sandcastle/profile.ts` depends on, so a regression
+        # in the Dockerfile fails here rather than in a review job days later.
+        run: |
+          set -euo pipefail
+          digest_tag="${{ env.IMAGE }}:${{ hashFiles('.sandcastle/Dockerfile') }}"
+          docker pull "$digest_tag"
+
+          uid=$(docker run --rm --entrypoint id "$digest_tag" -u)
+          test "$uid" = "1000" || {
+            echo "image User is '$uid', but profile.ts passes containerUid: 1000" >&2
+            exit 1
+          }
+
+          docker run --rm --entrypoint bash "$digest_tag" -lc 'command -v claude && command -v gh && command -v uv'
