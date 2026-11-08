@@ -162,3 +162,50 @@ def test_registry_metrics_keep_their_historical_matching() -> None:
     assert matches("fasting_glucose", "Fasting glucose")
     # `urate` is a registry synonym only for uric_acid.
     assert matches("uric_acid", "urate")
+
+
+def test_registry_metrics_obey_the_same_longest_match_rule() -> None:
+    """#355: a registry metric must not claim a longer metric's text either.
+
+    `_metric_outcome_matches` applied longest-match-wins only on the derived
+    branch; the registry branch was a bare substring test, so `calcium` claimed
+    `Albumin-corrected calcium` and `_profile_scopes` returned two scopes — the
+    wrong one publishes a card served to a patient the evidence never measured.
+    Asserted through `_profile_scopes`, because the double-group in
+    `list_profile_candidates` is what makes the wrong card possible.
+    """
+
+    def scopes(condition_code: str, outcome: str) -> dict[str, str]:
+        picots = {
+            "population": "Adults",
+            "intervention_or_exposure": "sodium supplementation",
+            "outcomes": outcome,
+            "timing": "12 weeks",
+        }
+        dimensions = {
+            "population": "Adults",
+            "ingredient_name": "sodium",
+            "ingredient_form": "",
+            "dose": "",
+            "outcome": outcome,
+            "timepoint": "12 weeks",
+        }
+        return RESOLVER.profile_scopes(picots, condition_code, dimensions)
+
+    assert scopes("COND_ELECTROLYTE_DISTURBANCE", "Albumin-corrected calcium") == {
+        "metric:corrected_calcium": "校正钙"
+    }, "calcium must not claim the corrected-calcium text"
+    assert scopes("COND_MALNUTRITION_RISK", "Serum prealbumin") == {
+        "metric:prealbumin": "前白蛋白"
+    }, "albumin must not claim the prealbumin text"
+    assert scopes("COND_DYSLIPIDEMIA", "非高密度脂蛋白胆固醇") == {
+        "metric:non_hdl_c": "非高密度脂蛋白胆固醇"
+    }, "hdl_c must not claim the non-HDL text in its Chinese spelling"
+    assert scopes("COND_ANEMIA_PATTERN", "转铁蛋白饱和度") == {
+        "metric:tsat": "转铁蛋白饱和度"
+    }, "ferritin must not claim the transferrin-saturation text"
+
+    # Own-metric text still resolves: a calcium result earns metric:calcium.
+    assert scopes("COND_ELECTROLYTE_DISTURBANCE", "Serum calcium") == {
+        "metric:calcium": "钙"
+    }
