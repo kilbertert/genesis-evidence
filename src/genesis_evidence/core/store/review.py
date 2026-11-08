@@ -776,15 +776,14 @@ class ReviewStore:
                     raise ValueError(
                         "patient-visible context cards require low, moderate, or high certainty"
                     )
-                connection.execute(
+                superseded = connection.execute(
                     f"""
-                    UPDATE knowledge_cards SET status = 'stale'
-                    WHERE condition_code = ? AND status IN ({_in(len(PUBLISHED_STATUSES))})
-                        AND id <> ?
-                        AND evidence_profile_id IN (
-                            SELECT id FROM evidence_profiles
-                            WHERE scope_key = ? AND component_token IN (?, '')
-                        )
+                    SELECT kc.id, kc.status FROM knowledge_cards kc
+                    JOIN evidence_profiles ep ON ep.id = kc.evidence_profile_id
+                    WHERE kc.condition_code = ?
+                        AND kc.status IN ({_in(len(PUBLISHED_STATUSES))})
+                        AND kc.id <> ?
+                        AND ep.scope_key = ? AND ep.component_token IN (?, '')
                     """,
                     (
                         card["condition_code"],
@@ -793,7 +792,32 @@ class ReviewStore:
                         card["scope_key"],
                         str(card["component_token"] or ""),
                     ),
-                )
+                ).fetchall()
+                if superseded:
+                    connection.execute(
+                        "UPDATE knowledge_cards SET status = 'stale' "
+                        "WHERE id IN ({})".format(
+                            _placeholders(tuple(str(row["id"]) for row in superseded))
+                        ),
+                        tuple(str(row["id"]) for row in superseded),
+                    )
+                    # The same replacement the draft-time supersession above
+                    # records: one audit row per retired card, or "why is this
+                    # card stale and who replaced it" has no answer anywhere.
+                    for predecessor in superseded:
+                        self._audit(
+                            connection,
+                            "knowledge_card",
+                            str(predecessor["id"]),
+                            "card_superseded",
+                            reviewer,
+                            {
+                                "from_status": predecessor["status"],
+                                "to_status": "stale",
+                                "replacement_card_id": card_id,
+                                "scope_key": card["scope_key"],
+                            },
+                        )
             connection.execute(
                 """
                 UPDATE knowledge_cards SET status = ?, reviewer = ?, reviewed_at = ?,
@@ -802,13 +826,21 @@ class ReviewStore:
                 """,
                 (target, reviewer, _now(), target, _now(), card_id),
             )
+            detail: dict[str, object] = {
+                "from_status": card["status"],
+                "to_status": target,
+            }
+            if target == "published":
+                detail["superseded_card_ids"] = [
+                    str(row["id"]) for row in superseded
+                ]
             self._audit(
                 connection,
                 "knowledge_card",
                 card_id,
                 f"card_{target}",
                 reviewer,
-                {"from_status": card["status"], "to_status": target},
+                detail,
             )
 
     def list_published_cards(self, condition_code: str) -> list[dict[str, object]]:

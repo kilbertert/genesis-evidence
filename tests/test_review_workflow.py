@@ -3384,3 +3384,92 @@ def test_a_paper_whose_only_collection_is_running_is_pending_not_rejected(tmp_pa
         ).fetchone()
     assert admission["status"] != "rejected", "a pending ledger must not reject the paper"
     assert claim["status"] == "candidate", "claims survive for the next review round"
+def test_publishing_a_card_audits_every_card_it_retires(tmp_path, monkeypatch) -> None:
+    """#348: publishing retires the card it replaces — and must say so.
+
+    `transition_card` used to mark the replaced published cards `stale` with no
+    audit row at all: no actor, no reason, no replacement link — while the
+    draft-time supersession path writes one `card_superseded` event per
+    predecessor. "为什么这张卡变 stale、被谁替换"在审计表里无处可查，README
+    的「审计即证据」被单向违背。
+    """
+
+    database = Database(tmp_path / "evidence.sqlite3")
+    database.initialize()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_topics(
+                id, code, version, condition_code, status, review_question, picots_json,
+                eligible_study_designs_json, inclusion_criteria_json, exclusion_reasons_json,
+                required_search_streams_json, evidence_cutoff_date, created_by, created_at,
+                locked_by, locked_at
+            ) VALUES ('topic', 'lipid-scopes', '1', 'COND_DYSLIPIDEMIA', 'locked',
+                'Test question', '{}', '[]', '[]', '[]', '[]', '2026-08-12', 'reviewer',
+                '2026-08-12T00:00:00Z', 'reviewer', '2026-08-12T00:00:00Z')
+            """
+        )
+        for profile_id, scope_key, version in (
+            ("profile-old", "metric:ldl_c", "1.0.0"),
+            ("profile-other", "metric:hdl_c", "1.0.1"),
+            ("profile-new", "metric:ldl_c", "1.0.2"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO evidence_profiles(
+                    id, topic_id, condition_code, scope_key, version,
+                    ingredient_name, ingredient_form,
+                    population, baseline_nutrient_status, dose, comparator, outcome, timepoint,
+                    estimate_target, evidence_body_complete, certainty, certainty_rationale,
+                    evidence_cutoff_date, reviewer, reviewed_at, created_at
+                ) VALUES (?, 'topic', 'COND_DYSLIPIDEMIA', ?, ?,
+                    'Dietary fat', 'As reported',
+                    'Adults', 'Mixed', 'As reported', 'Comparator', 'Lipid outcome',
+                    'Follow-up', 'Target', 1, 'moderate', 'Test profile', '2026-08-12',
+                    'reviewer', '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+                """,
+                (profile_id, scope_key, version),
+            )
+        for card_id, profile_id, status, version in (
+            ("card-old", "profile-old", "published", "1.0.0"),
+            ("card-other", "profile-other", "published", "1.0.1"),
+            ("card-new", "profile-new", "approved", "1.0.2"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO knowledge_cards(
+                    id, condition_code, version, status, grade, evidence_profile_id, reviewer,
+                    reviewed_at, published_at, patient_visible_body, created_at
+                ) VALUES (?, 'COND_DYSLIPIDEMIA', ?, ?, 'moderate', ?, 'reviewer',
+                    '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z', 'Test card',
+                    '2026-08-12T00:00:00Z')
+                """,
+                (card_id, version, status, profile_id),
+            )
+    monkeypatch.setattr(ReviewStore, "_require_publishable", lambda *_: None)
+
+    ReviewStore(database).transition_card("card-new", reviewer="reviewer-2", target="published")
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT entity_id, action, actor, detail_json FROM audit_events ORDER BY id"
+        ).fetchall()
+    events = [
+        (row["entity_id"], row["action"], row["actor"], json.loads(row["detail_json"]))
+        for row in rows
+    ]
+    superseded = [e for e in events if e[1] == "card_superseded"]
+    assert len(superseded) == 1, "exactly the retired card gets a superseded row"
+    entity_id, _, actor, detail = superseded[0]
+    assert entity_id == "card-old"
+    assert actor == "reviewer-2"
+    assert detail == {
+        "from_status": "published",
+        "to_status": "stale",
+        "replacement_card_id": "card-new",
+        "scope_key": "metric:ldl_c",
+    }
+    published = [e for e in events if e[1] == "card_published"]
+    assert published[0][3]["superseded_card_ids"] == ["card-old"], (
+        "the publish event names what it retired"
+    )
