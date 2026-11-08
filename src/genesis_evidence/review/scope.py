@@ -589,6 +589,68 @@ def _derived_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
     return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
 
 
+#: Short codes that can appear inside unrelated words ("ck" in "check") are
+#: matched on token boundaries only; the rest may match as substrings.
+_RISKY_ABBREVIATIONS = frozenset({"alt", "ast", "alp"})
+
+
+def _metric_match_spans(metric_code: str, value: str) -> list[tuple[int, int]]:
+    """Every span ``metric_code`` claims in ``value``, longest-first.
+
+    A derived metric claims its floor aliases under the token rules in
+    :func:`_derived_match_spans`. A registry metric claims its registry aliases
+    as substrings \u2014 plus the risky abbreviations as whole tokens only \u2014 the same
+    matching ``_metric_outcome_matches`` applies, expressed as spans so a longer
+    claim can suppress a shorter one.
+    """
+
+    if metric_code not in _PROFILE_OUTCOME_ALIASES:
+        return _derived_match_spans(metric_code, value)
+    compact = _compact_text(value)
+    token_spans = set(_ascii_token_spans(value))
+    spans: set[tuple[int, int]] = set()
+    for alias in _PROFILE_OUTCOME_ALIASES[metric_code]:
+        start = compact.find(alias)
+        while start >= 0:
+            end = start + len(alias)
+            if alias in _RISKY_ABBREVIATIONS:
+                if (start, end) in token_spans:
+                    spans.add((start, end))
+            else:
+                spans.add((start, end))
+            start = compact.find(alias, start + 1)
+    return sorted(spans, key=lambda span: span[1] - span[0], reverse=True)
+
+
+def _unclaimed_by_longer(
+    metric_code: str, spans: list[tuple[int, int]], value: str
+) -> bool:
+    """Whether any of ``spans`` survives the longest-match rule.
+
+    A candidate span is rejected when a **longer** span claimed by a
+    **different** catalog metric overlaps it \u2014 longest match wins, so
+    ``calcium`` cannot claim the text ``Albumin-corrected calcium`` that
+    ``corrected_calcium`` owns. The metric still matches when another
+    occurrence is unclaimed.
+    """
+
+    rivals = [
+        span
+        for other in METRIC_LABELS
+        if other != metric_code
+        for span in _metric_match_spans(other, value)
+    ]
+    for span in spans:
+        if not any(
+            (rival[1] - rival[0]) > (span[1] - span[0])
+            and rival[0] < span[1]
+            and span[0] < rival[1]
+            for rival in rivals
+        ):
+            return True
+    return False
+
+
 def _derived_alias_matches(metric_code: str, value: str) -> bool:
     """Match a floor alias, letting the **most specific** metric own the text.
 
@@ -604,21 +666,7 @@ def _derived_alias_matches(metric_code: str, value: str) -> bool:
     spans = _derived_match_spans(metric_code, value)
     if not spans:
         return False
-    rivals = [
-        (other, span)
-        for other in METRIC_LABELS
-        if other != metric_code and other not in _PROFILE_OUTCOME_ALIASES
-        for span in _derived_match_spans(other, value)
-    ]
-    for span in spans:
-        if not any(
-            (rival[1] - rival[0]) > (span[1] - span[0])
-            and rival[0] < span[1]
-            and span[0] < rival[1]
-            for _, rival in rivals
-        ):
-            return True
-    return False
+    return _unclaimed_by_longer(metric_code, spans, value)
 
 
 def _token_set(value: str) -> set[str]:
@@ -656,14 +704,19 @@ def _metric_outcome_matches(metric_code: str, value: str) -> bool:
         # longer metric's text (`ck` vs `CK-MB`, `urine_ph` vs `Urine phosphate`).
         return _derived_alias_matches(metric_code, value)
     aliases = _PROFILE_OUTCOME_ALIASES[metric_code]
-    # Short codes that can appear inside unrelated words ("ck" in "check") are matched
-    # on token boundaries only; the rest may match as substrings. Registry metrics
-    # keep their historical matching byte-for-byte.
-    risky_abbreviations = {"alt", "ast", "alp"}
-    if any(alias in compact for alias in aliases if alias not in risky_abbreviations):
+    # Registry metrics keep their historical alias matching, under the same
+    # longest-match-wins rule the derived branch uses — `albumin` may not claim
+    # the text `Serum prealbumin` that `prealbumin` owns, and the Chinese
+    # 非高密度脂蛋白胆固醇 spelling suppresses `hdl_c` the way the `nonhdl`
+    # guard above does the English one.
+    if any(
+        alias in compact for alias in aliases if alias not in _RISKY_ABBREVIATIONS
+    ) and _unclaimed_by_longer(
+        metric_code, _metric_match_spans(metric_code, value), value
+    ):
         return True
     tokens = _token_set(value)
-    if any(alias in tokens for alias in aliases if alias in risky_abbreviations):
+    if any(alias in tokens for alias in aliases if alias in _RISKY_ABBREVIATIONS):
         return True
     if metric_code == "systolic_blood_pressure":
         return "systolic" in compact and "bloodpressure" in compact
@@ -684,7 +737,20 @@ def _topic_outcome_components(value: str) -> tuple[str, ...]:
 def _metric_outcome_matches_text(metric_code: str, value: str) -> bool:
     """Match a metric in either a single or a compound reported outcome."""
 
-    return _metric_outcome_matches(metric_code, value) or any(
+    if _metric_outcome_matches(metric_code, value):
+        return True
+    spans = _metric_match_spans(metric_code, value)
+    if spans and not _unclaimed_by_longer(metric_code, spans, value):
+        # The metric claimed text in the full value and a longer metric took it
+        # all. Splitting the same text cannot resurrect the claim: a fragment
+        # does not fit the longer alias, so the suppressor disappears — the
+        # splitter breaks `转铁蛋白饱和度` on 和, and `铁蛋白` then matches the
+        # `转铁蛋白饱` fragment unsuppressed. A match refused another way — a
+        # domain guard on the whole value — still consults the components,
+        # whose own text is narrower ("creatinine" in "serum creatinine", not
+        # in "urine albumin-to-creatinine ratio").
+        return False
+    return any(
         _metric_outcome_matches(metric_code, component)
         for component in _topic_outcome_components(value)
     )
