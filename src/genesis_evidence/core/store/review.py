@@ -1171,6 +1171,7 @@ class ReviewStore:
                     f"""
                     SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
                         c.extraction_id,
+                        cr.corrected_text,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
                         r.study_id, r.population, r.baseline_nutrient_status, r.ingredient_name,
                         r.ingredient_form, r.dose, r.comparator, r.outcome, r.timepoint,

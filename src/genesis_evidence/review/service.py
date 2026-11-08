@@ -1339,26 +1339,119 @@ def _automatic_profile(
     return profile, patient_body, domains
 
 
+#: Phrasings that mean the result found nothing. Checked **before** the positive
+#: list: every one of them also contains a positive word (`not significantly`
+#: contains `significant`), so order is what makes a null read as a null.
+_NEGATIVE_INTERPRETATION_PHRASES: tuple[str, ...] = (
+    "did not significantly",
+    "not significantly",
+    "no significant",
+    "insignificant",
+    "no association",
+    "not associated",
+    "unassociated",
+    "no correlation",
+    "not correlated",
+    "null effect",
+    "null result",
+    "did not",
+    "does not",
+    "do not",
+    "had no",
+    "showed no",
+    "no measurable",
+    "no effect",
+    "no difference",
+    "no reduction",
+    "not reduced",
+    "no improvement",
+    "not improved",
+    "no increase",
+    "not increased",
+    "no decrease",
+    "not decreased",
+    "no benefit",
+    "not higher",
+    "not lower",
+    "not elevated",
+    "failed to",
+    "without effect",
+    "without benefit",
+    "inconclusive",
+    "futile",
+    "无显著",
+    "未见显著",
+    "不显著",
+    "无作用",
+    "无效",
+    "无差异",
+    "未见差异",
+    "未见改善",
+    "无改善",
+    "未改善",
+    "未降低",
+    "无降低",
+    "未增加",
+    "无增加",
+    "未减少",
+    "无减少",
+    "无相关",
+    "不相关",
+    "无关联",
+    "未见关联",
+)
+
+#: Phrasings that establish a positive direction. `supports` must be earned by
+#: one of these — a claim whose text establishes nothing is `uncertain`, never
+#: `supports`, because `supports` is the verdict that upgrades GRADE and words
+#: the patient-facing "结果整体支持" sentence.
+_POSITIVE_INTERPRETATION_PHRASES: tuple[str, ...] = (
+    "significant",
+    "associated",
+    "correlated",
+    "increased",
+    "decreased",
+    "reduced",
+    "improved",
+    "elevated",
+    "higher",
+    "lower",
+    "risk of",
+    "protective",
+    "benefit",
+    "显著",
+    "相关",
+    "关联",
+    "升高",
+    "降低",
+    "减少",
+    "改善",
+    "增加",
+    "有效",
+)
+
+
 def _interpretation(claim: dict[str, object]) -> str:
+    source = str(claim.get("corrected_text") or claim.get("candidate_text") or "")
     text = " ".join(
-        str(claim.get(field) or "")
-        for field in ("candidate_text", "effect_estimate", "statistical_details")
-    ).casefold()
-    if any(
-        phrase in text
-        for phrase in (
-            "did not significantly",
-            "not significantly",
-            "no significant",
-            "no association",
-            "not associated",
-            "null effect",
-            "无显著",
-            "未见显著",
+        part
+        for part in (
+            source,
+            str(claim.get("effect_estimate") or ""),
+            str(claim.get("statistical_details") or ""),
         )
-    ):
+        if part
+    ).casefold()
+    if any(phrase in text for phrase in _NEGATIVE_INTERPRETATION_PHRASES):
         return "does_not_support"
-    return "mixed" if "mixed" in text or "不一致" in text else "supports"
+    if "mixed" in text or "不一致" in text:
+        return "mixed"
+    if any(phrase in text for phrase in _POSITIVE_INTERPRETATION_PHRASES):
+        return "supports"
+    # No direction established: abstain. `uncertain` already drives `serious`
+    # inconsistency and the neutral conclusion — the fail-open `supports`
+    # fallback published null trials as affirming the relationship.
+    return "uncertain"
 
 
 def _not_reported(value: str) -> bool:
