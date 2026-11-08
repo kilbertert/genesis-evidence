@@ -3327,3 +3327,60 @@ def test_screening_suggestion_is_never_emitted_for_a_profiled_paper(tmp_path) ->
     assert collection["screening_suggestion"] is None, (
         "screening is immutable for a paper a profile already cites"
     )
+
+
+def test_a_paper_whose_only_collection_is_running_is_pending_not_rejected(tmp_path) -> None:
+    """#353 follow-up: suppressing the suggestion must not fall through to reject.
+
+    Before the suggestion gate existed, a suggestion for a running run made the
+    store raise inside `_apply_screening_suggestions` — a crash that was
+    accidentally protective, because auto_review never reached the
+    `not included → reject_paper` fall-through. With the suggestion correctly
+    suppressed, a paper whose only collection is still collecting must be
+    reported as pending governance, not persisted as an exclusion with its
+    candidate claims rejected.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id, _ = _review_case(database, screened=False)
+    paper_store = PaperStore(database)
+    topic_id = paper_store.create_topic(
+        code=f"vitamin-d-frailty-{uuid.uuid4()}",
+        version="1",
+        condition_code="COND_VITAMIN_D_DEFICIENCY",
+        review_question="Is vitamin D status associated with frailty in older adults?",
+        picots={
+            "population": "Adults aged 60 years and older",
+            "intervention_or_exposure": "Measured serum 25(OH)D",
+            "comparator": "Higher versus lower status",
+            "outcomes": "Frailty prevalence",
+            "timing": "Baseline",
+            "setting": "Any human setting",
+        },
+        eligible_study_designs=("cohort_study",),
+        inclusion_criteria=("Older adults with measured serum 25(OH)D",),
+        exclusion_reasons=("wrong_population", "wrong_exposure", "wrong_outcome"),
+        required_search_streams=("effect",),
+        evidence_cutoff_date="2026-08-12",
+        reviewer="reviewer-1",
+    )
+    paper_store.lock_topic(topic_id, reviewer="reviewer-1")
+    run_id = paper_store.start_collection(
+        topic_id=topic_id, source="test", query="vitamin D AND frailty"
+    )
+    paper_store.add_to_collection(run_id, paper_id, position=1)
+    # Deliberately unfinished: the run is still collecting.
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "attention_required"
+    assert result["stage"] == "topic_governance"
+    with database.connect() as connection:
+        admission = connection.execute(
+            "SELECT status FROM paper_admissions WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+        claim = connection.execute(
+            "SELECT status FROM claims WHERE paper_id = ?", (paper_id,)
+        ).fetchone()
+    assert admission["status"] != "rejected", "a pending ledger must not reject the paper"
+    assert claim["status"] == "candidate", "claims survive for the next review round"

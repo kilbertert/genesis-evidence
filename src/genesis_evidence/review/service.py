@@ -336,6 +336,23 @@ class EvidenceReviewService:
             for collection in item["collections"]
             if collection.get("full_text_decision") == "included"
         ]
+        if not included and any(
+            collection["run_status"] != "completed"
+            or collection["topic_status"] != "locked"
+            for collection in item["collections"]
+        ):
+            # The suggestion gate only suppresses suggestions the store would
+            # refuse; the ledger itself can still reach a terminal screening
+            # once the run completes and the topic locks. Rejecting here would
+            # turn "not yet screenable" into a persisted exclusion.
+            return self._automation_attention(
+                paper_id,
+                actor=actor,
+                requested_by=requester,
+                stage="topic_governance",
+                reason="paper is not linked to a completed collection for a locked topic",
+                trace=trace,
+            )
         if not included:
             self.reject_paper(paper_id, reviewer="ai:screening-ledger")
             result = {"status": "completed", "decision": "excluded", "cards": []}
