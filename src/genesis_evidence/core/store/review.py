@@ -56,6 +56,7 @@ from .screening import (
     excluded_any_stage_sql,
     has_structured_results,
     included_sql,
+    paper_used_by_profile_sql,
     screening_conflict_sql,
     structured_results_sql,
     terminal_exclusion,
@@ -1033,7 +1034,18 @@ class ReviewStore:
             if admission
             else None
         )
-        collection_items = [_collection_dict(row, extraction_data or {}) for row in collections]
+        collection_items = [
+            _collection_dict(
+                row,
+                extraction_data or {},
+                used_by_profile=connection.execute(
+                    paper_used_by_profile_sql(),
+                    (row["topic_id"], paper_id),
+                ).fetchone()
+                is not None,
+            )
+            for row in collections
+        ]
         claim_items = [
             _claim_dict(
                 row,
@@ -1806,7 +1818,9 @@ def _require_complete_topic(connection, topic_id: str, condition_code: str):
 
 
 
-def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
+def _collection_dict(
+    row, extraction: dict[str, object], *, used_by_profile: bool = False
+) -> dict[str, object]:
     item = {
         **{
             key: value
@@ -1823,6 +1837,18 @@ def _collection_dict(row, extraction: dict[str, object]) -> dict[str, object]:
         "exclusion_reasons": json.loads(row["exclusion_reasons_json"]),
     }
     design = str(extraction.get("study_design") or "uncertain")
+    if (
+        item["run_status"] != "completed"
+        or item["topic_status"] != "locked"
+        or used_by_profile
+    ):
+        # ADR 0015 decision 2: never suggest a decision the store cannot accept.
+        # `screen_collection_paper` refuses a run that is still collecting, a
+        # topic that is not locked, and a paper already inside a profile — the
+        # same rows this function used to annotate, producing suggestions that
+        # could only raise.
+        item["screening_suggestion"] = None
+        return item
     if not item["title_abstract_decision"]:
         item["screening_suggestion"] = {
             "stage": "title_abstract",
