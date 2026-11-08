@@ -628,6 +628,10 @@ class EvidenceReviewService:
             (str(card["condition_code"]), str(card["version"])): card
             for card in self.store.list_cards()
         }
+        # Versions this loop has handed out, per condition. `existing` holds
+        # only real card dicts; versions allocated below are not cards, so they
+        # live in their own ledger instead of as sentinel values here.
+        allocated: dict[str, set[str]] = {}
         results: list[dict[str, object]] = []
         for candidate in self.store.list_profile_candidates(paper_id):
             if candidate["status"] != "ready":
@@ -680,7 +684,8 @@ class EvidenceReviewService:
                             value
                             for condition, value in existing
                             if condition == str(candidate["condition_code"])
-                        },
+                        }
+                        | allocated.get(str(candidate["condition_code"]), set()),
                     )
                 key = (str(candidate["condition_code"]), version)
                 # Record the version this loop just decided on. Sibling groups
@@ -688,7 +693,7 @@ class EvidenceReviewService:
                 # must see the previous one's choice: the snapshot above is taken
                 # once, before the loop, so without this two groups can be handed
                 # the same version and collide on UNIQUE(condition_code, version).
-                existing[key] = {"id": "", "status": "draft", "version": version}
+                allocated.setdefault(str(candidate["condition_code"]), set()).add(version)
                 card_id = str(card["id"]) if card else ""
                 card_status = str(card["status"]) if card else "draft"
                 try:

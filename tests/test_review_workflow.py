@@ -3173,3 +3173,76 @@ def test_backlog_screens_an_undecided_paper_before_retrieving(tmp_path, monkeypa
             (paper_id,),
         ).fetchone()
     assert tuple(row) == ("included", "ai:screening-ledger")
+
+
+def _profile_group(component_token: str) -> dict[str, object]:
+    """One ready component group in the shape `list_profile_candidates` returns."""
+
+    return {
+        "scope_key": "metric:vitamin_d",
+        "component_token": component_token,
+        "claims": [
+            {
+                "id": str(uuid.uuid4()),
+                "paper_id": str(uuid.uuid4()),
+                "study_id": str(uuid.uuid4()),
+                "corrected_study_design": "cohort_study",
+                "risk_of_bias": {"overall": "low"},
+                "effect_estimate": "RR 0.80, 95% CI 0.70 to 0.92",
+                "statistical_details": "p=0.001",
+                "candidate_text": "Lower vitamin D was associated with frailty.",
+            }
+        ],
+        "dimensions": {
+            "population": "Adults aged 60 years and older",
+            "ingredient_name": "Vitamin D",
+            "ingredient_form": "25(OH)D status",
+            "dose": "any dose",
+            "comparator": "Higher versus lower status",
+            "outcome": "Frailty prevalence",
+            "timepoint": "Baseline",
+        },
+    }
+
+
+def test_a_failed_component_body_does_not_abort_its_siblings(tmp_path, monkeypatch) -> None:
+    """#354: a body refused by the card gate must not poison the next body's lookup.
+
+    `_build_ready_profiles` recorded each allocated version inside the card
+    index as a key-only sentinel. One `create_card` refusal left it there, and
+    the next body's sibling lookup subscripted it — a `KeyError` that aborted
+    the whole paper's review. The allocated-version ledger is now separate, so
+    a refused body can only cost itself.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id = _paper_without_extraction(database)
+    candidate = {
+        "id": str(uuid.uuid4()),
+        "status": "ready",
+        "reason": "",
+        "condition_code": "COND_VITAMIN_D_DEFICIENCY",
+        "condition_name": "维生素 D 缺乏",
+        "version": "1",
+        "evidence_cutoff_date": "2026-08-12",
+        "picots": {},
+        "groups": [_profile_group("soybean_oil"), _profile_group("vitamin_d")],
+    }
+    monkeypatch.setattr(
+        service.store,
+        "list_profile_candidates",
+        lambda _paper_id: [candidate],
+    )
+
+    def refuse(**_kwargs):
+        raise ValueError("gate refusal")
+
+    monkeypatch.setattr(service, "create_card_draft", refuse)
+
+    results = service._build_ready_profiles(paper_id, actor="ai:test", context={})
+
+    assert [result["status"] for result in results] == [
+        "attention_required",
+        "attention_required",
+    ], "the second body must reach the card gate, not die on the first's sentinel"
+    assert all(result["reason"] == "gate refusal" for result in results)
