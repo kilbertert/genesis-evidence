@@ -3487,24 +3487,54 @@ def test_interpretation_reads_direction_not_an_eight_phrase_whitelist() -> None:
         "Vitamin D supplementation did not reduce falls.",
         "There was no difference between groups.",
         "Supplementation failed to improve grip strength.",
-        "Results were inconclusive.",
         "The effect estimate was a null result.",
         "干预未降低衰弱发生率。",
         "两组无差异。",
     ):
         assert _interpretation({"candidate_text": null_text}) == "does_not_support", null_text
 
-    # No direction established: abstain, never affirm.
+    # No direction established: abstain, never affirm. `inconclusive` belongs
+    # here — it is the absence of a verdict, not evidence against.
     assert _interpretation({"candidate_text": ""}) == "uncertain"
     assert _interpretation({}) == "uncertain"
+    assert _interpretation({"candidate_text": "Results were inconclusive."}) == "uncertain"
     assert _interpretation(
         {"candidate_text": "Participants were followed for two years."}
     ) == "uncertain"
 
-    # Positive direction still earns supports.
+    # Positive direction still earns supports — including the noun forms a
+    # result statement actually uses ("a reduction in falls").
     assert (
         _interpretation({"candidate_text": "Lower vitamin D was associated with frailty."})
         == "supports"
+    )
+    for positive_text in (
+        "Supplementation produced a reduction in falls.",
+        "A significant improvement was observed.",
+        "An association between vitamin D and frailty was found.",
+    ):
+        assert _interpretation({"candidate_text": positive_text}) == "supports", positive_text
+
+    # A null phrase about a different comparison cannot veto the claim: the
+    # claim text decides first; estimate fields only speak when it is silent.
+    assert (
+        _interpretation(
+            {
+                "corrected_text": "Supplementation significantly improved grip strength.",
+                "statistical_details": "No difference in baseline age between groups; p=0.01.",
+            }
+        )
+        == "supports"
+    )
+    # Silent claim, null estimate: the details still drive does_not_support.
+    assert (
+        _interpretation(
+            {
+                "candidate_text": "Participants were followed for two years.",
+                "effect_estimate": "No significant difference between groups (HR 1.01).",
+            }
+        )
+        == "does_not_support"
     )
 
 

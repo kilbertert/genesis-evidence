@@ -1377,7 +1377,6 @@ _NEGATIVE_INTERPRETATION_PHRASES: tuple[str, ...] = (
     "failed to",
     "without effect",
     "without benefit",
-    "inconclusive",
     "futile",
     "无显著",
     "未见显著",
@@ -1409,10 +1408,16 @@ _POSITIVE_INTERPRETATION_PHRASES: tuple[str, ...] = (
     "significant",
     "associated",
     "correlated",
+    "association",
+    "correlation",
     "increased",
     "decreased",
     "reduced",
     "improved",
+    "increase",
+    "decrease",
+    "reduction",
+    "improvement",
     "elevated",
     "higher",
     "lower",
@@ -1432,26 +1437,37 @@ _POSITIVE_INTERPRETATION_PHRASES: tuple[str, ...] = (
 
 
 def _interpretation(claim: dict[str, object]) -> str:
+    # The claim text is the outcome statement and decides first; the estimate
+    # fields only speak when it is silent. Classifying the joined blob let a
+    # null phrase about a *different* comparison ("no difference in baseline
+    # age") veto a positive claim.
     source = str(claim.get("corrected_text") or claim.get("candidate_text") or "")
-    text = " ".join(
+    details = " ".join(
         part
         for part in (
-            source,
             str(claim.get("effect_estimate") or ""),
             str(claim.get("statistical_details") or ""),
         )
         if part
-    ).casefold()
+    )
+    return (
+        _direction(source.casefold())
+        or _direction(details.casefold())
+        # No direction established: abstain. `uncertain` already drives `serious`
+        # inconsistency and the neutral conclusion — the fail-open `supports`
+        # fallback published null trials as affirming the relationship.
+        or "uncertain"
+    )
+
+
+def _direction(text: str) -> str | None:
     if any(phrase in text for phrase in _NEGATIVE_INTERPRETATION_PHRASES):
         return "does_not_support"
     if "mixed" in text or "不一致" in text:
         return "mixed"
     if any(phrase in text for phrase in _POSITIVE_INTERPRETATION_PHRASES):
         return "supports"
-    # No direction established: abstain. `uncertain` already drives `serious`
-    # inconsistency and the neutral conclusion — the fail-open `supports`
-    # fallback published null trials as affirming the relationship.
-    return "uncertain"
+    return None
 
 
 def _not_reported(value: str) -> bool:
