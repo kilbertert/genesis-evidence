@@ -3246,3 +3246,84 @@ def test_a_failed_component_body_does_not_abort_its_siblings(tmp_path, monkeypat
         "attention_required",
     ], "the second body must reach the card gate, not die on the first's sentinel"
     assert all(result["reason"] == "gate refusal" for result in results)
+def test_screening_suggestion_is_never_emitted_for_a_running_run(tmp_path) -> None:
+    """#353: a suggestion whose run is still collecting can only raise at the store.
+
+    `_collection_dict` annotated every undecided row, including rows in a run
+    that had not finished — the ordinary state during `collect()`. The store
+    refuses those, so the autonomous caller raised instead of skipping. The
+    suggester now suppresses them, per ADR 0015 decision 2.
+    """
+
+    database, _ = _service(tmp_path)
+    paper_id, _ = _review_case(database, screened=False)
+    topic_id, _ = _topic_without_decision(database, paper_id)
+    store = ReviewStore(database)
+
+    # Control: the completed run still offers the title/abstract suggestion.
+    suggestion = store.get_review_item(paper_id)["collections"][-1]["screening_suggestion"]
+    assert suggestion["stage"] == "title_abstract"
+
+    paper_store = PaperStore(database)
+    second_run = paper_store.start_collection(
+        topic_id=topic_id, source="test", query="sodium bone again"
+    )
+    paper_store.add_to_collection(second_run, paper_id, position=1)
+    # Deliberately unfinished: the state every collect() passes through.
+
+    item = store.get_review_item(paper_id)
+    running = next(c for c in item["collections"] if c["run_id"] == second_run)
+    assert running["screening_suggestion"] is None, (
+        "a suggestion for a running run can only fail at the store"
+    )
+
+
+def test_screening_suggestion_is_never_emitted_for_a_profiled_paper(tmp_path) -> None:
+    """#353: a paper already inside a profile cannot be re-screened.
+
+    `screen_collection_paper` refuses it outright; the suggester used to offer
+    a decision anyway, and `_apply_screening_suggestions` crashed on the refusal
+    instead of never having been offered one.
+    """
+
+    database, _ = _service(tmp_path)
+    paper_id, claim_id = _review_case(database, screened=False)
+    topic_id, _ = _topic_without_decision(database, paper_id)
+    store = ReviewStore(database)
+
+    suggestion = store.get_review_item(paper_id)["collections"][-1]["screening_suggestion"]
+    assert suggestion["stage"] == "title_abstract"
+
+    profile_id = str(uuid.uuid4())
+    with database.transaction() as connection:
+        result_id = connection.execute(
+            "SELECT result_id FROM claims WHERE id = ?", (claim_id,)
+        ).fetchone()["result_id"]
+        connection.execute(
+            """
+            INSERT INTO evidence_profiles(
+                id, topic_id, condition_code, version, ingredient_name,
+                ingredient_form, population, baseline_nutrient_status, dose,
+                comparator, outcome, timepoint, estimate_target,
+                evidence_body_complete, certainty, certainty_rationale,
+                evidence_cutoff_date, reviewer, reviewed_at, created_at
+            ) VALUES (?, ?, 'COND_VITAMIN_D_DEFICIENCY', '9.9.9', 'Vitamin D',
+                '25(OH)D status', 'Adults', '', 'any', 'Usual intake',
+                'Frailty prevalence', 'Baseline', 'target', 1, 'low',
+                'rationale', '2026-08-12', 'reviewer-1',
+                '2026-08-12T00:00:00Z', '2026-08-12T00:00:00Z')
+            """,
+            (profile_id, topic_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO evidence_profile_results(profile_id, result_id, interpretation)
+            VALUES (?, ?, 'supports')
+            """,
+            (profile_id, result_id),
+        )
+
+    collection = store.get_review_item(paper_id)["collections"][-1]
+    assert collection["screening_suggestion"] is None, (
+        "screening is immutable for a paper a profile already cites"
+    )
