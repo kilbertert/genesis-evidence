@@ -264,15 +264,16 @@ def test_the_adapter_rows_reach_the_rider_end_to_end() -> None:
 
 
 def test_a_normal_row_is_never_counted_as_unusable() -> None:
-    """`{within_reference_range, unknown_metric_code}` is not "2 items unusable"."""
+    """`{within_reference_range, unknown_metric_code}` is "1 item unusable", not 2."""
 
     rows = [{"reason": "within_reference_range"}, {"reason": UNKNOWN_METRIC}]
     summary = empty_summary(rows)
     assert summary != ALL_IN_RANGE_SUMMARY
-    # It reports what was not used, and the rider reports the unreadable ones — the
-    # normal row is not in either count.
+    # The summary counts what was not used — the unknown row alone — and the rider
+    # names it again as unreadable. The normal row is in neither count.
+    assert "1 项" in summary
+    assert "2 项" not in summary
     combined = with_rider(summary, rows)
-    assert "2 项" in combined
     assert combined.count("不在当前解读范围内") == 1
 
 
@@ -280,6 +281,14 @@ def test_the_empty_summaries_are_decided_by_class_not_by_set_equality() -> None:
     assert empty_summary([]) == NO_CARD_SUMMARY
     assert empty_summary([{"reason": "within_reference_range"}]) == ALL_IN_RANGE_SUMMARY
     assert empty_summary([{"reason": "confirmation_required"}]) == DEFERRED_SUMMARY
+    # A {NORMAL, DEFERRED} mix has nothing unusable: the confirmed rows were all
+    # in range, and "有 0 项无法参与匹配" is not a sentence anyone should ship.
+    assert (
+        empty_summary(
+            [{"reason": "within_reference_range"}, {"reason": "confirmation_required"}]
+        )
+        == ALL_IN_RANGE_SUMMARY
+    )
     assert empty_summary([{"reason": UNKNOWN_METRIC}]) == ""
     assert "2 项" in empty_summary([{"reason": "invalid_value"}] * 2)
     # A never-seen reason counts as unusable, and can never be called all-in-range.
