@@ -3473,3 +3473,72 @@ def test_publishing_a_card_audits_every_card_it_retires(tmp_path, monkeypatch) -
     assert published[0][3]["superseded_card_ids"] == ["card-old"], (
         "the publish event names what it retired"
     )
+def test_interpretation_reads_direction_not_an_eight_phrase_whitelist() -> None:
+    """#351: a null result must not publish as `supports`.
+
+    The old classifier returned `supports` whenever its eight literal phrases
+    missed — every phrasing of a null trial below fell through to the one
+    verdict that upgrades GRADE and tells the patient the evidence agrees.
+    """
+
+    from genesis_evidence.review.service import _interpretation
+
+    for null_text in (
+        "Vitamin D supplementation did not reduce falls.",
+        "There was no difference between groups.",
+        "Supplementation failed to improve grip strength.",
+        "Results were inconclusive.",
+        "The effect estimate was a null result.",
+        "干预未降低衰弱发生率。",
+        "两组无差异。",
+    ):
+        assert _interpretation({"candidate_text": null_text}) == "does_not_support", null_text
+
+    # No direction established: abstain, never affirm.
+    assert _interpretation({"candidate_text": ""}) == "uncertain"
+    assert _interpretation({}) == "uncertain"
+    assert _interpretation(
+        {"candidate_text": "Participants were followed for two years."}
+    ) == "uncertain"
+
+    # Positive direction still earns supports.
+    assert (
+        _interpretation({"candidate_text": "Lower vitamin D was associated with frailty."})
+        == "supports"
+    )
+
+
+def test_interpretation_prefers_the_reviewers_corrected_text(tmp_path) -> None:
+    """#351: the reviewed fact is `corrected_text`, not `candidate_text`.
+
+    `list_profile_candidates` now carries `cr.corrected_text`, and
+    `_interpretation` reads it in preference to the extracted claim — a
+    correction that states the null must not be outvoted by the extraction.
+    """
+
+    database, service = _service(tmp_path)
+    paper_id, claim_id = _review_case(database)
+    _admit(service, paper_id)
+    service.review_claim(
+        claim_id,
+        reviewer="reviewer-1",
+        review=_approved_review(),
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE claim_reviews SET corrected_text = ? WHERE claim_id = ?",
+            (
+                "Vitamin D supplementation had no measurable effect on frailty.",
+                claim_id,
+            ),
+        )
+    _complete_topic(database, paper_id)
+
+    result = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
+
+    assert result["status"] == "completed"
+    with database.connect() as connection:
+        interpretation = connection.execute(
+            "SELECT interpretation FROM evidence_profile_results"
+        ).fetchone()[0]
+    assert interpretation == "does_not_support"
