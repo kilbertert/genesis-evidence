@@ -1169,7 +1169,7 @@ class ReviewStore:
                     continue
                 rows = connection.execute(
                     f"""
-                    SELECT c.id, c.paper_id, c.candidate_text, c.candidate_claim_type,
+                    SELECT c.id, c.paper_id, c.result_id, c.candidate_text, c.candidate_claim_type,
                         c.extraction_id,
                         cr.corrected_text,
                         cr.corrected_study_design, cr.inference, cr.risk_of_bias_json,
@@ -1266,11 +1266,25 @@ class ReviewStore:
                 GROUP BY kc.id ORDER BY kc.created_at DESC, kc.id DESC
                 """
             ).fetchall()
+            profile_rows = connection.execute(
+                "SELECT profile_id, result_id, interpretation FROM evidence_profile_results"
+            ).fetchall()
+        interpretations_by_profile: dict[str, dict[str, str]] = {}
+        for profile_row in profile_rows:
+            interpretations_by_profile.setdefault(
+                str(profile_row["profile_id"]), {}
+            )[str(profile_row["result_id"])] = str(profile_row["interpretation"])
         cards = []
         for row in rows:
             card = dict(row)
             card["claim_ids"] = str(card["claim_ids"] or "").split(",") if card["claim_ids"] else []
             card["paper_ids"] = str(card["paper_ids"] or "").split(",") if card["paper_ids"] else []
+            # What the card concluded, keyed by result — the reuse match in the
+            # service compares this against the freshly computed interpretations,
+            # so a re-graded conclusion can never ride an old card's identity.
+            card["interpretations"] = interpretations_by_profile.get(
+                str(card["evidence_profile_id"] or ""), {}
+            )
             cards.append(card)
         return cards
 

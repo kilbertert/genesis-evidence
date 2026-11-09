@@ -675,10 +675,21 @@ class EvidenceReviewService:
                 # ADR 0007: identity for "is this the same body" is
                 # (scope, component). Without the component half, the calcium and
                 # vitamin-D groups of one scope would resolve to the same prior
-                # card and then collide on UNIQUE(condition_code, version).
+                # card and then collide on UNIQUE(condition_code, version). The
+                # match below also pins the stored interpretations and the
+                # patient-visible body: "the same body" means the same
+                # conclusion, not only the same claims — a re-graded or re-worded
+                # result replaces the card instead of riding its identity.
                 component_token = str(group.get("component_token") or "")
                 profile, patient_body, grade_domains = _automatic_profile(candidate, group)
                 claim_ids = [str(claim["id"]) for claim in group["claims"]]
+                # The stored interpretations are keyed by result_id
+                # (evidence_profile_results); translate the claim-keyed map into
+                # the stored shape so the reuse match compares like with like.
+                result_interpretations = {
+                    str(claim["result_id"]): str(profile.interpretations[str(claim["id"])])
+                    for claim in group["claims"]
+                }
                 card = next(
                     (
                         existing_card
@@ -688,6 +699,14 @@ class EvidenceReviewService:
                         and str(existing_card.get("component_token") or "") == component_token
                         and set(existing_card["claim_ids"]) == set(claim_ids)
                         and str(existing_card["grade"]) == profile.certainty
+                        and str(existing_card.get("patient_visible_body") or "") == patient_body
+                        and {
+                            str(result_id): str(interpretation)
+                            for result_id, interpretation in (
+                                existing_card.get("interpretations") or {}
+                            ).items()
+                        }
+                        == result_interpretations
                         and existing_card["status"] not in {"rejected", "stale"}
                     ),
                     None,

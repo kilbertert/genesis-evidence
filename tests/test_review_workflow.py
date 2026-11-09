@@ -20,6 +20,7 @@ from genesis_evidence.review.service import (
     EvidenceProfileInput,
     EvidenceReviewService,
     RiskOfBiasInput,
+    _automatic_profile,
     _next_profile_version,
     _source_evidence_fragments,
 )
@@ -1492,14 +1493,21 @@ def test_ai_review_is_idempotent_and_resumes_an_existing_draft(tmp_path) -> None
         topic_id = connection.execute(
             "SELECT id FROM evidence_topics ORDER BY created_at LIMIT 1"
         ).fetchone()[0]
+    # A resumable draft says what the pipeline itself would say — same claims,
+    # same interpretation, same generated copy. A draft with different copy is
+    # a different conclusion and is superseded instead of resumed (#367).
+    candidates = service.store.list_profile_candidates(paper_id)
+    profile, patient_body, _grade_domains = _automatic_profile(
+        candidates[0], candidates[0]["groups"][0]
+    )
     card_id = service.create_card_draft(
         topic_id=topic_id,
         condition_code="COND_VITAMIN_D_DEFICIENCY",
         version="1.0.0",
         claim_ids=[claim_id],
         reviewer="reviewer-1",
-        patient_body="维生素 D 状态与衰弱之间存在研究关联。",
-        profile=_profile(claim_id, certainty="very_low"),
+        patient_body=patient_body,
+        profile=profile,
     )
 
     first = service.auto_review_paper(paper_id, requested_by="authenticated-reviewer")
@@ -3185,6 +3193,7 @@ def _profile_group(component_token: str) -> dict[str, object]:
             {
                 "id": str(uuid.uuid4()),
                 "paper_id": str(uuid.uuid4()),
+                "result_id": str(uuid.uuid4()),
                 "study_id": str(uuid.uuid4()),
                 "corrected_study_design": "cohort_study",
                 "risk_of_bias": {"overall": "low"},
@@ -3572,3 +3581,102 @@ def test_interpretation_prefers_the_reviewers_corrected_text(tmp_path) -> None:
             "SELECT interpretation FROM evidence_profile_results"
         ).fetchone()[0]
     assert interpretation == "does_not_support"
+
+
+
+
+def test_an_interpretation_change_replaces_a_published_card(tmp_path) -> None:
+    """Reuse must see what a card says, not only what it cites.
+
+    The reuse identity used to stop at (topic, scope, component, claims,
+    grade): a corrected_text edit that flipped every claim's interpretation —
+    grade unchanged — still matched, and the published card kept serving its
+    old conclusion. The identity now also pins the stored interpretations and
+    the patient-visible body (#367).
+    """
+
+    database, service = _service(tmp_path)
+    first_paper, _ = _review_case(database, screened=False)
+    second_paper, _ = _review_case(database, screened=False)
+    with database.transaction() as connection:
+        for paper_id in (first_paper, second_paper):
+            extraction = json.loads(
+                connection.execute(
+                    "SELECT extraction_json FROM paper_extractions WHERE paper_id = ?",
+                    (paper_id,),
+                ).fetchone()[0]
+            )
+            extraction["study_design"] = "randomized_controlled_trial"
+            connection.execute(
+                "UPDATE paper_extractions SET extraction_json = ?, second_extraction_json = ? "
+                "WHERE paper_id = ?",
+                (json.dumps(extraction), json.dumps(extraction), paper_id),
+            )
+            connection.execute(
+                "UPDATE studies SET study_design = 'randomized_controlled_trial' "
+                "WHERE id IN (SELECT study_id FROM study_publications WHERE paper_id = ?)",
+                (paper_id,),
+            )
+            connection.execute(
+                "UPDATE claims SET candidate_study_design = 'randomized_controlled_trial' "
+                "WHERE paper_id = ?",
+                (paper_id,),
+            )
+            connection.execute(
+                "UPDATE results SET statistical_details = '95% CI 0.8 to 1.2' WHERE paper_id = ?",
+                (paper_id,),
+            )
+    _complete_topic(
+        database,
+        first_paper,
+        second_paper,
+        eligible_study_designs=("randomized_controlled_trial",),
+    )
+
+    service.auto_review_paper(first_paper, requested_by="authenticated-reviewer")
+    first = service.auto_review_paper(second_paper, requested_by="authenticated-reviewer")
+    old_card = first["cards"][0]["card_id"]
+    assert first["cards"][0]["status"] == "published"
+    assert first["cards"][0]["certainty"] == "moderate"
+    with database.connect() as connection:
+        stored = connection.execute(
+            "SELECT interpretation FROM evidence_profile_results ORDER BY result_id"
+        ).fetchall()
+    assert {row[0] for row in stored} == {"supports"}
+
+    # Both claims flip to a null read: synthesis stays a clean set so GRADE is
+    # unchanged — under the old identity the card still matched and kept the
+    # affirmative conclusion it published.
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE claim_reviews SET corrected_text = ? WHERE decision = 'approved'",
+            ("Vitamin D status was not significantly associated with frailty.",),
+        )
+
+    second = service.auto_review_paper(second_paper, requested_by="authenticated-reviewer")
+    replacement = second["cards"][0]
+    assert replacement["card_id"] != old_card, (
+        "same grade, same claims, different conclusion — must not reuse"
+    )
+    assert replacement["certainty"] == "moderate"
+    assert replacement["status"] == "published"
+    with database.connect() as connection:
+        statuses = dict(
+            connection.execute("SELECT id, status FROM knowledge_cards").fetchall()
+        )
+        superseded = connection.execute(
+            "SELECT entity_id, detail_json FROM audit_events "
+            "WHERE action = 'card_superseded'"
+        ).fetchall()
+    assert statuses[old_card] == "stale"
+    assert statuses[replacement["card_id"]] == "published"
+    assert any(
+        row["entity_id"] == old_card
+        and json.loads(row["detail_json"])["replacement_card_id"]
+        == replacement["card_id"]
+        for row in superseded
+    ), "the publish-time supersession audit names the replacement card"
+
+    # The new identity is stable: a further run reuses the replacement.
+    third = service.auto_review_paper(second_paper, requested_by="authenticated-reviewer")
+    assert third["cards"][0]["card_id"] == replacement["card_id"]
