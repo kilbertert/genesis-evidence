@@ -107,3 +107,45 @@ def test_europe_pmc_connector_emits_open_jats_candidate() -> None:
     assert candidate.access == SourceAccess.APPROVED_OPEN
     assert candidate.rights_status.value == "redistributable"
     assert candidate.url.endswith("/PMC123/fullTextXML")
+
+
+def test_request_budget_is_a_wall_clock_deadline_not_per_attempt() -> None:
+    """#270 follow-up: the integrity budget must cap the whole call.
+
+    httpx applies a scalar `timeout` per operation per attempt — retries and
+    backoff each got a fresh 60s under the first cut of the fix, so one bad
+    upstream could stall a paper for minutes. The budget now degrades a
+    deadline across attempts, waits, and retries.
+    """
+
+    import pytest
+
+    from genesis_evidence.literature.http import HttpRequestError
+
+    now = [0.0]
+    slept: list[float] = []
+
+    def fake_clock() -> float:
+        return now[0]
+
+    def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    client = HttpClient(
+        user_agent="test",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=10,
+        max_retry_wait_seconds=60.0,
+        sleep=fake_sleep,
+        clock=fake_clock,
+        rate_limiter=HostRateLimiter({}),
+    )
+
+    with pytest.raises(HttpRequestError, match="budget of 5.0s"):
+        client.request("GET", "https://example.test/", timeout_seconds=5.0)
+
+    assert now[0] <= 5.0, "retries and backoffs can never overshoot the budget"
