@@ -263,18 +263,31 @@ def test_the_adapter_rows_reach_the_rider_end_to_end() -> None:
     assert "1 项" in reply["summary"]
 
 
-def test_a_normal_row_is_never_counted_as_unusable() -> None:
-    """`{within_reference_range, unknown_metric_code}` is "1 item unusable", not 2."""
+def test_a_normal_row_plus_an_unreadable_one_is_all_in_range() -> None:
+    """`{within_reference_range, unknown_metric_code}` says nothing unusable.
+
+    The unreadable row is carried by the rider, so the summary's unusable count
+    must not count it a second time — "另有" promises a disjoint second group.
+    """
 
     rows = [{"reason": "within_reference_range"}, {"reason": UNKNOWN_METRIC}]
     summary = empty_summary(rows)
-    assert summary != ALL_IN_RANGE_SUMMARY
-    # The summary counts what was not used — the unknown row alone — and the rider
-    # names it again as unreadable. The normal row is in neither count.
-    assert "1 项" in summary
-    assert "2 项" not in summary
+    assert summary == ALL_IN_RANGE_SUMMARY
     combined = with_rider(summary, rows)
     assert combined.count("不在当前解读范围内") == 1
+    # Two sentences, two disjoint rows: unusable 0 + unreadable 1 covers both.
+    assert "无法参与匹配" not in combined
+
+
+def test_the_unusable_count_and_the_rider_count_never_overlap() -> None:
+    """A named-but-unusable row and an unreadable row are one each, not two."""
+
+    rows = [{"reason": "invalid_value"}, {"reason": UNKNOWN_METRIC}]
+    summary = empty_summary(rows)
+    assert "1 项" in summary
+    combined = with_rider(summary, rows)
+    assert combined.count("1 项") == 2  # one in the summary, one in the rider
+    assert "另有 1 项" in combined
 
 
 def test_the_empty_summaries_are_decided_by_class_not_by_set_equality() -> None:

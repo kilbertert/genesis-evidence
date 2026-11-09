@@ -197,14 +197,19 @@ def empty_summary(skipped: Iterable[Mapping[str, object]]) -> str:
     if reasons == {UNKNOWN_METRIC}:
         # Only unreadable rows: the rider names them, and this says nothing else.
         return ""
+    # Unreadable rows are excluded even though they are UNUSABLE: the rider
+    # already names them, and counting them here again reports the same row
+    # twice — "另有" promises the patient a disjoint second group.
     unusable = sum(
-        disposition_class(str(item.get("reason", ""))) == UNUSABLE for item in items
+        disposition_class(reason) == UNUSABLE and not is_unreadable(reason)
+        for reason in (str(item.get("reason", "")) for item in items)
     )
     if not unusable:
-        # Reachable only as a {NORMAL, DEFERRED} mix — anything else either
-        # matched a branch above or carries an UNUSABLE row. The confirmed
-        # rows were all in range, so that is the true sentence; the deferred
-        # rows were never applicable and claim no failure.
+        # Reachable as a {NORMAL, DEFERRED} mix or either of them mixed with
+        # UNKNOWN_METRIC — anything else either matched a branch above or
+        # carries a counted UNUSABLE row. The confirmed rows were all in range,
+        # so that is the true sentence; the deferred rows were never applicable
+        # and claim no failure, and the unreadable rows ride the rider.
         return ALL_IN_RANGE_SUMMARY
     # Count the class, not the list: a normal row reported as unusable is the
     # false-alarm half of the defect this module exists to remove.
@@ -272,12 +277,17 @@ def demo() -> None:
     assert empty_summary([]) == "当前没有发现可由已发布知识卡支持的异常指标。"
     assert empty_summary([{"reason": "within_reference_range"}]).startswith("已确认的指标均在")
     assert empty_summary([{"reason": UNKNOWN_METRIC}]) == ""
-    assert "1 项" in empty_summary(
+    assert empty_summary(
         [{"reason": "within_reference_range"}, {"reason": UNKNOWN_METRIC}]
-    ), "a mixed report counts only the rows it could not use"
-    assert "2 项" not in empty_summary(
-        [{"reason": "within_reference_range"}, {"reason": UNKNOWN_METRIC}]
-    ), "a normal row is never counted as unusable"
+    ).startswith("已确认的指标均在"), (
+        "a normal row plus an unreadable one is all-in-range: "
+        "the unreadable row belongs to the rider, not the unusable count"
+    )
+    # The two counters are disjoint: a named-but-unusable row stays in the
+    # summary while the unreadable one stays in the rider.
+    mixed = [{"reason": "invalid_value"}, {"reason": UNKNOWN_METRIC}]
+    assert "1 项" in empty_summary(mixed)
+    assert "另有 1 项" in with_rider(empty_summary(mixed), mixed)
     assert empty_summary([{"reason": "confirmation_required"}]).startswith("本次没有已确认")
     assert "2 项" in empty_summary([{"reason": "invalid_value"}, {"reason": "invalid_value"}])
     # The rider attaches on every branch and is empty when nothing is unreadable.
