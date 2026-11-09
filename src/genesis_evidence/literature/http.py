@@ -66,7 +66,11 @@ class HttpClient:
 
     DEFAULT_INTERVALS = {
         "doaj.org": 0.5,
-        "www.ebi.ac.uk": 0.1,
+        # ~3 req/s — Europe PMC's documented polite ceiling for unauthenticated
+        # REST. The previous 0.1s interval fired bursts an order of magnitude
+        # faster, in the same window where the upstream returned intermittent
+        # 503s (#270).
+        "www.ebi.ac.uk": 0.34,
         "api.crossref.org": 0.1,
         "api.core.ac.uk": 0.25,
     }
@@ -110,12 +114,18 @@ class HttpClient:
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> httpx.Response:
+        request_kwargs: dict[str, Any] = {"params": params, "headers": headers}
+        if timeout_seconds is not None:
+            # A caller that knows its upstream's tail overrides the client-wide
+            # default for this request only; unset keeps httpx's client config.
+            request_kwargs["timeout"] = timeout_seconds
         last_response: httpx.Response | None = None
         for attempt in range(self._max_retries + 1):
             self._rate_limiter.wait(url)
             try:
-                response = self._client.request(method, url, params=params, headers=headers)
+                response = self._client.request(method, url, **request_kwargs)
             except httpx.HTTPError as exc:
                 if attempt >= self._max_retries:
                     raise HttpRequestError(f"Request failed for {url}: {exc}") from exc
@@ -160,8 +170,11 @@ class HttpClient:
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        response = self.request("GET", url, params=params, headers=headers)
+        response = self.request(
+            "GET", url, params=params, headers=headers, timeout_seconds=timeout_seconds
+        )
         try:
             payload = response.json()
         except ValueError as exc:

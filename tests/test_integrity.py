@@ -6,6 +6,7 @@ import pytest
 
 from genesis_evidence.literature.http import HttpRequestError
 from genesis_evidence.literature.integrity import (
+    INTEGRITY_TIMEOUT_SECONDS,
     CrossrefIntegrityProvider,
     EuropePmcIntegrityProvider,
     IntegrityStatus,
@@ -20,8 +21,9 @@ class FakeHttp:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        del headers
+        del headers, timeout_seconds
         if "crossref" in url:
             return {
                 "message": {
@@ -78,10 +80,11 @@ def test_crossref_not_found_falls_back_to_europe_pmc() -> None:
             *,
             params: dict[str, Any] | None = None,
             headers: dict[str, str] | None = None,
+            timeout_seconds: float | None = None,
         ) -> dict[str, Any]:
             if "crossref" in url:
                 raise HttpRequestError("Crossref DOI not found", status_code=404)
-            del headers
+            del headers, timeout_seconds
             assert params and params["query"] == "EXT_ID:42032996 AND SRC:MED"
             return {
                 "resultList": {
@@ -118,9 +121,41 @@ def test_crossref_transient_failure_is_not_suppressed() -> None:
             *,
             params: dict[str, Any] | None = None,
             headers: dict[str, str] | None = None,
+            timeout_seconds: float | None = None,
         ) -> dict[str, Any]:
-            del url, params, headers
+            del url, params, headers, timeout_seconds
             raise HttpRequestError("Crossref unavailable", status_code=503)
 
     with pytest.raises(HttpRequestError, match="unavailable"):
         CrossrefIntegrityProvider(CrossrefUnavailableHttp()).check({"doi": "10.1000/example"})
+
+
+def test_integrity_checks_carry_their_own_timeout_budget() -> None:
+    """#270: the check's upstream tail (~45s observed) outlasts the 30s client
+    default, so providers pass their own budget instead of inheriting it."""
+
+    seen: list[float | None] = []
+
+    class RecordingHttp(FakeHttp):
+        def get_json(
+            self,
+            url: str,
+            *,
+            params: dict[str, Any] | None = None,
+            headers: dict[str, str] | None = None,
+            timeout_seconds: float | None = None,
+        ) -> dict[str, Any]:
+            seen.append(timeout_seconds)
+            if "crossref" in url:
+                return {"message": {}}
+            return {"resultList": {"result": []}}
+
+    checker = PublicationIntegrityChecker(
+        (
+            CrossrefIntegrityProvider(RecordingHttp()),  # type: ignore[arg-type]
+            EuropePmcIntegrityProvider(RecordingHttp()),  # type: ignore[arg-type]
+        )
+    )
+    checker.check({"doi": "10.1000/example", "pmid": "123"})
+
+    assert seen == [INTEGRITY_TIMEOUT_SECONDS] * 2
