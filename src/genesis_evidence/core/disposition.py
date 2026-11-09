@@ -207,10 +207,13 @@ def empty_summary(skipped: Iterable[Mapping[str, object]]) -> str:
     if not unusable:
         # Reachable as a {NORMAL, DEFERRED} mix or either of them mixed with
         # UNKNOWN_METRIC — anything else either matched a branch above or
-        # carries a counted UNUSABLE row. The confirmed rows were all in range,
-        # so that is the true sentence; the deferred rows were never applicable
-        # and claim no failure, and the unreadable rows ride the rider.
-        return ALL_IN_RANGE_SUMMARY
+        # carries a counted UNUSABLE row. "All in range" needs at least one
+        # row that was actually checked against a range: a deferred+unreadable
+        # report has none, and saying it does hands the patient a false
+        # assurance next to the rider.
+        if NORMAL in classes:
+            return ALL_IN_RANGE_SUMMARY
+        return DEFERRED_SUMMARY
     # Count the class, not the list: a normal row reported as unusable is the
     # false-alarm half of the defect this module exists to remove.
     return UNUSABLE_SUMMARY.format(count=unusable)
@@ -288,6 +291,11 @@ def demo() -> None:
     mixed = [{"reason": "invalid_value"}, {"reason": UNKNOWN_METRIC}]
     assert "1 项" in empty_summary(mixed)
     assert "另有 1 项" in with_rider(empty_summary(mixed), mixed)
+    # Deferred + unreadable has no checked row: all-in-range is a false
+    # assurance there, so it takes the deferred sentence instead.
+    assert empty_summary(
+        [{"reason": "confirmation_required"}, {"reason": UNKNOWN_METRIC}]
+    ).startswith("本次没有已确认")
     assert empty_summary([{"reason": "confirmation_required"}]).startswith("本次没有已确认")
     assert "2 项" in empty_summary([{"reason": "invalid_value"}, {"reason": "invalid_value"}])
     # The rider attaches on every branch and is empty when nothing is unreadable.

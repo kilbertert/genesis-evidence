@@ -290,6 +290,17 @@ def test_the_unusable_count_and_the_rider_count_never_overlap() -> None:
     assert "另有 1 项" in combined
 
 
+def test_a_deferred_plus_unreadable_report_is_not_called_all_in_range() -> None:
+    """Nothing was confirmed or ranged: the all-in-range sentence is false."""
+
+    rows = [{"reason": "confirmation_required"}, {"reason": UNKNOWN_METRIC}]
+    summary = empty_summary(rows)
+    assert summary == DEFERRED_SUMMARY
+    combined = with_rider(summary, rows)
+    assert "已确认的指标均在" not in combined
+    assert combined.count("不在当前解读范围内") == 1
+
+
 def test_the_empty_summaries_are_decided_by_class_not_by_set_equality() -> None:
     assert empty_summary([]) == NO_CARD_SUMMARY
     assert empty_summary([{"reason": "within_reference_range"}]) == ALL_IN_RANGE_SUMMARY
