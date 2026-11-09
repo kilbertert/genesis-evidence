@@ -72,6 +72,16 @@ class IntegrityAssessment:
         }
 
 
+#: The integrity check's own per-request budget. Measured tail on these
+#: upstreams reaches ~45s for a legitimate answer (#270, 2026-10-09): the
+#: shared 30s client default timed out on responses that would have
+#: succeeded, systematically leaving papers "integrity unknown" — not
+#: transiently. 60s covers the observed tail while still bounding the stall
+#: a bad upstream can cost one paper; per-paper failure tolerance in the
+#: caller keeps a bounded failure from costing the run.
+INTEGRITY_TIMEOUT_SECONDS = 60.0
+
+
 class IntegrityProvider(Protocol):
     source: str
 
@@ -90,7 +100,10 @@ class CrossrefIntegrityProvider:
         if not doi:
             return ProviderIntegrityResult(self.source, False, (), {})
         try:
-            payload = self._http.get_json(f"{self.base_url}/{quote(doi, safe='')}")
+            payload = self._http.get_json(
+                f"{self.base_url}/{quote(doi, safe='')}",
+                timeout_seconds=INTEGRITY_TIMEOUT_SECONDS,
+            )
         except HttpRequestError as exc:
             if exc.status_code == 404:
                 return ProviderIntegrityResult(
@@ -120,6 +133,7 @@ class EuropePmcIntegrityProvider:
         payload = self._http.get_json(
             self.search_url,
             params={"query": query, "resultType": "core", "format": "json", "pageSize": 3},
+            timeout_seconds=INTEGRITY_TIMEOUT_SECONDS,
         )
         result_list = payload.get("resultList")
         results = result_list.get("result", []) if isinstance(result_list, dict) else []

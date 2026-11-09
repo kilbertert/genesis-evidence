@@ -66,7 +66,11 @@ class HttpClient:
 
     DEFAULT_INTERVALS = {
         "doaj.org": 0.5,
-        "www.ebi.ac.uk": 0.1,
+        # ~3 req/s — Europe PMC's documented polite ceiling for unauthenticated
+        # REST. The previous 0.1s interval fired bursts an order of magnitude
+        # faster, in the same window where the upstream returned intermittent
+        # 503s (#270).
+        "www.ebi.ac.uk": 0.34,
         "api.crossref.org": 0.1,
         "api.core.ac.uk": 0.25,
     }
@@ -80,6 +84,7 @@ class HttpClient:
         max_retry_wait_seconds: float = 30.0,
         client: httpx.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         rate_limiter: HostRateLimiter | None = None,
     ) -> None:
         self._owned_client = client is None
@@ -91,6 +96,7 @@ class HttpClient:
         self._max_retries = max_retries
         self._max_retry_wait_seconds = max_retry_wait_seconds
         self._sleep = sleep
+        self._clock = clock
         self._rate_limiter = rate_limiter or HostRateLimiter(self.DEFAULT_INTERVALS, sleep=sleep)
 
     def close(self) -> None:
@@ -110,16 +116,30 @@ class HttpClient:
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> httpx.Response:
+        # `timeout_seconds` is a wall-clock budget for the whole call, retries
+        # and waits included — not httpx's per-operation timeout, which would
+        # restart on every attempt and read. Each attempt gets what is left.
+        deadline: float | None = (
+            self._clock() + timeout_seconds if timeout_seconds is not None else None
+        )
+        request_kwargs: dict[str, Any] = {"params": params, "headers": headers}
         last_response: httpx.Response | None = None
         for attempt in range(self._max_retries + 1):
+            if deadline is not None:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                request_kwargs["timeout"] = remaining
             self._rate_limiter.wait(url)
             try:
-                response = self._client.request(method, url, params=params, headers=headers)
+                response = self._client.request(method, url, **request_kwargs)
             except httpx.HTTPError as exc:
                 if attempt >= self._max_retries:
                     raise HttpRequestError(f"Request failed for {url}: {exc}") from exc
-                self._sleep(min(2**attempt, self._max_retry_wait_seconds))
+                backoff = min(2**attempt, self._max_retry_wait_seconds)
+                self._sleep(self._budgeted_sleep(backoff, deadline))
                 continue
 
             last_response = response
@@ -138,7 +158,15 @@ class HttpClient:
             wait_seconds = self._retry_delay(response, attempt)
             if wait_seconds > self._max_retry_wait_seconds:
                 break
-            self._sleep(wait_seconds)
+            self._sleep(self._budgeted_sleep(wait_seconds, deadline))
+
+        if deadline is not None and self._clock() >= deadline:
+            status = last_response.status_code if last_response is not None else "unknown"
+            raise HttpRequestError(
+                f"Request budget of {timeout_seconds}s exhausted for {url} "
+                f"(last upstream status {status})",
+                status_code=last_response.status_code if last_response is not None else None,
+            )
 
         status = last_response.status_code if last_response is not None else "unknown"
         retry_after = ""
@@ -154,14 +182,22 @@ class HttpClient:
             status_code=last_response.status_code if last_response is not None else None,
         )
 
+    def _budgeted_sleep(self, seconds: float, deadline: float | None) -> float:
+        if deadline is None:
+            return seconds
+        return min(seconds, max(0.0, deadline - self._clock()))
+
     def get_json(
         self,
         url: str,
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        response = self.request("GET", url, params=params, headers=headers)
+        response = self.request(
+            "GET", url, params=params, headers=headers, timeout_seconds=timeout_seconds
+        )
         try:
             payload = response.json()
         except ValueError as exc:
