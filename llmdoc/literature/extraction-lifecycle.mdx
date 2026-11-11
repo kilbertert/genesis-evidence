@@ -59,7 +59,9 @@ code:
 ## 重试与恢复语义
 
 - `retry_extraction` 只从 `failed` 起；`attempt_count++` 每次认领。
-- **无重试上限**——backlog 会重试每个 failed 最新任务；上限是刻意不设的。
+- **任务级无重试上限**（`attempt_count` 刻意不设顶）——但单次 backlog 运行只扫
+  `list_extraction_jobs(limit=500)`：每轮最多覆盖 500 条最新任务记录里的 failed，
+  超出部分留给后续运行，不是一轮补齐。
 - `recover_running_extraction_jobs` 在 worker 启动时把中断的 `running` 标回
   `failed`（`WorkerInterrupted`），由重试路径重新认领。
 - 筛选翻转时兄弟调和函数对齐任务状态：被筛除的抽取失败被 supersede，恢复筛选的
