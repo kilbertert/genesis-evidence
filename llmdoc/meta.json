@@ -1,54 +1,54 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09",
-    "verifiedAt": "2026-11-11T04:16:32.945Z"
+    "revision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee",
+    "verifiedAt": "2026-11-11T05:49:00.256Z"
   },
   "documents": {
     "agent-workflow/afk-control-plane.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "deployment/runtime-env.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "deployment/service-topology.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "evidence-to-patient-contract.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "governance/guards-and-artifacts.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "governance/spec-tree.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "kernel/matching-kernel.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "kernel/vocabulary-modules.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "literature/acquisition-pipeline.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "literature/extraction-lifecycle.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "patient-path/portal-api.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "patient-path/report-lifecycle.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "persistence/database-invariants.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "review/autonomous-review.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     },
     "review/evidence-gate.mdx": {
-      "validatedRevision": "2cd3fac5a29f1828e65a835dc97c91d4cdd96c09"
+      "validatedRevision": "2dd9a6b866b8c52f3370f301eb93c1ffcdb51bee"
     }
   },
   "convergence": {
