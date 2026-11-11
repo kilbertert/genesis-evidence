@@ -20,9 +20,9 @@ code:
 
 `portal/api.py` 是仓库唯一的对外 HTTP 面：`POST /api/evidence/matches`，只读证据
 查询。无 OpenAPI/docs 端点。注意区分文件留存与线上路由：`GET /` 返回的是 JSON
-服务信息（`{"service", "scope"}`）而非页面——公开域名上的入口页由 health-flow 侧
-提供；`portal/index.html` 只是留存的静态工件（ADR 0019/0020 决定其角色），不等于
-本服务对外渲染的首页。
+服务信息（`{"service", "scope"}`）而非页面——按 ADR 0020，患者页面归属**商城 H5**
+（health-flow 只保留报告 API），`portal/index.html` 只是留存的静态工件
+（ADR 0019/0020 决定其角色），不等于本服务对外渲染的首页。
 
 ## 请求契约
 
