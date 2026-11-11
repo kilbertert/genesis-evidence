@@ -1,0 +1,69 @@
+---
+description: "仓库级契约：患者侧医学结论只能来自已发布知识卡（published）；模型输出永远是候选、异常判定确定性重算、审计即证据——改动任何患者可见路径或发布路径前的必读不变量"
+kind: architecture
+code:
+  paths:
+    - README.md
+---
+
+# 患者侧证据契约（仓库第一性原理）
+
+把"体检报告 → 健康建议"做成可审计工程系统的全部设计，从一条约束推导：**系统允许自己
+说什么？** 以下五条不变量是仓库级契约，改动任何患者可见路径或发布路径前必须确认
+不破坏它们。细节叙事以 README §1-2 为准，本文只钉住决策与不变量。
+
+## 五条第一性原理
+
+1. **患者侧医学结论只来自 `published` 知识卡，不来自运行时自由生成。**
+   疾病结论、剂量与治疗建议必须出自一条 `knowledge_cards.status='published'` 的卡。
+   语言模型只出现在录入侧（报告 OCR/结构化、论文事实抽取），输出永远是候选数据。
+   `published` 状态由 schema CHECK 强制字段完整（grade/reviewer/reviewed_at/
+   evidence_profile_id/published_at/非空正文）——"半发布"不可表示。
+2. **模型输出是候选，不是事实。** 论文侧双抽取+一致性裁决；报告侧每个数值必须在
+   `evidence_text` 中字面出现，否则该行不得进入匹配；未确认观测永不参与匹配。
+3. **证伪优先于进度。** 证据闸门宁可拒绝发布也不补证据、不降阈值；筛选台账未闭合时
+   覆盖矩阵保持 `screening`，不提前显示 `claims_ready`/`full_text_ready`。
+4. **两条主线只有一个可查询连接面。** 论文证据线与报告解读线不共享模型、提示词或
+   进程；论文侧到达患者的唯一中介是 `published` 卡，且必须挂在同一 condition 的
+   scope 上。这使"哪些论文内容能到达患者"是 SQL 可查问题，而非通读代码才能回答。
+5. **审计即证据。** 每次状态迁移、准入、拒绝、发布、重试写 `audit_events` 并带
+   `actor`（人工审核员来自服务端环境变量，不是请求参数）。敏感标识不进审计：报告
+   接口只记计数与代码，不记图像与患者标识。
+
+## 知识卡正文的两条写入路径、同一个闸门
+
+| 路径 | 入口 | 正文来源 | actor |
+|---|---|---|---|
+| 人工 | workbench → `create_card_draft` → `create_card` | 审核员填写 | `GENESIS_EVIDENCE_REVIEWER_ID` |
+| 自主 | `_build_ready_profiles` → `_automatic_profile` | **模板化**正文：用已锁定 PICOTS 维度填空，无自由生成 | `ai:<一致性检查模型>` |
+
+**人工签名不是发布的必要条件**——自主路径可独立完成创建、审核、发布；决定能否发布
+的是证据闸门（review/evidence-gate.mdx），不是写入者身份。两条路径事后可由审计
+区分谁、依据哪个策略版本发布。
+
+## 发布 ≠ 能力
+
+每张已发布卡固定返回 `content_layer=context_only`、`action_status=not_available`——
+系统当前只提供"说什么"的证据，不提供"做什么"的执行能力。能力文案是
+`card_capabilities(grade)` 生成的固定模板，随卡出现但不等于医学结论本体。
+科室与复查方向来自 `core.conditions` 静态目录，是路由提示，不是医学结论。
+
+## 这对任何改动意味着什么
+
+- 新增患者可见输出来源：先证明它经由 `published` 卡或属于"路由提示/能力模板"类别，
+  否则违反原理 1。
+- 让模型输出直接进入患者路径（跳过确认/裁决/闸门）违反原理 2，无论中间加多少校验。
+- 放宽闸门任一层（含为"覆盖进度"让台账未闭合的主题先发布）违反原理 3。
+- 在审计里写入患者标识、图像或可定位个人的数据违反原理 5；审计内容边界是契约，
+  不是实现细节。
+- 禁用词防御是双层的：运行时 `validate_patient_copy` 拦所有写入路径，CI
+  `check_patient_copy` 只扫 `portal/**` 固定路径集——`_automatic_profile` 模板正文
+  不在 CI 扫描范围，只靠运行时校验与同一份 `FORBIDDEN_PATIENT_TERMS`。
+
+## 权威锚点
+
+- `src/genesis_evidence/core/store/schema.py` — published 完整性 CHECK
+- `src/genesis_evidence/core/card_lifecycle.py` — `patient_visible_sql`
+- `src/genesis_evidence/core/contracts.py` — `content_layer`/`action_status` 固定值
+- `src/genesis_evidence/core/patient_copy.py` — `FORBIDDEN_PATIENT_TERMS`
+- `docs/adr/0006-*` — 商品权威移出本仓库，患者响应不含商品

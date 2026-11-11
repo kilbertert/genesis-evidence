@@ -1,0 +1,69 @@
+---
+description: "SQLite 持久化基座：Database.transaction() 唯一 BEGIN IMMEDIATE 写边界、initialize() 幂等（建表+迁移+目录 upsert）、迁移是声明过的债、audit_events 服务端 actor、26 表预算与三个簇、部分唯一索引"
+kind: architecture
+relations:
+  related:
+    - governance/guards-and-artifacts.mdx
+code:
+  paths:
+    - src/genesis_evidence/core/store/database.py
+    - src/genesis_evidence/core/store/schema.py
+    - tests/test_schema.py
+---
+
+# SQLite 持久化基座
+
+## 单写事务边界
+
+`Database.transaction()` 是唯一写入口：`BEGIN IMMEDIATE` → 成功 commit → 异常
+rollback → 必关连接。spec 不变量：任务认领与状态迁移必须在同一 immediate 事务——
+拆开会让两个 worker 领到同一任务（claim+transition 分离正是该规则存在的原因）。
+跨语句的状态变化（闸门检查+写卡+审计）也必须进同一事务。
+
+## initialize() 幂等
+
+顺序：`executescript(SCHEMA)`（全部 `IF NOT EXISTS`）→ `_migrate_existing_schema`
+（`PRAGMA table_info` 探列存在后 ALTER）→ conditions 目录 upsert
+（`ON CONFLICT(code) DO UPDATE`）。`test_schema.py` 钉住双 initialize。迁移事件经
+`_record_migration_event_once` 只记一次。
+
+## 迁移是声明过的债，不是死代码
+
+`_migrate_existing_schema`（列新增 dict + `publication_status` 回填 + 遗留
+`claim_reviews.grade` 重建）和 `_migrate_legacy_shared_results`（拆多 Claim 共享
+的 Results）是 spec 节点显式保留的债。**没有迁移框架、没有迁移目录**：新列走
+`additions` dict（幂等），加表按下述流程。
+
+## audit_events
+
+`actor` NOT NULL，由 store 层 `_audit` helper 在**与状态变化同一事务**内写；读不
+审计。actor 分类（ADR 0012 决策 6：机器签名与人区分）：
+
+- 人：`GENESIS_EVIDENCE_REVIEWER_ID`（服务端 env）
+- 机器：`ai:extraction-worker`、`ai:retrieval-worker`、`ai:orchestrator`、
+  `ai:<model>`、`ai:screening-ledger`、`source-ai:<model>`
+- 系统：`system`、`system:migration`
+
+## 表预算与三个簇
+
+`check_schema.py` 强制 `MAX_TABLES = 26`（**README §4 的"31 张表"标题与"≤31"已
+过时**；§9 的 26 是对的），`test_schema.py` 断言精确集合。簇：19 张论文证据 +
+6 张报告/患者 + 1 张跨切 `audit_events`。
+
+关键 CHECK：`knowledge_cards` published 完整性、`evidence_profiles.
+evidence_body_complete CHECK(=1)`、`paper_extraction_jobs` completed⇒三阶段字段
+全非空、`integrity_status` 词表字面量在 SQL（测试与
+`publication_integrity.INTEGRITY_STATUSES` 对齐）。
+
+部分唯一索引 `paper_extraction_jobs_active_paper_unique`：每篇论文最多一个
+queued/running 任务——用索引表达"活动任务唯一"而非 CHECK。
+
+## 加表流程（顺序即契约）
+
+1. 回答簇问题：归哪个簇、为什么它的不变量不能活在既有表上；
+2. `schema.py` 加 DDL（`IF NOT EXISTS`）；
+3. 既有库需要该列 → `database.py: _migrate_existing_schema.additions` 加列迁移；
+4. `check_schema.py` bump `MAX_TABLES`；
+5. `test_schema.py` 更新期望集合。
+
+新表是一个架构决定，不是实现细节——步骤 4/5 强制你声明它。

@@ -1,0 +1,79 @@
+---
+description: "治理工件与 CI guard 边界：check_scope 冻结 13 标识符、check_schema 表预算、check_patient_copy 只扫 portal/** 的固定路径集、workbench 布局检查不在 CI；acceptance.feature/qa-plan/GLOSSARY/ADR 被 test_governance_artifacts 钉住的结构；quality+Workflow policy 为必过检查"
+kind: architecture
+relations:
+  related:
+    - governance/spec-tree.mdx
+    - persistence/database-invariants.mdx
+code:
+  paths:
+    - scripts/check_schema.py
+    - scripts/check_scope.py
+    - scripts/check_patient_copy.py
+    - scripts/check_review_workbench_layout.py
+    - acceptance.feature
+    - qa-plan.md
+    - GLOSSARY.md
+    - tests/test_governance_artifacts.py
+    - tests/test_guards.py
+    - .sandcastle/profile-network.check.ts
+    - .github/workflows/quality.yml
+    - .github/workflows/gitlab-mirror.yml
+    - docs/adr/**
+    - .claude/skills/verify-genesis-evidence/**
+---
+
+# 治理工件与 CI guard 边界
+
+每个 guard 的"不覆盖什么"和覆盖什么一样是契约。
+
+## guard 边界表
+
+| 脚本 | 范围 | 执行 | 刻意不覆盖 |
+|---|---|---|---|
+| `check_schema.py` | 新库表数 vs `MAX_TABLES = 26` | CI（quality） | 不校验列/索引——那是 schema CHECK+测试的活 |
+| `check_scope.py` | **13 个冻结标识符**（`care_task`、`electronic_signature`、`followup`、`intervention_plan`、`nutrition_product`、`organization`、`professional_note`、`rbac`、`record_share`、`service_event`、`supplier_product`、`supplement_recommendation`、`test_plan`）大小写折叠子串匹配，文件名与路径都算 | CI | 只扫 `src/genesis_evidence/` 下 `.py/.html/.js/.css/.toml`——冻结的是领域扩张，不是字符串洁癖 |
+| `check_patient_copy.py` | `FORBIDDEN_PATIENT_TERMS` 子串扫 `src/genesis_evidence/portal/**` 固定路径集（`.py/.html/.js/.jsx/.ts/.tsx/.vue`） | CI | **只扫 portal/**——`_automatic_profile` 模板正文等其余写入路径只靠运行时 `validate_patient_copy`；两处覆盖不重叠是有意的 |
+| `check_review_workbench_layout.py` | headless Chrome 探 workbench 布局：桌面 flex+`main overflow:hidden`+aside/.content 独立滚动+窗不滚动+双视图切换；移动 390px 无横滚 | **本地专用**（不在 CI） | 需 `google-chrome`/`chromium` 二进制；无浏览器报 `RuntimeError` 不是通过 |
+
+## 被 test_governance_artifacts.py 钉住的工件结构
+
+- `acceptance.feature`：以 `Feature:` 开头，含 4 个钉死场景名，含逐字
+  `、` 连接的 `FORBIDDEN_PATIENT_TERMS` 串（「诊断、确诊、处方、治愈、根治、排毒、
+  抗癌、逆龄」）。
+- `qa-plan.md`：恰 6 个钉死用例 ID（`QA-EVID-001..004`、`QA-DISEASE-001`、
+  `QA-WORKBENCH-001`），每个有非空 `**ID**/**环境**/**前置**/**数据**/
+  **可观察结果**/**清理** + `**动作**` + 有序动作表。增删用例=改测试里
+  `QA_CASE_IDS`。
+- `GLOSSARY.md`：钉死的术语集（证据/目录轴/成分轴）；**不得**含 `## Decision`
+  或 `## 数据与迁移` 标题（术语表≠ADR）；`condition` 行必须声明它可独立于报告项
+  存在。
+- ADR 形状门：`docs/adr/{0005,0006,0007,0008}` 必须含 `## Decision`、
+  `## Alternatives Considered`、`## Rationale`。更宽的决策记录检查是
+  `.sandcastle/adr.check.mjs`（afk-policy 工作流驱动）。
+
+**改动顺序**：改"允许说什么"时先改 `acceptance.feature`/`qa-plan.md` 声明意图，
+再改词表，再改代码——工件是先于代码的契约声明。
+
+## CI 拓扑
+
+默认分支 ruleset 必过：**`quality` + `Workflow policy`**。
+
+| 工作流 | 门禁 |
+|---|---|
+| `quality.yml` | ruff、pytest、check_scope、check_schema、check_patient_copy、`profile-network.check.ts`（loopback-only profile 得 `--network host`）、`architecture-review/output.check.ts`（可 skipped） |
+| `afk-policy.yml` → `Workflow policy` | `policy-check.mjs workflows` + profile-network；`fetch-depth: 0` 拿 merge-base |
+| `spec-tree.yml` | `spex spec lint`（必须全量历史，见 spec-tree.mdx） |
+| `agent-*.yml` | label 门控（`agent:implement`/`agent:review`/`agent:update-branch`），仅 owner-authored 同仓 PR；见 agent-workflow/afk-control-plane.mdx |
+| `architecture-review.yml` | 工作日 cron，<10 个开放非 bug 提案封顶 |
+| `gitlab-mirror.yml` | 全 ref 裸镜像到公司 GitLab `ai-products/genesis-evidence` |
+| `sandbox-image.yml` | `.sandcastle/Dockerfile` 变更时发镜像到 ghcr |
+
+## ADR 语料约定
+
+`docs/adr/` 承重记录（被决策引用的编号）：0002 trusted PR 控制面、0006 商品权威
+移出、0007 成分轴、0008 reach 属性归 health-flow、0012 机器签名、0013 spec-tree
+为意图真值、0015-0018 审核员-对手族、0019/0020/0021 入口与沙箱镜像。
+
+**已知工件瑕疵**：ADR 0009/0010/0011 是字节一致的脚手架重复（重编号事故
+#288-#290），按一份记录对待；测试只钉 0005-0008 形状所以 CI 抓不到。

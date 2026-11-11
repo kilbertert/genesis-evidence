@@ -1,0 +1,79 @@
+---
+description: "双抽取+一致性裁决与抽取任务状态机：extraction_a/b/consistency 阶段可重放、completed CHECK、worker 与 backlog 分工与环境变量契约、无重试上限、WorkerInterrupted 恢复"
+kind: architecture
+relations:
+  requires:
+    - literature/acquisition-pipeline.mdx
+  related:
+    - review/autonomous-review.mdx
+code:
+  paths:
+    - src/genesis_evidence/literature/ai_extraction.py
+    - src/genesis_evidence/literature/extraction_worker.py
+    - src/genesis_evidence/literature/backlog.py
+    - src/genesis_evidence/literature/evidence.py
+    - tests/test_ai_extraction.py
+    - tests/test_evidence.py
+---
+
+# 双抽取生命周期与任务状态机
+
+## 为什么跑两次
+
+`extraction_a` 与 `extraction_b` 是**同一模型的两次独立运行**，第三个 `check` 调用
+比较两者 → `consistent | needs_review`。关键差异必须对照已存全文裁决
+（`_source_adjudication`）或显式记录 resolution——`admit_paper` 在 `needs_review`
+且无 `differences_confirmed`+`consistency_resolution` 时拒绝。
+
+裁决来源两级：`_source_adjudication`（优先，逐条把 issue 的证据片段与所存 JATS
+`attest_segments` 字面核验；统计矛盾 → 以 `source-ai:` actor 拒相关 claim）；
+`_automatic_resolution`（兜底）。provenance 只持久化裁决**文本**，靠
+`AUTOMATIC_RESOLUTION_PREFIX` 前缀推断来源——已声明的限制。
+
+## 任务状态机（paper_extraction_jobs）
+
+阶段：`extraction_a → extraction_b → consistency → saved`。
+
+- **可重放**：每阶段完成后持久化 channel JSON；认领任务时若 `extraction_json` 等
+  已存，直接从失败阶段续跑而非从头。
+- schema CHECK：`completed` ⇒ stage='saved' 且三个 model/run_id/json 三元组全
+  非空——"半完成"不可表示。
+- 部分唯一索引 `paper_extraction_jobs_active_paper_unique`：每篇论文最多一个
+  queued/running 任务。
+- 认领+迁移必须在同一 `BEGIN IMMEDIATE` 事务（见 persistence/database-invariants）——
+  拆开会让两个 worker 领到同一任务。
+
+## worker vs backlog
+
+| | `genesis-evidence-worker`（extraction_worker.py） | `genesis-evidence-backlog`（backlog.py） |
+|---|---|---|
+| 形态 | 常驻 per-job 守护 | 一次性维护任务 |
+| 主题范围 | 仅 `GENESIS_EVIDENCE_ACTIVE_TOPIC_ID` | `ACTIVE_TOPIC_ID` **或**旧名 `BACKLOG_TOPIC_ID`，都没有则全主题 |
+| 职责 | claim→JATS 解析→三阶段→`save_ai_extraction`→`complete`→交 `auto_review_paper` | 先 `auto_review_paper(requested_by='ai:screening-ledger')` 自动筛未筛论文，再 `retrieve_pending_full_texts`、兄弟调和（`supersede_excluded_extraction_failures`/`restore_screening_excluded_extractions`）、重试 failed |
+
+**worker 只读 `ACTIVE_TOPIC_ID`，不读 `GENESIS_EVIDENCE_REVIEWER_ID`**——actor 是
+硬编码 `WORKER_IDENTITY = "ai:extraction-worker"`（ADR 0012 决策 6：机器不得借用
+人名；README §9 的 REVIEWER_ID 要求已过时）。启动只需 `PAPER_AI_API_KEY{,_FILE}`
+（旧名 `ARK_API_KEY` 兼容），未配置直接退出。
+
+## 重试与恢复语义
+
+- `retry_extraction` 只从 `failed` 起；`attempt_count++` 每次认领。
+- **无重试上限**——backlog 会重试每个 failed 最新任务；上限是刻意不设的。
+- `recover_running_extraction_jobs` 在 worker 启动时把中断的 `running` 标回
+  `failed`（`WorkerInterrupted`），由重试路径重新认领。
+- 筛选翻转时兄弟调和函数对齐任务状态：被筛除的抽取失败被 supersede，恢复筛选的
+  恢复可抽取。
+
+## 与自主审核的交接口
+
+每个任务完成后调用 `auto_review_paper`——抽取 worker 不只是生产者，它是自主审核
+流水线的触发器（见 review/autonomous-review.mdx）。
+
+## 权威锚点
+
+- `literature/extraction_worker.py` — 状态机驱动、`WORKER_IDENTITY`、env 契约
+- `literature/backlog.py` — 一次性维护与 screen-before-retrieve 顺序
+- `literature/ai_extraction.py` — 双抽取与一致性检查调用
+- `literature/evidence.py` — 抽取证据结构
+- `docs/adr/0012-*` — 机器 actor 签名决策

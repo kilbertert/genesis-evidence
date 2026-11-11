@@ -1,0 +1,86 @@
+---
+description: "AFK 代理工作流可信控制面：idea→grill→to-spec→to-tickets→implement 流水线与标签状态机、agent-* workflows 的 pull_request_target 边界（候选代码只拿只读 token、git bundle 交付、AGENT_PAT 只在交付时注入、缺凭据→agent:blocked）、owner-authored same-repo 限制"
+kind: architecture
+relations:
+  related:
+    - governance/guards-and-artifacts.mdx
+code:
+  paths:
+    - docs/afk-workflow.md
+    - docs/agents/architecture-decisions.md
+    - docs/agents/domain.md
+    - docs/agents/issue-tracker.md
+    - docs/agents/ticket-contract.md
+    - docs/agents/triage-labels.md
+    - AGENTS.md
+    - .afk-bootstrap.json
+    - .sandcastle/policy-check.mjs
+    - .sandcastle/adr.check.mjs
+    - .sandcastle/ticket-check.mjs
+    - .sandcastle/trusted-pr-delivery.sh
+    - .sandcastle/consensus-contract.json
+    - .sandcastle/Dockerfile
+    - .github/workflows/afk-policy.yml
+    - .github/workflows/agent-implement.yml
+    - .github/workflows/agent-implement-pr.yml
+    - .github/workflows/agent-implement-prd.yml
+    - .github/workflows/agent-promote-queued.yml
+    - .github/workflows/agent-review.yml
+    - .github/workflows/agent-update-branch.yml
+    - .github/workflows/architecture-review.yml
+    - .github/workflows/sandbox-image.yml
+    - docs/adr/0002-trusted-pr-control-plane.md
+    - docs/adr/0021-the-sandbox-image-is-published-not-built.md
+    - .sandcastle/**
+---
+
+# AFK 可信控制面
+
+流水线：`idea → /grill-with-docs → /to-spec → /to-tickets → implement → review → merge`
+（`docs/afk-workflow.md`）。标签状态机：`ready-for-agent`（planner 资格）、
+`agent:implement`（执行授权）、`agent:queued`、`agent:in-progress`、`agent:blocked`、
+`agent:review`。
+
+## 可信控制面安全模型（ADR 0002）
+
+`agent-*` 工作流跑在 `pull_request_target`——控制器是默认分支的已信代码，候选
+代码不可信：
+
+- 候选代码在 Docker 沙箱内只拿**只读 token**；
+- 交付靠**已核验 git bundle** 跨边界，不靠 push；
+- `AGENT_PAT` **只在交付步**注入，候选代码永远看不到它；
+- 凭据缺失 ⇒ `agent:blocked`，**无 fallback**——降级跑不可信代码不是选项；
+- 仅 owner-authored 同仓 PR：fork/外部作者不进自动执行面。
+
+## 工作流清单（什么门控什么）
+
+| 工作流 | 触发与职责 |
+|---|---|
+| `agent-implement{,-pr,-prd}` | label `agent:implement` 授权后执行；`-pr`/`-prd` 是 PR/PRD 变体 |
+| `agent-promote-queued` | 原生 blocker 关闭时把 `agent:queued` 翻回 `agent:implement` |
+| `agent-review` / `agent-update-branch` | label 门控的评审/分支维护 |
+| `afk-policy` → `Workflow policy`（必过） | `policy-check.mjs workflows` 校验工作流形态 + profile-network |
+| `architecture-review` | 工作日 cron，开放非 bug 提案 <10 封顶 |
+| `sandbox-image` | `.sandcastle/Dockerfile` 变更时发布镜像到 ghcr |
+
+`.sandcastle/`：`policy-check.mjs`（工作流形态）、`adr.check.mjs`（对照
+`.afk-bootstrap.json`+`consensus-contract.json` 判提交）、`consensus-contract.json`
+（团队约定机读面）、`Dockerfile`（沙箱镜像）。
+
+**镜像是发布不是构建**（ADR 0021）：工作流消费 ghcr 上的已发镜像，不在 CI 里
+现构——`.sandcastle/Dockerfile` 变更只触发 `sandbox-image` 发布流。
+
+## /grill-with-docs 完成契约
+
+终点是 frontier 清空：报 `GRILLING_COMPLETE` → 总结共识 → 请用户确认 → 停。
+确认只完成 grilling——**等用户显式 `/to-spec`、`/to-tickets`、`/implement` 或
+`/implement-spec`，不自动进入下一阶段**。多会话工作走 `/to-spec` 再
+`/to-tickets` 才进实现。
+
+## 权威锚点
+
+- `docs/afk-workflow.md` — 流水线叙事
+- `docs/agents/{ticket-contract,triage-labels,issue-tracker}.md` — 票据契约、标签
+  语义、追踪器约定
+- `docs/adr/0002-*`、`0021-*` — 控制面与镜像决策
+- `.afk-bootstrap.json` + `.sandcastle/` — 机读约定与沙箱

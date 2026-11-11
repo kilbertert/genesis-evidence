@@ -1,0 +1,69 @@
+---
+description: ".spec 意图层操作法：code: 符号级锚点、anchor-drift 如何产生与修复、Spec-OK trailer 的正确用途、为什么 spex spec lint 必须 fetch-depth: 0 否则静默通过"
+kind: guide
+relations:
+  related:
+    - governance/guards-and-artifacts.mdx
+code:
+  paths:
+    - .spec/spexcode.json
+    - .spec/genesis-evidence/spec.md
+    - .github/workflows/spec-tree.yml
+    - docs/adr/0013-spec-tree-as-intent-truth.md
+---
+
+# .spec 意图层操作法
+
+`.spec/<project>/<node-path>/spec.md` 是意图侧真值（ADR 0013）：每个节点的
+frontmatter `code: [path#Symbol]` 把意图锚到文件或具名符号。`spexcode.json` 的
+`lint.governedRoots: ["src"]` 圈定受管代码面。
+
+**为什么符号级不是文件级**：文件级锚点会让任何无关改动报 drift → 噪音 → 检查被
+无视。符号级锚点只在被锚单元实际变化时报警。
+
+## 触发：改动触及被锚代码
+
+改了某个 `code:` 锚点覆盖的符号或行区 → 判断走这棵决策树：
+
+```
+改动的代码是否在 .spec 某节点 code: 锚点内？
+  ├─ 否 → 无 spec 义务，正常提交
+  └─ 是 → 契约/意图变了吗？
+        ├─ 是 → 更新该节点 spec.md，使意图与新行为一致，同一 PR 提交
+        └─ 否（纯机制/重构） → git commit --trailer "Spec-OK: <node>"
+```
+
+- **契约变了**：更新 spec.md 本体——spec 是意图真值，代码改而不改 spec 就是
+  声明"意图与实现分叉"。
+- **仅机制变了**：`Spec-OK` trailer 记录"我知道锚点动了、确认契约没变"，
+  `spex spec lint` 认它放行。trailer 的正确用途只有这一种——别拿它跳过节变。
+
+## anchor-drift 的判定与修复
+
+drift = 自该 spec 节点上次提交以来，有提交触及锚点单元的行区。`spex spec lint`
+报 `anchor-drift` 并指名冒犯提交。修复就两条路：改 spec（契约真变）或补
+`Spec-OK` trailer（机制变）。没有第三条——"先提交再说"会把 drift 留给下一个
+碰锚点的人。
+
+## 为什么必须 fetch-depth: 0
+
+lint 需要完整 git 历史才能算"自 spec 上次提交以来谁碰过锚点"。浅克隆下 lint
+**静默报 0 错**——不是没 drift，是看不见历史。`spec-tree.yml` 因此必须
+`fetch-depth: 0`；这是测量过的坑（ADR 0013）。
+
+## 为什么在 CI 不在 git hook
+
+hooksPath 方案实测可用，但 `dev-policy-audit` 会把它"修复"掉——一个会被另一个
+工具静默撤销的控制不是控制。门禁活在 CI（ruleset 必过），hook 层不做。
+
+## 已知 spec 侧漂移（样例）
+
+`.spec/patient-path/portal-api` 写"Bearer 鉴权（RFC 6750）"，代码实际用
+`X-Genesis-Evidence-Key` API-key 头——spec 措辞漂移（RFC 6750 属 review 端点
+规格）。改该节点时顺手修正，别照抄进新改动。
+
+## 权威锚点
+
+- `.spec/spexcode.json` — governedRoots 与 lint 配置
+- `docs/adr/0013-spec-tree-as-intent-truth.md` — CI-not-hook 与 fetch-depth 决策
+- `.github/workflows/spec-tree.yml` — `npm i -g spexcode@0.7.0 && spex spec lint`
