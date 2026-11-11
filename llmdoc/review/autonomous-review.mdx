@@ -1,0 +1,94 @@
+---
+description: "自主审核编排：auto_review_paper 决策顺序与 attention_required 停止态、actor 规约（ai:<model>/source-ai:/ai:screening-ledger 等 vs 具名人工）、AUTONOMOUS_REVIEW_POLICY_VERSION 审计分代、_automatic_profile 模板化正文与 GRADE 只进审计、覆盖矩阵与 workbench、scope.py 禁入 review 包的成环约束"
+kind: architecture
+relations:
+  requires:
+    - review/evidence-gate.mdx
+  related:
+    - literature/extraction-lifecycle.mdx
+code:
+  paths:
+    - src/genesis_evidence/review/service.py
+    - src/genesis_evidence/review/scope.py
+    - src/genesis_evidence/review/api.py
+    - src/genesis_evidence/review/workbench.html
+    - tests/test_review_workflow.py
+    - tests/test_review_api.py
+    - tests/test_coverage_matrix.py
+    - tests/test_topic_governance.py
+    - tests/test_scope.py
+    - tests/test_review_progress_parity.py
+    - tests/test_disease_library.py
+---
+
+# 自主审核编排（auto_review_paper）
+
+`EvidenceReviewService.auto_review_paper` 把论文从抽取产出推进到已发布卡。
+**人工签名不是发布的必要条件**——同一闸门裁判两条路径；唯一的人类否决点是具名
+审核员的拒绝。
+
+## 决策顺序（先到先赢）
+
+1. `terminal_exclusion` ⇒ reject；
+2. 无抽取 trace：先消费筛选建议（actor `ai:screening-ledger`），然后
+   `not_retrieved` ⇒ done；否则确保有 queued/running 任务（failed 重试、缺则入队）
+   并退出 `queued`；
+3. 有 trace：**具名（非机器）审核员已拒 ⇒ 停**（唯一 human-veto）；
+4. 消费筛选建议；无 collections/无 included ⇒ reject 或 `topic_governance` 注意；
+5. `needs_review` ⇒ `_source_adjudication`（逐条把 issue 证据片段与所存 JATS
+   `attest_segments` 字面核验；统计矛盾 ⇒ `source-ai:` 拒相关 claim），否则
+   `_automatic_resolution` 兜底；
+6. 仍有 blockers ⇒ `evidence_gate` 注意；设计不定 ⇒ `study_identity` 注意；
+7. `admit_paper` → claim 循环（批准需过 `_automatic_source_verification`：
+   Claim↔Result↔extraction 链核验）；
+8. `_build_ready_profiles` 按 `(scope_key, component_token)` 分组：
+   `_automatic_profile` 算 GRADE 域+certainty（`strength_for_score`，单研究封顶
+   `low`，仅 AI 证据封顶 `moderate`）→ 匹配既有卡复用（topic+scope+component+
+   claim 集+grade+body+interpretations）或分配下一 semver → 走
+   `AUTONOMOUS_REVIEW_PATH` 逐态迁移 → `is_patient_visible('published', certainty)`
+   才发布（`very_low` 停在 `approved_evidence_limited`）。
+
+`attention_required` 是停止态不是错误：具名拒绝、不可核验的实质差异（同时把准入
+降回 `pending`）、证据闸门 blockers、设计不定、claim 溯源失败、claim
+condition/evidence 歧义各自落到对应类别。
+
+## actor 规约
+
+| actor | 谁 | 可否自主重开 |
+|---|---|---|
+| `ai:<model>` | 流水线决策（`automatic_actor_for_model`，模型取 `check_model or model`） | 可——新筛选证据可重开机器拒绝（`reopened_screening_rejection`） |
+| `source-ai:<model>` | 源裁决的 claim 拒绝 | **永不**——stored `source_based` 裁决会短路复验，重开会批准一个不再运行的检查（"机器不得静默推翻机器"） |
+| `ai:screening-ledger` / `ai:retrieval-ledger` / `ai:extraction-worker` | 确定性非模型步骤 | 机器签名 |
+| `GENESIS_EVIDENCE_REVIEWER_ID` | 人（服务端 env，不是请求参数） | 人类否决即停 |
+
+## AUTONOMOUS_REVIEW_POLICY_VERSION
+
+`service.py` 顶部常量（当前 `literature-review-ai/1.5`）。嵌进每条自主审计的
+`policy_version` 字段及 `_automatic_resolution`/`_source_adjudication` 的裁决
+**文本**里——审计是唯一能分辨"哪代策略产出了这个决定"的途径。**任何自主行为
+改动必须 bump**，否则两代决策在审计里不可分。
+
+`_automatic_profile` 正文是**模板**：用已锁定 PICOTS 维度填固定中文句，无自由
+生成；GRADE 逐域分只写审计 detail，落库只有 `certainty` 一列。
+
+## scope 与成环约束
+
+`scope_key` 语法：`metric:<code>` / `condition:<code>` / `outcome:<...>`。
+**`review/scope.py` 不得 import `genesis_evidence.review`**：`review/__init__`
+急切加载 `service` → `core.store` → `review.scope`，反向即环。
+
+## 覆盖矩阵与 workbench
+
+`list_coverage_matrix`（review.py）暴露主题进度：台账未闭合时保持 `screening`——
+证伪优先，不提前显示 `claims_ready`/`full_text_ready`。workbench（ADR 0005）把同一
+条链切成 5 个可折叠步骤：① 主题圈定与筛选 ② 双抽取差异裁决 ③ 身份确认与准入
+④ Result/Claim 审核 ⑤ Evidence Profile 与知识卡；桌面布局是 `aside` 与 `.content`
+**独立滚动**（布局探针脚本见 governance/guards-and-artifacts.mdx，不在 CI）。
+
+## 权威锚点
+
+- `review/service.py` — 决策顺序、`_automatic_profile`、`_build_ready_profiles`、
+  `AUTONOMOUS_REVIEW_POLICY_VERSION`
+- `review/scope.py` — scope_key 语法与 PICOTS 解析
+- `review/api.py` + `workbench.html` — HTTP 面与 5 步工作台
+- `docs/adr/0005-*`、`0012-*` — 工作台形态与机器签名决策

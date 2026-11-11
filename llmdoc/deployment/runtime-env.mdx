@@ -1,0 +1,55 @@
+---
+description: "每进程环境变量契约：portal/review/worker/backlog 各自必填与可选变量、代码默认端口 vs dev/service host 部署端口、var/*.env 不提交与模板位置、各自 fail-fast 行为"
+kind: reference
+relations:
+  related:
+    - deployment/service-topology.mdx
+code:
+  paths:
+    - ops/examples/portal.env.example
+    - ops/examples/review.env.example
+    - ops/service-host/examples/portal.env.example
+    - ops/service-host/examples/review.env.example
+    - pyproject.toml
+---
+
+# 每进程环境变量契约
+
+## 必填变量与 fail-fast 行为
+
+| 进程 | 必填 | 缺省时 |
+|---|---|---|
+| `genesis-evidence-api`（portal） | `GENESIS_EVIDENCE_API_KEY` ≥24 字符；DB 表已存在 | `ValueError` 启动即死（fail-closed，绝不降级） |
+| `genesis-evidence-review` | `GENESIS_EVIDENCE_REVIEW_API_KEY` ≥24 **且**非空 `GENESIS_EVIDENCE_REVIEWER_ID`（=审计 actor）；旧名 `GENESIS_REVIEW_API_KEY` 仍作 fallback | `ValueError` 启动即死 |
+| `genesis-evidence-worker` | `PAPER_AI_API_KEY_FILE` 或 `PAPER_AI_API_KEY`（旧名 `ARK_API_KEY` 兼容） | `SystemExit` 未配置即退。**不读 `GENESIS_EVIDENCE_REVIEWER_ID`**——actor 硬编码 `ai:extraction-worker`（ADR 0012；README §9 该要求已过时） |
+| `genesis-evidence-backlog` | 无 | —；`GENESIS_EVIDENCE_ACTIVE_TOPIC_ID`（或旧 `..._BACKLOG_TOPIC_ID`）限定单主题，都缺则全主题 |
+
+**env 陷阱**：worker 只认 `ACTIVE_TOPIC_ID`；backlog 认 `ACTIVE_TOPIC_ID` **或**
+`BACKLOG_TOPIC_ID`——两套变量名不对称是有意的兼容。
+
+## 可选/调优变量
+
+| 变量 | 默认 |
+|---|---|
+| `GENESIS_EVIDENCE_DATABASE` | `var/genesis-evidence.sqlite3` |
+| `GENESIS_EVIDENCE_OBJECTS` | `var/objects` |
+| `GENESIS_EVIDENCE_{PORTAL,REVIEW}_{HOST,PORT}` | `127.0.0.1:8091` / `127.0.0.1:8090` |
+| `GENESIS_EVIDENCE_WORKER_POLL_SECONDS` | 5 |
+| `PAPER_AI_{BASE_URL,MODEL,TIMEOUT_SECONDS,MAX_TOKENS}` | provider 默认 |
+| `GENESIS_EVIDENCE_FULL_TEXT_MAX_BYTES` | 内置上限 |
+
+## 端口三个平面，别混
+
+| 平面 | portal | review | health-flow |
+|---|---|---|---|
+| 代码默认 | 8091 | 8090 | — |
+| dev host | 8125 | 8126 | 8127 |
+| service host | 10005 | 10006 | 10007（经 health.ranlei.work） |
+
+代码默认与两个部署平面都不同——看到 8090/8091 不是"配错了"是"没在部署里"。
+
+## env 文件约定
+
+`var/*.env` 永不提交（`.gitignore` 含 `var/`）。模板：dev 在 `ops/examples/`，
+service host 在 `ops/service-host/examples/`。`review.env` 由 workbench + worker +
+backlog **共享**（但 worker 不读其中 REVIEWER_ID——见上）。

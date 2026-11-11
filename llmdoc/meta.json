@@ -1,0 +1,60 @@
+{
+  "schema": "llmdoc.meta/v3",
+  "baseline": {
+    "revision": "65b68197c916364b967ca860adf479261bab2d57",
+    "verifiedAt": "2026-11-11T05:53:49.396Z"
+  },
+  "documents": {
+    "agent-workflow/afk-control-plane.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "deployment/runtime-env.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "deployment/service-topology.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "evidence-to-patient-contract.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "governance/guards-and-artifacts.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "governance/spec-tree.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "kernel/matching-kernel.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "kernel/vocabulary-modules.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "literature/acquisition-pipeline.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "literature/extraction-lifecycle.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "patient-path/portal-api.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "patient-path/report-lifecycle.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "persistence/database-invariants.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "review/autonomous-review.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    },
+    "review/evidence-gate.mdx": {
+      "validatedRevision": "65b68197c916364b967ca860adf479261bab2d57"
+    }
+  },
+  "convergence": {
+    "capturedAt": "2026-11-11T04:12:26Z",
+    "source": "init",
+    "documentCount": 15,
+    "totalEstimatedTokens": 8680
+  }
+}

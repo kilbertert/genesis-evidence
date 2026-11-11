@@ -1,0 +1,114 @@
+---
+description: "论文获取链：连接器只发元数据的政策边界（DOAJ/EPMC/CORE 各自规则）、版权与 Sci-Hub 拒收、全文对象入库（sha256+rights_status）、JATS 解析、撤稿/更正完整性核查 fail-closed、筛选台账传播与三种筛选谓词"
+kind: architecture
+relations:
+  related:
+    - literature/extraction-lifecycle.mdx
+    - review/evidence-gate.mdx
+code:
+  paths:
+    - src/genesis_evidence/literature/connectors/base.py
+    - src/genesis_evidence/literature/connectors/doaj.py
+    - src/genesis_evidence/literature/connectors/europe_pmc.py
+    - src/genesis_evidence/literature/connectors/core.py
+    - src/genesis_evidence/literature/policy.py
+    - src/genesis_evidence/literature/downloader.py
+    - src/genesis_evidence/literature/ingestion.py
+    - src/genesis_evidence/literature/jats.py
+    - src/genesis_evidence/literature/grobid.py
+    - src/genesis_evidence/literature/integrity.py
+    - src/genesis_evidence/literature/http.py
+    - src/genesis_evidence/literature/models.py
+    - src/genesis_evidence/literature/topic_plans.py
+    - src/genesis_evidence/core/store/papers.py
+    - src/genesis_evidence/core/store/screening.py
+    - tests/test_connectors.py
+    - tests/test_paper_ingestion.py
+    - tests/test_integrity.py
+    - tests/test_jats.py
+    - tests/test_screening.py
+    - tests/test_models_and_policy.py
+    - tests/test_topic_plans.py
+    - tests/test_grobid.py
+---
+
+# 论文获取链：从连接器到筛选台账
+
+`evidence_topics`（locked）→ `collection_runs` → `collection_papers`（题录→检索→
+全文筛选）→ `full_texts` → `paper_extraction_jobs`（见 extraction-lifecycle.mdx）。
+
+## 连接器政策边界（policy.py `SourcePolicyRegistry`）
+
+连接器按政策只发元数据，能不能下载是政策决定不是连接器能力：
+
+| 连接器 | 检索 | 下载 | 规则 |
+|---|---|---|---|
+| DOAJ | 是 | **永不** | search-only |
+| Europe PMC | 是 | 是 | 查询附加 `OPEN_ACCESS:Y`，只入 OA |
+| CORE | **否** | **否** | 整体由 `core_license_confirmed` 门控；未确认许可时连接器产出零 `full_text_candidates` |
+
+## 版权三层闸门（同一规则在三处执行）
+
+1. `policy.py: require_download_allowed`——拒 sci-hub 主机名；要求
+   `access ∈ {APPROVED_OPEN, APPROVED_LICENSED}` 且 `rights_status ≠ METADATA_ONLY`；
+2. `downloader.py`——重检**重定向后** `final_url` + magic 字节；
+3. `ingestion.py`——要求解析出的 license ∈ `{REDISTRIBUTABLE, INTERNAL_TDM_ONLY}`。
+
+只入库 JATS_XML。三层都查不是冗余：政策判"该不该拿"，下载器判"拿到的是什么"，
+入库判"拿的东西许可够不够"。
+
+## 全文与身份
+
+- `full_texts`：`object_key` + `sha256` + `rights_status`；撤稿状态在写入事务内重检。
+- `studies` vs `study_publications`：study = 研究身份（uuid5 `genesis-study:<paper_id>`）；
+  publication = 本文在该研究中的角色（primary/protocol/sap/follow_up/subgroup/
+  combined_report/correction/retraction/other）。准入要求恰好一个关联 study。
+- `grobid.py` 是完整客户端但**无主线调用方**（仅测试）——休眠能力，不是死代码。
+
+## 完整性核查（integrity.py）
+
+- `admits_paper` 只认 `clear`；`forbids_durable_evidence` 只认 `retracted`——
+  `corrected` 两者皆不命中，`unknown` **不可准入**（fail-closed）。
+- `FORBIDS_DURABLE_EVIDENCE={retracted}` 级联：挡 `save_full_text`、
+  `enqueue_extraction`（`PaperRetracted`）、`save_ai_extraction`（`ValueError`）；
+  `_ingest_candidate` 在写缝内重检。
+- 核查有独立 60s 预算 `INTEGRITY_TIMEOUT_SECONDS`（上游尾部 ~45s）；单篇失败
+  ≠ 运行失败但留 `unknown`=不可入；批量重检是补救路径。
+- 任何非 `clear` 的 `update_integrity` 会 retire 引用该论文的卡。
+
+## 筛选台账语义（store/screening.py + papers.py）
+
+- **screen-before-retrieve**：`list_pending_full_texts` 只选
+  `title_abstract_decision='included'`——未筛选论文永不被检索。
+- **一次 screen 调用传播到该主题所有 completed runs**（传播计数入审计）。
+- 重决题录筛选会把全文字段置 NULL；论文一旦进 evidence profile
+  （`paper_used_by_profile_sql`）筛选**不可变**。
+- 筛选要求 run `completed` + topic `locked`。
+- `reconcile_topic_ledger` 补空白重复行，但遇阶段对冲突拒绝
+  （`screening_conflict_sql` 冲突挡主题闭合）。
+
+## 三个筛选谓词刻意不统一
+
+`store/screening.py` 文档字符串声明：
+
+| 谓词 | 语义 | 用点 |
+|---|---|---|
+| `included_sql` | 仅显式 included | 证据体路径 |
+| `not_excluded_sql` | 未决也算在内 | 抽取任务认领 |
+| `excluded_any_stage_sql` | 全文阶段赢 | 原因/冲突检查 |
+
+"统一"这三个谓词是缺陷——它们回答三个不同问题。
+
+## save_ai_extraction 持久化（papers.py）
+
+幂等于 `extraction_run_id`（重跑早退）；写 `paper_extractions` + `studies` +
+`study_publications(role='primary')` + `results` + `claims` +
+`paper_admissions('pending')`；置 `full_texts.processed_at`；删陈旧 `candidate`
+claims/results。
+
+## 权威锚点
+
+- `literature/policy.py`、`downloader.py`、`ingestion.py` — 版权三层
+- `core/store/papers.py` — 台账持久化与传播规则
+- `core/store/screening.py` — 共享谓词与 `terminal_exclusion`
+- `literature/topic_plans.py` — 版本化已审检索计划（只覆盖可达 condition）

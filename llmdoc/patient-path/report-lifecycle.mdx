@@ -1,0 +1,76 @@
+---
+description: "报告上传→确认→评估链：仍是活契约但当前无运行时（health-flow 已接管）；抽取只产候选观测并停在确认前、confirm 字面复验、assess 幂等、access token 只存 sha256；evals 评估的可用调用方式"
+kind: architecture
+relations:
+  requires:
+    - evidence-to-patient-contract.mdx
+  related:
+    - kernel/matching-kernel.mdx
+code:
+  paths:
+    - src/genesis_evidence/reports/extraction.py
+    - src/genesis_evidence/reports/extraction_worker.py
+    - src/genesis_evidence/reports/evaluation.py
+    - evals/README.md
+    - tests/test_report_assessment.py
+    - tests/test_report_confirmation.py
+    - tests/test_report_evaluation.py
+    - tests/test_report_extraction.py
+    - tests/test_report_extraction_worker.py
+    - tests/test_rebuild_report.py
+---
+
+# 报告生命周期：活契约、无运行时
+
+`core/store/reports.py` 与 `reports/` 保留了第一阶段"单仓库自持报告"的
+上传→确认→评估链。它是 `EvidenceMatcher` 三个入口之一，也是 `ConditionDefinition`
+与患者文案的来源——**但当前线上没有进程运行它**：报告上传与解析已由 health-flow
+的 worker 承担。状态由三点钉住：`pyproject.toml` 无 `genesis-evidence-report-worker`
+script；`ReportStore` 不从 `core/store/__init__` 再导出；`test_portal_api.py` 断言
+导入 `portal.api` 不加载 `store.reports`。
+
+风险：`reports/extraction_worker.py` 手工跑会写 portal 读取的同一 DB；对象存
+`var/objects`。
+
+## 抽取（reports/extraction.py）：只产候选，停在确认前
+
+fail-closed 规则：
+
+- 媒体类型 = magic 字节 **且** 后缀同时检查；
+- `subject_consistency="different"` → `ReportExtractionError` 拒绝；
+  `"uncertain"` 仅警告；
+- `source_file_index > len(files)` → 该行丢弃 + 警告；
+- 零可用观测 → 报错，**绝不返回空成功**；
+- provider 拒绝或非 `completed` → `ReportExtractionUnavailable`；
+- 值/界字面闸门同样在此执行：不通过的行 `default_decision="excluded"`。
+
+`fail_extraction` 消毒错误：非抽取类错误折叠为通用中文消息，只有
+`ReportExtraction{Error,Unavailable}` 的消息进 `extraction_warnings_json`。
+
+## 确认（ReportStore.confirm）
+
+`ConfirmationInput`：`confirmed` 禁止覆盖值；`corrected` 要求 value+unit；
+`excluded` 禁止一切。confirm 对 confirmed/corrected 行再过
+`validate_observation`——"已确认"行若值不在 `evidence_text` 中被拒，不是打标。
+不在确认集内的行自动 excluded。
+
+## 评估（ReportStore.assess）
+
+前置：`status ∈ {"confirmed","assessed"}`——含 `assessed` 是为幂等重评估。按
+`(condition, scope)` 键控卡（按 condition 键控会在多 scope 时随机服务一张卡）。
+先删旧评估再落新 `assessments`+`assessment_findings`，status→`assessed`。
+
+## 访问令牌
+
+报告存 32 字节 URL-safe token 的 `sha256`；每次访问 `hmac.compare_digest`；
+原始 token 只在 `create` 时返回一次。
+
+## evals 评估入口（已坏，用替代）
+
+`evals/README.md` 广告的 `uv run genesis-evidence-evaluate` 不可
+用：`pyproject.toml` 未注册该 script，conda 环境的陈旧 editable install 会让命令
+先解析再 `ModuleNotFoundError`。可用形式：
+
+```sh
+uv run python -m genesis_evidence.reports.evaluation <gold> <pred>
+```

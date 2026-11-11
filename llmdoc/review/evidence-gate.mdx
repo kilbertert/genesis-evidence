@@ -1,0 +1,72 @@
+---
+description: "证据闸门与知识卡生命周期：四层发布检查（schema CHECK→主题台账闭合→单条 Claim→患者文案）、evidence_body_complete 只能由系统写、stale 失效传播与 supersession、发布≠能力（context_only）、very_low 不可发布"
+kind: architecture
+relations:
+  requires:
+    - evidence-to-patient-contract.mdx
+  related:
+    - kernel/vocabulary-modules.mdx
+    - review/autonomous-review.mdx
+code:
+  paths:
+    - src/genesis_evidence/core/store/review.py
+    - src/genesis_evidence/core/store/retirement.py
+    - src/genesis_evidence/core/store/card_evidence.py
+    - src/genesis_evidence/core/store/schema.py
+    - tests/test_schema.py
+    - tests/test_card_evidence.py
+    - tests/test_retirement.py
+    - docs/evidence-governance-standards.md
+---
+
+# 证据闸门与知识卡生命周期
+
+"允许说什么"由证据决定，不由写入者决定：人工路径与自主路径发布前过**同一个**
+闸门。闸门是四层，不是一处。
+
+## 四层发布检查
+
+| 层 | 位置 | 检查 |
+|---|---|---|
+| 1. Schema | `schema.py` `knowledge_cards` CHECK | `status='published'` ⇒ grade/reviewer/reviewed_at/evidence_profile_id/published_at 全非空且正文非空——"半发布"不可表示 |
+| 2. 主题台账闭合 | `review.py: _require_complete_topic` | topic `locked`+condition 匹配；每个 required search stream 有 `completed` run；零 `running`；每篇 collection_paper 已筛（included 的全文状态已决：`retrieved` 需 `full_text_decision`+`full_texts` 行，`not_retrieved` 需非空 reason+reviewer+recorded_at 且**无** `full_texts` 行）；排除原因在主题的 `exclusion_reasons_json` 内；无跨 run 阶段对冲突；每篇全文 included 论文已抽取、对该 condition `internally_admitted`、设计在 `eligible_study_designs_json` 内、每条 claim 已审且有非空 reviewer；≥1 篇 included |
+| 3. 单条 Claim | `review.py: _require_publishable` | 卡须有 `evidence_profile_id`→`topic_id`；过层 2；一条 SQL 汇总无效项：claim `decision='approved'`、`integrity_status='clear'`、`publication_status='formal'`、`internally_admitted`、DOI 非空、`processed_at` 已置、`evidence_text`/`locator` 非空、`candidate_claim_type='intervention_effect'`（`CARD_CLAIM_TYPE`）、`corrected_study_design ∉ {animal_study, in_vitro_study, case_series, case_report}`（`EXCLUDED_STUDY_DESIGNS`）、`condition_code` 匹配；另：≥1 条 claim、每 claim 的 `result_id` 在该 profile 的 `evidence_profile_results` 内、`scope_key` 非空；**context_only 等级（`low`）拒绝任何 `risk_of_bias.overall ∈ {high, critical, uncertain}`** |
+| 4. 患者文案 | `review.py: create_card → validate_patient_copy` | 无条件执行，两条写入路径都在运行时过这层；CI `check_patient_copy` 另有 `portal/**` 固定路径集（不含 `_automatic_profile` 正文） |
+
+层 2 的报错串本身就是契约（"topic screening ledger is incomplete or has an
+invalid exclusion reason" 等）。
+
+## evidence_body_complete：只能由系统写
+
+`schema.py`：`CHECK (evidence_body_complete = 1)`——该列只能持有 1，在
+`create_card` 内层 2 通过后于 profile 插入时写入。**无更新路径**：它是"该 profile
+建在闭合台账上"的标记，不是一个可置位的旗标。
+
+## 失效传播：stale vs supersession
+
+`retirement.py` 属主：`RETIREABLE_STATUSES = NON_TERMINAL_STATUSES`
+`{draft,in_review,approved,published}`。`retire_cards_for_claims` /
+`retire_cards_for_paper` 把引用变化证据的非终态卡置 `stale`（不可见）。
+
+写点（6 处）：`review_claim`（任何 claim 重审即失效引用卡）、`admit_paper`
+（`evidence_changed`）、`require_consistency_adjudication`、`reject_paper`、
+`update_integrity` 非 `clear`、`_stale_cards_for_paper`。
+
+**supersession 与 retirement 不同**：draft 期（`SUPERSEDABLE_STATUSES`，
+`create_card`）与发布期（`PUBLISHED_STATUSES`，`transition_card`）各把同 scope
+前驱卡 retire 掉，每个写一条 `card_superseded` 审计行——stale 是"证据变了"，
+superseded 是"被同 scope 新卡取代"。
+
+## 发布 ≠ 能力
+
+已发布卡固定 `content_layer=context_only`、`action_status=not_available`；`very_low`
+不可达 `published`（`patient_visible_sql` 不含它，自主路径在
+`approved_evidence_limited` 停）。GRADE 逐域只进审计 detail，落库只有单一
+`certainty` 列。
+
+## 权威锚点
+
+- `core/store/review.py` — 层 2/3 闸门、两条写卡路径、`list_coverage_matrix`
+- `core/store/retirement.py` — stale 规则属主
+- `core/store/card_evidence.py` — `EXCLUDED_STUDY_DESIGNS` 等闸门常量
+- `core/store/schema.py` — 层 1 CHECK 与 `evidence_body_complete`

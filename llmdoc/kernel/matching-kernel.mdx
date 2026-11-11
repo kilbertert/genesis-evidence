@@ -1,0 +1,115 @@
+---
+description: "EvidenceMatcher 确定性匹配内核：三条入口（EvidenceStore/ReportStore match + assess）的唯一差异点、字面证据闸门、metric_code 目录与别名、finding 聚合与 mixed 语义、v2/v3 契约"
+kind: architecture
+relations:
+  requires:
+    - evidence-to-patient-contract.mdx
+  related:
+    - patient-path/portal-api.mdx
+    - review/evidence-gate.mdx
+code:
+  paths:
+    - src/genesis_evidence/core/matching.py
+    - src/genesis_evidence/core/metrics.py
+    - src/genesis_evidence/core/conditions.py
+    - src/genesis_evidence/core/contracts.py
+    - src/genesis_evidence/core/store/evidence.py
+    - src/genesis_evidence/core/store/reports.py
+    - src/genesis_evidence/core/store/published_cards.py
+    - tests/test_matching.py
+    - tests/test_contracts.py
+    - tests/test_conditions.py
+    - tests/test_condition_catalog_expansion.py
+    - tests/test_condition_catalog_review_fixes.py
+    - tests/test_blood_cell_differential_domain.py
+    - tests/test_electrolyte_domain.py
+    - tests/test_liver_panel_domain.py
+    - tests/test_urinalysis_domain.py
+    - tests/test_reach_modes.py
+    - tests/test_special_marker_reach.py
+---
+
+# EvidenceMatcher 确定性匹配内核
+
+`core/matching.py` 的 `EvidenceMatcher` 是"已确认观测 → 已发布知识卡 → 患者响应"的
+唯一确定性实现。三个调用方只在投影与卡来源上不同——**匹配语义只能在 matching.py
+里改**；在调用方写语义分支就是这个模块要防的缺陷形状。
+
+## 不可妥协的不变量
+
+- **只有 confirmed 观测越界**：`EvidenceMatchObservation.confirmation_status`
+  是 `Literal["confirmed"]`；适配器对未确认输入整包拒绝，每行进 `skipped`。
+- **字面证据闸门**：数值与每个参考界必须字面出现在 `evidence_text`
+  （`evidence_contains_value`，NFKC + `math.isclose`）。在适配器、match 入口
+  （`validate_observation`）、抽取、confirm 复验四点执行。放松它就是许可编造引用。
+- **canonical metric_code**：`validate_metric_code` 拒绝 `METRIC_CODES` 之外的码，
+  抛 `ValueError` → 整个请求 400。自由文本报告名只经 `METRIC_ALIASES`（canonical
+  codes + labels + `REPORT_METRIC_ALIASES` 合并一张表）解析；解析不了进
+  `unknown_metric_code`，绝不静默归到某个 condition。
+- **异常判定重算不信任**：`is_abnormal` 用确认后的值与参考界重算；上游
+  `abnormal_flag`/VLM 置信度被忽略。
+- **finding 按 card id 键控，永不按 condition 或 scope**：一个 scope 下可有多张
+  成分卡（ADR 0007），按 condition 键控会丢证据、按 scope 会覆盖卡。
+
+## 三条入口：同一语义，三个投影缝
+
+| 入口 | Resolver | 入口校验 | 未匹配策略 | 输出 |
+|---|---|---|---|---|
+| `EvidenceStore.match_published_cards`（**线上 v3**） | 非严格 scope | 逐行 `validate_observation` | `_is_v3_unmatched`：≥1 个 condition 无卡即触发（部分覆盖也列出未满足项） | v3 信封 + `patient_reply_v3`；v2 请求经 `_legacy_v2_response` 压平；写审计 |
+| `ReportStore.match_published_cards`（v2 遗留） | 严格：`scope_key` 必须等于 `metric:<code>` | 同左 | `_is_v2_unmatched`：仅全未匹配触发，部分覆盖不报告 | v2 扁平 finding + `patient_reply_v2`；写审计 |
+| `ReportStore.assess`（内部报告链） | 非严格 | 无（confirm 已验过） | 内联收集，v2 风格 | 幂等落 `assessments`+`assessment_findings`（先删旧评估） |
+
+匹配循环顺序（`matching.py`）：每观测 → `validate` → 无参考界 `skipped:
+missing_reference_range` → 界内 `skipped:within_reference_range` → 异常 → 遍历该
+metric 的 conditions × 该 `(condition, metric:<code>)` 下的 published 卡 →
+`produce_finding`。排序版本常量 `published-card-reference-range-v1`。
+
+## skipped 为什么存在
+
+"空"不是一种情况：无 `skipped`，响应只能回"未发现异常"——当上游丢弃了行时这是
+虚假保证。`EvidenceSkipped.reason` 契约宽于任何生产者的实际产出
+（`missing_source_evidence`、`invalid_value` 当前无生产者，是有意保留的契约面）。
+
+## mixed 语义与 finding 聚合
+
+`mixed` 是聚合结论不是等级：`rank("mixed")` 按名抛 `UnknownEvidenceStrength`；
+`evidence_strength_summary` 仅当组分卡等级不一致时返回 `mixed`。任何卡不得携带
+`mixed`。混合等级 finding 有专属"确定性不一"文案——finding 永不引用单张卡的阈值
+判定代表整个集合（该 bug 被 `tests/test_matching.py` 钉死）。v3 findings 排序：
+`urgency_rank`、`-severity`、`finding_evidence_rank`、科室、condition_code。
+
+## v2/v3 契约
+
+同一请求模型（`schema_version: Literal["2","3"]`）。v3 = 按 condition 分组的
+findings + `evidence_items[]`（每项 = 一个 metric + 一张卡 + 自己的溯源）；v2 =
+一卡一 finding 的扁平形，为存量 health-flow 客户端**逐字节冻结**——包括 v2 自己的
+`NO_CARD_SUMMARY` 措辞与错误串。v2 不得因 v3 改动而漂移。v3 自校验：`EvidenceItem`
+要求 `card.scope_key == f"metric:{metric_code}"`；响应后验每个 finding ≥1 个
+`evidence_items`；`observation_id` 唯一、≤600 行；所有模型 `extra="forbid"`。
+
+## 已知上限（ponytail）
+
+- `needs_recheck=True`、`urgency="routine"`、`abnormality_severity=1` 全路径硬编码
+  ——按指标分级的阈值是未来"已审核数据随卡发布"特性，别当作计算结果读
+  （`# ponytail:` 标记在 `reports.py` 的 `produce_finding` 处，不在 matching.py）。
+- 别名解析只看名字不看单位（`metrics.py`，升级路径=单位感知分派）。
+- 空 metric 条件是 fail-closed 不是缺陷：性别/年龄受限与纯症状条件
+  （`COND_MALE_OSTEOPOROSIS`、`COND_MENOPAUSE_HEALTH_RISK`、`COND_BPH_RISK` 等）保持
+  `metrics=()`——匹配器没有人口学输入，ADR 0008 决定 reach 属性归 health-flow。
+- 刻意缺席的别名：裸 `pH`（血气 vs 尿液无标本字段）、`RBC`（血 vs 尿）、
+  `Leucocytes`→尿非 WBC、`Neutrophils`→绝对值非百分比、`Ca`→calcium 非
+  corrected_calcium。不可解析优于猜错。
+
+## 失效语义
+
+- `ValueError`（未知 metric、值/界不在 evidence、low>high）→ 400 → 事务回滚 →
+  **不留审计行**（审计插入在同一事务内）——被拒请求按构造不被审计。
+- 审计 `detail_json` 只有计数 + `metric_codes` + `card_ids` + correlation_id，
+  不含观测 ID、数值或患者数据。
+
+## 权威锚点
+
+- `src/genesis_evidence/core/matching.py` — 链路与三条投影缝
+- `src/genesis_evidence/core/metrics.py` — 目录、别名、`evidence_contains_value`
+- `src/genesis_evidence/core/conditions.py` — condition 目录与空 metric 决策
+- `src/genesis_evidence/core/store/published_cards.py` — 行→卡投影、成分卡分组

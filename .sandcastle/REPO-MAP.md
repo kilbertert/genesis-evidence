@@ -121,25 +121,30 @@ evals/
   README.md
   report-gold.synthetic.jsonl
   report-predictions.synthetic.jsonl
-ops/
-  examples/
-    portal.env.example
-    review.env.example
-  service-host/
-    acceptance/
-    examples/
-    logrotate/
-    nginx/
-    systemd/
-    auth-probe.sh
-    bootstrap-db.py
-    cert-deploy-hook.sh
-    cert-expiry-check.sh
-    README.md
-  systemd/
-    genesis-evidence-portal.service
-    genesis-evidence-review.service
-    genesis-evidence-worker.service
-  README.md
+llmdoc/
+  agent-workflow/
+    afk-control-plane.mdx
+  deployment/
+    runtime-env.mdx
+    service-topology.mdx
+  governance/
+    guards-and-artifacts.mdx
+    spec-tree.mdx
+  kernel/
+    matching-kernel.mdx
+    vocabulary-modules.mdx
+  literature/
+    acquisition-pipeline.mdx
+    extraction-lifecycle.mdx
+  patient-path/
+    portal-api.mdx
+    report-lifecycle.mdx
+  persistence/
+    database-invariants.mdx
+  review/
+    autonomous-review.mdx
+    evidence-gate.mdx
+  evidence-to-patient-contract.mdx
+  meta.json
 ... (truncated — list the rest with `ls`/`find`)
 ```

@@ -1,0 +1,68 @@
+---
+description: "单一属主词汇模块速查：disposition/evidence_strength/card_lifecycle/publication_integrity/methodology/consistency/components/synthesis_eligibility/source_excerpt/patient_copy 各自拥有哪份词表、guarded-duplicate 测试模式、改动某词表的正确顺序"
+kind: reference
+relations:
+  related:
+    - kernel/matching-kernel.mdx
+code:
+  paths:
+    - src/genesis_evidence/core/disposition.py
+    - src/genesis_evidence/core/evidence_strength.py
+    - src/genesis_evidence/core/card_lifecycle.py
+    - src/genesis_evidence/core/methodology.py
+    - src/genesis_evidence/core/publication_integrity.py
+    - src/genesis_evidence/core/components.py
+    - src/genesis_evidence/core/consistency.py
+    - src/genesis_evidence/core/source_excerpt.py
+    - src/genesis_evidence/core/synthesis_eligibility.py
+    - src/genesis_evidence/core/patient_copy.py
+    - tests/test_disposition.py
+    - tests/test_card_lifecycle.py
+    - tests/test_consistency.py
+    - tests/test_evidence_strength.py
+    - tests/test_methodology.py
+    - tests/test_methodology_appraisal.py
+    - tests/test_publication_integrity.py
+    - tests/test_components.py
+    - tests/test_synthesis_eligibility.py
+    - tests/test_source_excerpt.py
+    - tests/test_uncovered_items.py
+---
+
+# 单一属主词汇模块速查
+
+每份受控词汇只有一个属主模块。改某个词表先找属主，再按下文"改动顺序"操作。
+
+## 模块 → 拥有的词表
+
+| 模块 | 拥有的词表/语义 | 关键约束 |
+|---|---|---|
+| `core/disposition.py` | skip reason → disposition class + 患者摘要句型 | 只有 `within_reference_range`→NORMAL、`confirmation_required`→DEFERRED；**其余一切含未知 reason → UNUSABLE**（fail-closed）。`is_unreadable`（仅 `unknown_metric_code`）行挂 `with_rider` 句追加到**每个**摘要分支，且不计入 unusable 数（保"另有"互斥）。`PRODUCER_ELIGIBLE_REASONS` 钉住生产者可用 reason 集 |
+| `core/evidence_strength.py` | GRADE 等级 rank + `mixed` 聚合 | `mixed` 非等级，`rank("mixed")` 抛错；仅组分卡不一致时聚合返回。workbench **经 API 拉取**词表而非复制 |
+| `core/card_lifecycle.py` | 卡状态机 + `patient_visible_sql` | `patient_visible_sql(col)` 生成唯一患者可见谓词：`status='published' AND grade IN ('high','low','moderate')`；`very_low` 可存在但永不可见。`published` 是图汇但非终态——靠 supersede/retire 离场 |
+| `core/publication_integrity.py` | 撤稿/更正状态：admission 与 durable-evidence 是两个问题 | `admits_paper` 仅 `clear` 可入；`forbids_durable_evidence` 仅 `retracted` 禁止；`corrected` 两者皆不命中。`integrity_sql` 渲染供多处查询点复用 |
+| `core/methodology.py` | 研究设计 → RoB 工具映射 | `DEFAULT_RISK_OF_BIAS_TOOL` 刻意枚举**每个**设计——新设计会让测试失败直到有人决定其工具；`_PERMITTED_RISK_OF_BIAS_TOOLS` 缺省=显式无约束 |
+| `core/consistency.py` | 一致性裁决 provenance（`ai:`/`source-ai:` actor 分类） | 只持久化裁决**文本**；`adjudication_source` 靠 `AUTOMATIC_RESOLUTION_PREFIX` 前缀推断——人工句子以该前缀开头会被误读为自动（已声明的限制）。`source-ai:` 是机器但**不可自主重开**（stored `source_based` 裁决会短路复验，重开会批准一个已不再运行的检查） |
+| `core/components.py` | 成分形式池（`COMPONENT_FORMS`）+ `pool_token` | `resolve_component` 非池化即 `None`——多成分产品、营养素类、运动方案、近似拼写全拒。池身份=`component_key:form`；`pool_token=""` 表示不可池化但留在证据体 |
+| `core/synthesis_eligibility.py` | 结果级排除（记录案例表） | 排除签名必须是**短语**不是单词——"iron"单独会误中 "Iron-free"；不是对 `ingredient_form` 自由文本的启发式 |
+| `core/source_excerpt.py` | 证据摘录语义 | 无空/畸形 reason 码，直到有调用方能产出（ponytail 标记） |
+| `core/patient_copy.py` | `FORBIDDEN_PATIENT_TERMS` 患者禁用词 | 双层防御：运行时 `validate_patient_copy` 拦**所有**写入路径；CI `check_patient_copy` 只扫 `portal/**` 固定路径集——自动模板正文不在 CI 范围，只靠运行时校验 |
+
+## guarded-duplicate 测试模式
+
+不能单一来源的词汇（SQL CHECK 字面量、workbench JS）保持字面重复，由测试**从源码
+抽取**比对值集：`test_disposition.py`、`test_methodology.py`、
+`test_card_lifecycle.py`、`test_evidence_strength.py`、`test_publication_integrity.py`。
+新增词表值不改测试 = CI 抓漂移。workbench 例外：经 API 取 strength 词表，不复制。
+
+## 改动词表的正确顺序
+
+1. 找属主模块（上表），在那里改词汇本体。
+2. 同步字面副本：schema CHECK、workbench 常量——测试会比对抽取值，**期望改测试**。
+3. 分类语义先想清楚再加值：新 skip reason 默认 UNUSABLE；若语义是"正常"或
+   "推迟"，必须显式进 `_DISPOSITION_CLASSES`。
+4. 给 `health_flow.py` 或 `matching.py` 加生产者 reason：必须在
+   `PRODUCER_ELIGIBLE_REASONS` 内，否则 `test_disposition.py` 按源码抽取失败。
+5. 动 `AUTOMATIC_RESOLUTION_PREFIX` 或其开头文案：同时改 `consistency.py` 与
+   `review/service.py` `_automatic_resolution` 的生成文本——两处靠文本前缀对接，
+   没有共享常量。

@@ -1,0 +1,81 @@
+---
+description: "部署拓扑与信任面：dev host（8125/8126/8127）与 service host（10005/10006 + health.ranlei.work→10007）两个平面不可混、loopback-only + 唯一公开入口、制品化部署（wheel+sha256、写门控、ProtectSystem=strict）、health-flow 边界与独立身份"
+kind: architecture
+relations:
+  related:
+    - deployment/runtime-env.mdx
+    - patient-path/portal-api.mdx
+code:
+  paths:
+    - docs/deployment.md
+    - ops/README.md
+    - ops/service-host/README.md
+    - ops/service-host/acceptance/README.md
+    - ops/service-host/acceptance/e2e-acceptance.sh
+    - ops/service-host/nginx/health.ranlei.work.conf
+    - ops/service-host/systemd/genesis-evidence-portal.service
+    - ops/service-host/systemd/genesis-evidence-review.service
+    - ops/service-host/systemd/cert-expiry-check.service
+    - ops/service-host/systemd/cert-expiry-check.timer
+    - ops/service-host/auth-probe.sh
+    - ops/service-host/bootstrap-db.py
+    - ops/systemd/genesis-evidence-portal.service
+    - ops/systemd/genesis-evidence-review.service
+    - ops/systemd/genesis-evidence-worker.service
+    - .dev-host.toml
+    - tests/test_public_entry_assets.py
+---
+
+# 部署拓扑与信任面
+
+**两个平面不可混**（README §2.3 把它们混在一张表里，是已知漂移）：
+
+| 平面 | 宿主 | 端口 | 性质 |
+|---|---|---|---|
+| dev host | 开发机 | portal 8125 / review 8126 / health-flow 8127，全 loopback | 开发用；worker disabled |
+| service host | 服务宿主 | portal 10005 / review 10006 全 loopback；`health.ranlei.work` → 10007 是 health-flow | 服务真实用户 |
+
+谈端口必须报名平面。`genesis-evidence-review.ranlei.work` 已于 2026-09-22 退役，
+workbench 自 2026-09-28 起 loopback-only（观察流量后的撤回决策）。
+
+## service host 边界
+
+- **唯一公开入口** `https://health.ranlei.work` → `127.0.0.1:10007` = health-flow
+  （独立项目、独立系统身份——刻意：一个项目的缺陷读不到另一个的凭据）。
+  TLS 在宿主 web server 终结；`X-Forwarded-For` 覆写非追加；access log 用 `$uri`
+  ——`ticket` 是凭据，不进日志。
+- 本仓库在 service host 上的两个监听全 loopback：Evidence API 是被 health-flow
+  在用户确认后调用的**内网边缘**（`POST /api/evidence/matches`），不直接对患者。
+- **health-flow 边界**：患者页 + 报告解析 worker 归 health-flow；本仓库只有
+  证据 API + review workbench +（disabled）抽取 worker。
+
+## 制品化部署
+
+合并修订 → 构 wheel → 记 sha256 → 传 service host `artifacts/` → 装进项目 venv →
+写 env（640，服务身份属主，密钥在宿主生成）→ **`bootstrap-db.py` 必须显式跑**——
+portal 无表 fail-closed 而 review 会顺带建表，靠启动顺序是竞态 → enable units。
+
+宿主写门控（`.dev-host.toml`，target `36`/`yidong-36`）：`dev-host` 断言 host key
+指纹，写操作要 `--artifact-sha256`，exec 要 `--allow-service-exec`——不可识别
+的写被拒。**永不手改 service host**。
+
+units 以 `genesis-evidence` 身份跑，`ProtectSystem=strict`，`ReadWritePaths` 限
+`var/`+logs。
+
+## 探针与验收
+
+- `ops/service-host/auth-probe.sh`：断言 401/401/非-401（第三种**刻意不是 200**）。
+- `ops/service-host/acceptance/e2e-acceptance.sh`：唯一验收脚本——公开入口服务
+  应用、两个内网监听拒外部流量、access log 无 `ticket=`。依赖
+  `mint-probe-session.py`（打运行中 DB；`HEALTHFLOW_DB` 可覆盖）且
+  **`cleanup-probe-session.py` 必须总是跑**——minted session 是活凭据。套件仍断言
+  `/` 服务患者页——只在 ADR 0020 切换前成立。
+- `cert-expiry-check.timer` 每日：任一被管证书 ≤21 天 → unit `failed`；
+  `systemctl --failed` 是**唯一信号**（无告警通道）；`certbot renew --dry-run`
+  不跑 deploy hook（certbot 2.9.0）。
+
+## 权威锚点
+
+- `docs/deployment.md` — 部署叙事与旧 `genesis-health` 域名区分
+- `ops/service-host/README.md` — 宿主侧约定
+- `ops/service-host/nginx/health.ranlei.work.conf` — 公开入口边界
