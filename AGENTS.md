@@ -1,7 +1,8 @@
 # Genesis Evidence agent instructions
 
-Read `GLOSSARY.md`, `docs/`, and relevant ADRs before changing code. Preserve
-the product safety boundary and run the documented Python checks.
+Start with the source-routing table in `docs/agents/domain.md`, then read the
+relevant glossary terms, contracts and ADRs for the task. Preserve the product
+safety boundary and run the documented Python checks.
 
 When a change alters behavior a reviewer or a patient-facing consumer can
 observe, the documented Python checks are not enough on their own: use the
