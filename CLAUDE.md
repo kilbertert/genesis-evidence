@@ -1,5 +1,8 @@
 ## Verification
 
+For requirements, documentation changes or delivery evidence, first use the
+source-routing table in `docs/agents/domain.md`; keep the task's reading scope bounded.
+
 Unit and integration tests are necessary but not sufficient. When a change
 alters behavior a reviewer or a patient-facing consumer can observe, prove it on
 the running service before you call it done: invoke the `verify-genesis-evidence`
